@@ -242,9 +242,9 @@
 
     "@octokit/webhooks-types": ["@octokit/webhooks-types@7.6.1", "", {}, "sha512-S8u2cJzklBC0FgTwWVLaM8tMrDuDMVE4xiTK4EYXM9GntyvrdbSoxqDQa+Fh57CCNApyIpyeqPhhFEmHPfrXgw=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.1.34", "", { "dependencies": { "@opencode-ai/sdk": "1.1.34", "zod": "4.1.8" } }, "sha512-TvIvhO5ZcQRZL9Un/9Mntg/JtbYyPEvLuWkCZSjt8jbtYmUQJtqPVaKyfWOhFvyaGUjjde4lwWBvKwGWZRwo1w=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.1.35", "", { "dependencies": { "@opencode-ai/sdk": "1.1.35", "zod": "4.1.8" } }, "sha512-mn96oPcPxAjBcRuG/ivtJAOujJeyUPmL+D+/79Fs29MqIkfxJ/x+SVfNf8IXTFfkyt8FzZ3gF+Vuk1z/QjTkPA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.1.34", "", {}, "sha512-ToR20PJSiuLEY2WnJpBH8X1qmfCcmSoP4qk/TXgIr/yDnmlYmhCwk2ruA540RX4A2hXi2LJXjAqpjeRxxtLNCQ=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.1.35", "", {}, "sha512-1RfjXvc5nguurpGXyKk8aJ4Rb3ix1IZ5V7itPB3SMq7c6OkmbE/5wzN2KUT9zATWj7ZDjmShkxEjvkRsOhodtw=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 

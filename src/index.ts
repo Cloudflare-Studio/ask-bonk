@@ -3,23 +3,31 @@ import { bearerAuth } from 'hono/bearer-auth';
 import { ulid } from 'ulid';
 import type { IssueCommentEvent, IssuesEvent, PullRequestReviewCommentEvent } from '@octokit/webhooks-types';
 import type { Env, AskRequest, TrackWorkflowRequest, FinalizeWorkflowRequest, SetupWorkflowRequest } from './types';
-import {
-	createOctokit,
-	createWebhooks,
-	verifyWebhook,
-	createReaction,
-	deleteInstallation,
-	type ReactionTarget,
-} from './github';
+import { createOctokit, createWebhooks, verifyWebhook, createReaction, deleteInstallation, type ReactionTarget } from './github';
 import type { ScheduleEventPayload, WorkflowDispatchPayload } from './types';
-import { parseIssueCommentEvent, parseIssuesEvent, parsePRReviewCommentEvent, parseScheduleEvent, parseWorkflowDispatchEvent } from './events';
+import {
+	parseIssueCommentEvent,
+	parseIssuesEvent,
+	parsePRReviewCommentEvent,
+	parseScheduleEvent,
+	parseWorkflowDispatchEvent,
+} from './events';
 import { ensureWorkflowFile } from './workflow';
-import { handleGetInstallation, handleExchangeToken, handleExchangeTokenForRepo, handleExchangeTokenWithPAT, validateGitHubOIDCToken, extractRepoFromClaims, getInstallationId } from './oidc';
+import {
+	handleGetInstallation,
+	handleExchangeToken,
+	handleExchangeTokenForRepo,
+	handleExchangeTokenWithPAT,
+	validateGitHubOIDCToken,
+	extractRepoFromClaims,
+	getInstallationId,
+} from './oidc';
 import { RepoAgent } from './agent';
 import { runAsk } from './sandbox';
 import { getAgentByName } from 'agents';
 import { emitMetric, queryAnalyticsEngine, renderBarChart, eventsPerRepoQuery } from './metrics';
 import { log, createLogger } from './log';
+import { InstallationNotFoundError } from './errors';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { RepoAgent };
@@ -109,26 +117,27 @@ ask.post('/', async (c) => {
 	const askLog = createLogger({ request_id: askId, owner: body.owner, repo: body.repo });
 
 	// Look up installation ID for this repo (uses cache, falls back to GitHub API)
-	const installationId = await getInstallationId(c.env, body.owner, body.repo);
-	if (!installationId) {
-		askLog.error('ask_no_installation', { duration_ms: Date.now() - startTime });
+	const installationResult = await getInstallationId(c.env, body.owner, body.repo);
+	if (installationResult.isErr()) {
+		askLog.error('ask_no_installation', { duration_ms: Date.now() - startTime, error: installationResult.error.message });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
+	const installationId = installationResult.value;
 
-	try {
-		const stream = await runAsk(c.env, installationId, body);
-		// duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
-		return new Response(stream, {
-			headers: {
-				'Content-Type': 'text/event-stream',
-				'Cache-Control': 'no-cache',
-				'Connection': 'keep-alive',
-			},
-		});
-	} catch (error) {
-		askLog.errorWithException('ask_failed', error, { duration_ms: Date.now() - startTime });
-		return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+	const streamResult = await runAsk(c.env, installationId, body);
+	if (streamResult.isErr()) {
+		askLog.errorWithException('ask_failed', streamResult.error, { duration_ms: Date.now() - startTime });
+		return c.json({ error: streamResult.error.message }, 500);
 	}
+
+	// duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
+	return new Response(streamResult.value, {
+		headers: {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			Connection: 'keep-alive',
+		},
+	});
 });
 
 app.route('/ask', ask);
@@ -145,9 +154,6 @@ auth.get('/get_github_app_installation', async (c) => {
 	}
 
 	const result = await handleGetInstallation(c.env, owner, repo);
-	if ('error' in result) {
-		return c.json(result, 400);
-	}
 	return c.json(result);
 });
 
@@ -155,10 +161,10 @@ auth.post('/exchange_github_app_token', async (c) => {
 	const authHeader = c.req.header('Authorization') ?? null;
 	const result = await handleExchangeToken(c.env, authHeader);
 
-	if ('error' in result) {
-		return c.json(result, 401);
+	if (result.isErr()) {
+		return c.json({ error: result.error.message }, 401);
 	}
-	return c.json(result);
+	return c.json(result.value);
 });
 
 auth.post('/exchange_github_app_token_for_repo', async (c) => {
@@ -172,10 +178,10 @@ auth.post('/exchange_github_app_token_for_repo', async (c) => {
 	}
 
 	const result = await handleExchangeTokenForRepo(c.env, authHeader ?? null, body);
-	if ('error' in result) {
-		return c.json(result, 401);
+	if (result.isErr()) {
+		return c.json({ error: result.error.message }, 401);
 	}
-	return c.json(result);
+	return c.json(result.value);
 });
 
 auth.post('/exchange_github_app_token_with_pat', async (c) => {
@@ -189,10 +195,10 @@ auth.post('/exchange_github_app_token_with_pat', async (c) => {
 	}
 
 	const result = await handleExchangeTokenWithPAT(c.env, authHeader ?? null, body);
-	if ('error' in result) {
-		return c.json(result, 401);
+	if (result.isErr()) {
+		return c.json({ error: result.error.message }, 401);
 	}
-	return c.json(result);
+	return c.json(result.value);
 });
 
 app.route('/auth', auth);
@@ -210,10 +216,11 @@ apiGithub.post('/setup', async (c) => {
 	}
 
 	const oidcToken = authHeader.slice(7);
-	const validation = await validateGitHubOIDCToken(oidcToken);
-	if (!validation.valid || !validation.claims) {
-		return c.json({ error: validation.error || 'Invalid OIDC token' }, 401);
+	const validationResult = await validateGitHubOIDCToken(oidcToken);
+	if (validationResult.isErr()) {
+		return c.json({ error: validationResult.error.message }, 401);
 	}
+	const claims = validationResult.value;
 
 	let body: SetupWorkflowRequest;
 	try {
@@ -228,7 +235,11 @@ apiGithub.post('/setup', async (c) => {
 	}
 
 	// Verify owner/repo from OIDC claims matches request
-	const { owner: claimsOwner, repo: claimsRepo } = extractRepoFromClaims(validation.claims);
+	const repoResult = extractRepoFromClaims(claims);
+	if (repoResult.isErr()) {
+		return c.json({ error: repoResult.error.message }, 401);
+	}
+	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
@@ -236,11 +247,12 @@ apiGithub.post('/setup', async (c) => {
 	const setupLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, issue_number: body.issue_number });
 
 	// Look up installation ID
-	const installationId = await getInstallationId(c.env, body.owner, body.repo);
-	if (!installationId) {
-		setupLog.error('setup_no_installation', { duration_ms: Date.now() - startTime });
+	const installationResult = await getInstallationId(c.env, body.owner, body.repo);
+	if (installationResult.isErr()) {
+		setupLog.error('setup_no_installation', { duration_ms: Date.now() - startTime, error: installationResult.error.message });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
+	const installationId = installationResult.value;
 
 	try {
 		const octokit = await createOctokit(c.env, installationId);
@@ -278,10 +290,11 @@ apiGithub.post('/track', async (c) => {
 	}
 
 	const oidcToken = authHeader.slice(7);
-	const validation = await validateGitHubOIDCToken(oidcToken);
-	if (!validation.valid || !validation.claims) {
-		return c.json({ error: validation.error || 'Invalid OIDC token' }, 401);
+	const validationResult = await validateGitHubOIDCToken(oidcToken);
+	if (validationResult.isErr()) {
+		return c.json({ error: validationResult.error.message }, 401);
 	}
+	const claims = validationResult.value;
 
 	let body: TrackWorkflowRequest;
 	try {
@@ -296,19 +309,30 @@ apiGithub.post('/track', async (c) => {
 	}
 
 	// Verify owner/repo from OIDC claims matches request
-	const { owner: claimsOwner, repo: claimsRepo } = extractRepoFromClaims(validation.claims);
+	const repoResult = extractRepoFromClaims(claims);
+	if (repoResult.isErr()) {
+		return c.json({ error: repoResult.error.message }, 401);
+	}
+	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
 
-	const trackLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, issue_number: body.issue_number, run_id: body.run_id });
+	const trackLog = createLogger({
+		request_id: requestId,
+		owner: body.owner,
+		repo: body.repo,
+		issue_number: body.issue_number,
+		run_id: body.run_id,
+	});
 
 	// Look up installation ID
-	const installationId = await getInstallationId(c.env, body.owner, body.repo);
-	if (!installationId) {
-		trackLog.error('track_no_installation', { duration_ms: Date.now() - startTime });
+	const installationResult = await getInstallationId(c.env, body.owner, body.repo);
+	if (installationResult.isErr()) {
+		trackLog.error('track_no_installation', { duration_ms: Date.now() - startTime, error: installationResult.error.message });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
+	const installationId = installationResult.value;
 
 	try {
 		// Create reaction if comment/issue ID provided
@@ -364,10 +388,11 @@ apiGithub.put('/track', async (c) => {
 	}
 
 	const oidcToken = authHeader.slice(7);
-	const validation = await validateGitHubOIDCToken(oidcToken);
-	if (!validation.valid || !validation.claims) {
-		return c.json({ error: validation.error || 'Invalid OIDC token' }, 401);
+	const validationResult = await validateGitHubOIDCToken(oidcToken);
+	if (validationResult.isErr()) {
+		return c.json({ error: validationResult.error.message }, 401);
 	}
+	const claims = validationResult.value;
 
 	let body: FinalizeWorkflowRequest;
 	try {
@@ -382,7 +407,11 @@ apiGithub.put('/track', async (c) => {
 	}
 
 	// Verify owner/repo from OIDC claims matches request
-	const { owner: claimsOwner, repo: claimsRepo } = extractRepoFromClaims(validation.claims);
+	const repoResult = extractRepoFromClaims(claims);
+	if (repoResult.isErr()) {
+		return c.json({ error: repoResult.error.message }, 401);
+	}
+	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
@@ -390,11 +419,12 @@ apiGithub.put('/track', async (c) => {
 	const finalizeLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, run_id: body.run_id });
 
 	// Look up installation ID
-	const installationId = await getInstallationId(c.env, body.owner, body.repo);
-	if (!installationId) {
-		finalizeLog.error('finalize_no_installation', { duration_ms: Date.now() - startTime });
+	const installationResult = await getInstallationId(c.env, body.owner, body.repo);
+	if (installationResult.isErr()) {
+		finalizeLog.error('finalize_no_installation', { duration_ms: Date.now() - startTime, error: installationResult.error.message });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
+	const installationId = installationResult.value;
 
 	try {
 		// Get RepoAgent and finalize
@@ -433,11 +463,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 	const startTime = Date.now();
 	const requestId = ulid();
 	const webhooks = createWebhooks(env);
-	const event = await verifyWebhook(webhooks, request);
-	if (!event) {
-		log.error('webhook_signature_invalid');
+	const eventResult = await verifyWebhook(webhooks, request);
+	if (eventResult.isErr()) {
+		log.error('webhook_signature_invalid', { error: eventResult.error.message });
 		return new Response('Invalid signature', { status: 401 });
 	}
+	const event = eventResult.value;
 
 	// Installation ID caching is handled by getInstallationId() in oidc.ts on cache miss.
 	// This avoids redundant KV writes on every webhook (see issue #52).
@@ -466,7 +497,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 		const isMetaEvent = META_EVENTS.includes(event.name as (typeof META_EVENTS)[number]);
 		if (isMetaEvent) {
 			await handleMetaEvent(event.name, event.payload, env);
-			webhookLog.info('webhook_completed', { event_type: event.name, is_private: isPrivate, is_pull_request: isPullRequest, duration_ms: Date.now() - startTime });
+			webhookLog.info('webhook_completed', {
+				event_type: event.name,
+				is_private: isPrivate,
+				is_pull_request: isPullRequest,
+				duration_ms: Date.now() - startTime,
+			});
 			emitMetric(env, { repo: repoKey, eventType: 'installation', eventSubtype: event.name, status: 'success', actor: sender });
 			return new Response('OK', { status: 200 });
 		}
@@ -492,7 +528,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 			await handleRepoEvent(event.name, event.payload, env);
 		}
 
-		webhookLog.info('webhook_completed', { event_type: event.name, is_private: isPrivate, is_pull_request: isPullRequest, duration_ms: Date.now() - startTime });
+		webhookLog.info('webhook_completed', {
+			event_type: event.name,
+			is_private: isPrivate,
+			is_pull_request: isPullRequest,
+			duration_ms: Date.now() - startTime,
+		});
 		emitMetric(env, {
 			repo: repoKey,
 			eventType: 'webhook',

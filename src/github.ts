@@ -4,9 +4,11 @@ import { throttling } from '@octokit/plugin-throttling';
 import { createAppAuth } from '@octokit/auth-app';
 import { Webhooks } from '@octokit/webhooks';
 import { graphql } from '@octokit/graphql';
+import { Result } from 'better-result';
 import type { Env, GitHubIssue, GitHubPullRequest, IssueQueryResponse, PullRequestQueryResponse } from './types';
 import { withRetry } from './retry';
 import { createLogger } from './log';
+import { NotFoundError, GitHubAPIError } from './errors';
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
@@ -23,7 +25,7 @@ export async function createOctokit(env: Env, installationId: number): Promise<O
 		auth: token,
 		retry: {
 			retries: 3,
-			retryAfterBaseValue: 2000, // 2s base → delays of 2s, 8s, 18s via quadratic backoff
+			retryAfterBaseValue: 2000, // 2s base -> delays of 2s, 8s, 18s via quadratic backoff
 			doNotRetry: [400, 401, 403, 404, 422, 429], // don't retry client errors; 429 handled by throttling
 		},
 		throttle: {
@@ -72,24 +74,43 @@ export function createWebhooks(env: Env): Webhooks {
 	});
 }
 
-export async function verifyWebhook(webhooks: Webhooks, request: Request): Promise<{ id: string; name: string; payload: unknown } | null> {
+export interface WebhookEvent {
+	id: string;
+	name: string;
+	payload: unknown;
+}
+
+// Verifies a GitHub webhook signature and parses the payload.
+// Returns Result to distinguish signature failures from parse errors.
+export async function verifyWebhook(
+	webhooks: Webhooks,
+	request: Request,
+): Promise<Result<WebhookEvent, GitHubAPIError>> {
 	const id = request.headers.get('x-github-delivery');
 	const name = request.headers.get('x-github-event');
 	const signature = request.headers.get('x-hub-signature-256');
 	const body = await request.text();
 
 	if (!id || !name || !signature) {
-		return null;
+		return Result.err(
+			new GitHubAPIError({
+				operation: 'verifyWebhook',
+				cause: new Error('Missing required webhook headers'),
+			}),
+		);
 	}
 
-	try {
-		await webhooks.verify(body, signature);
-		return { id, name, payload: JSON.parse(body) };
-	} catch {
-		return null;
-	}
+	return Result.tryPromise({
+		try: async () => {
+			await webhooks.verify(body, signature);
+			return { id, name, payload: JSON.parse(body) };
+		},
+		catch: (e) => new GitHubAPIError({ operation: 'verifyWebhook', cause: e }),
+	});
 }
 
+// Checks if a user has write access to a repository.
+// Returns false on any error (conservative).
 export async function hasWriteAccess(octokit: Octokit, owner: string, repo: string, username: string): Promise<boolean> {
 	try {
 		const response = await octokit.repos.getCollaboratorPermissionLevel({
@@ -203,117 +224,33 @@ export async function getRepository(octokit: Octokit, owner: string, repo: strin
 	return response.data;
 }
 
-export async function fetchIssue(gql: typeof graphql, owner: string, repo: string, issueNumber: number): Promise<GitHubIssue> {
-	const result = await gql<IssueQueryResponse>(
-		`
-		query($owner: String!, $repo: String!, $number: Int!) {
-			repository(owner: $owner, name: $repo) {
-				issue(number: $number) {
-					title
-					body
-					author {
-						login
-					}
-					createdAt
-					state
-					comments(first: 100) {
-						nodes {
-							id
-							databaseId
+// Fetches an issue with comments via GraphQL.
+// Returns Result to distinguish not-found from API errors.
+export async function fetchIssue(
+	gql: typeof graphql,
+	owner: string,
+	repo: string,
+	issueNumber: number,
+): Promise<Result<GitHubIssue, NotFoundError | GitHubAPIError>> {
+	return Result.tryPromise({
+		try: async () => {
+			const result = await gql<IssueQueryResponse>(
+				`
+				query($owner: String!, $repo: String!, $number: Int!) {
+					repository(owner: $owner, name: $repo) {
+						issue(number: $number) {
+							title
 							body
 							author {
 								login
 							}
 							createdAt
-						}
-					}
-				}
-			}
-		}
-		`,
-		{ owner, repo, number: issueNumber },
-	);
-
-	if (!result.repository.issue) {
-		throw new Error(`Issue #${issueNumber} not found`);
-	}
-
-	return result.repository.issue;
-}
-
-export async function fetchPullRequest(gql: typeof graphql, owner: string, repo: string, prNumber: number): Promise<GitHubPullRequest> {
-	const result = await gql<PullRequestQueryResponse>(
-		`
-		query($owner: String!, $repo: String!, $number: Int!) {
-			repository(owner: $owner, name: $repo) {
-				pullRequest(number: $number) {
-					title
-					body
-					author {
-						login
-					}
-					baseRefName
-					headRefName
-					headRefOid
-					createdAt
-					additions
-					deletions
-					state
-					baseRepository {
-						nameWithOwner
-					}
-					headRepository {
-						nameWithOwner
-					}
-					commits(first: 100) {
-						totalCount
-						nodes {
-							commit {
-								oid
-								message
-								author {
-									name
-									email
-								}
-							}
-						}
-					}
-					files(first: 100) {
-						nodes {
-							path
-							additions
-							deletions
-							changeType
-						}
-					}
-					comments(first: 100) {
-						nodes {
-							id
-							databaseId
-							body
-							author {
-								login
-							}
-							createdAt
-						}
-					}
-					reviews(first: 100) {
-						nodes {
-							id
-							databaseId
-							author {
-								login
-							}
-							body
 							state
-							submittedAt
 							comments(first: 100) {
 								nodes {
 									id
 									databaseId
 									body
-									path
-									line
 									author {
 										login
 									}
@@ -323,17 +260,131 @@ export async function fetchPullRequest(gql: typeof graphql, owner: string, repo:
 						}
 					}
 				}
+				`,
+				{ owner, repo, number: issueNumber },
+			);
+
+			if (!result.repository.issue) {
+				throw new NotFoundError({ resource: 'Issue', id: `#${issueNumber}` });
 			}
-		}
-		`,
-		{ owner, repo, number: prNumber },
-	);
 
-	if (!result.repository.pullRequest) {
-		throw new Error(`PR #${prNumber} not found`);
-	}
+			return result.repository.issue;
+		},
+		catch: (e) => {
+			if (NotFoundError.is(e)) return e;
+			return new GitHubAPIError({ operation: 'fetchIssue', cause: e });
+		},
+	});
+}
 
-	return result.repository.pullRequest;
+// Fetches a pull request with comments, reviews, and files via GraphQL.
+// Returns Result to distinguish not-found from API errors.
+export async function fetchPullRequest(
+	gql: typeof graphql,
+	owner: string,
+	repo: string,
+	prNumber: number,
+): Promise<Result<GitHubPullRequest, NotFoundError | GitHubAPIError>> {
+	return Result.tryPromise({
+		try: async () => {
+			const result = await gql<PullRequestQueryResponse>(
+				`
+				query($owner: String!, $repo: String!, $number: Int!) {
+					repository(owner: $owner, name: $repo) {
+						pullRequest(number: $number) {
+							title
+							body
+							author {
+								login
+							}
+							baseRefName
+							headRefName
+							headRefOid
+							createdAt
+							additions
+							deletions
+							state
+							baseRepository {
+								nameWithOwner
+							}
+							headRepository {
+								nameWithOwner
+							}
+							commits(first: 100) {
+								totalCount
+								nodes {
+									commit {
+										oid
+										message
+										author {
+											name
+											email
+										}
+									}
+								}
+							}
+							files(first: 100) {
+								nodes {
+									path
+									additions
+									deletions
+									changeType
+								}
+							}
+							comments(first: 100) {
+								nodes {
+									id
+									databaseId
+									body
+									author {
+										login
+									}
+									createdAt
+								}
+							}
+							reviews(first: 100) {
+								nodes {
+									id
+									databaseId
+									author {
+										login
+									}
+									body
+									state
+									submittedAt
+									comments(first: 100) {
+										nodes {
+											id
+											databaseId
+											body
+											path
+											line
+											author {
+												login
+											}
+											createdAt
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				`,
+				{ owner, repo, number: prNumber },
+			);
+
+			if (!result.repository.pullRequest) {
+				throw new NotFoundError({ resource: 'PR', id: `#${prNumber}` });
+			}
+
+			return result.repository.pullRequest;
+		},
+		catch: (e) => {
+			if (NotFoundError.is(e)) return e;
+			return new GitHubAPIError({ operation: 'fetchPullRequest', cause: e });
+		},
+	});
 }
 
 export function buildIssueContext(issue: GitHubIssue, excludeCommentIds: number[] = []): string {
@@ -354,6 +405,8 @@ export function buildIssueContext(issue: GitHubIssue, excludeCommentIds: number[
 	].join('\n');
 }
 
+// Checks if a file exists in a repository.
+// Returns boolean for simplicity (caller rarely needs error details).
 export async function fileExists(octokit: Octokit, owner: string, repo: string, path: string, ref?: string): Promise<boolean> {
 	try {
 		await octokit.repos.getContent({ owner, repo, path, ref });
@@ -473,7 +526,8 @@ export interface WorkflowRunInfo {
 }
 
 // Polls for workflow run with backoff (0s, 10s, 20s, 30s) since GitHub
-// Actions takes time to queue runs after the triggering event
+// Actions takes time to queue runs after the triggering event.
+// Returns Result to distinguish not-found from API errors.
 export async function findWorkflowRun(
 	octokit: Octokit,
 	owner: string,
@@ -482,7 +536,7 @@ export async function findWorkflowRun(
 	eventType: string,
 	triggeringActor: string,
 	afterTimestamp: string,
-): Promise<WorkflowRunInfo | null> {
+): Promise<Result<WorkflowRunInfo, NotFoundError | GitHubAPIError>> {
 	const delays = [0, 10_000, 20_000, 30_000];
 	const workflowLog = createLogger({ owner, repo });
 
@@ -493,36 +547,51 @@ export async function findWorkflowRun(
 			await sleep(delay);
 		}
 
-		try {
-			const response = await octokit.actions.listWorkflowRuns({
-				owner,
-				repo,
-				workflow_id: workflowFileName,
-				event: eventType,
-				created: `>=${afterTimestamp}`,
-				per_page: 10,
-			});
+		const pollResult = await Result.tryPromise({
+			try: async () => {
+				const response = await octokit.actions.listWorkflowRuns({
+					owner,
+					repo,
+					workflow_id: workflowFileName,
+					event: eventType,
+					created: `>=${afterTimestamp}`,
+					per_page: 10,
+				});
 
-			const run = response.data.workflow_runs.find((r) => r.triggering_actor?.login === triggeringActor);
+				const run = response.data.workflow_runs.find((r) => r.triggering_actor?.login === triggeringActor);
 
-			if (run) {
-				workflowLog.info('workflow_run_found', { run_id: run.id, status: run.status });
-				return {
-					id: run.id,
-					url: run.html_url,
-					status: run.status ?? 'unknown',
-					conclusion: run.conclusion,
-				};
-			}
+				if (run) {
+					workflowLog.info('workflow_run_found', { run_id: run.id, status: run.status });
+					return {
+						id: run.id,
+						url: run.html_url,
+						status: run.status ?? 'unknown',
+						conclusion: run.conclusion,
+					};
+				}
 
-			workflowLog.info('workflow_run_not_found', { attempt: i + 1, max_attempts: delays.length });
-		} catch (error) {
-			workflowLog.errorWithException('workflow_poll_error', error, { attempt: i + 1, max_attempts: delays.length });
+				workflowLog.info('workflow_run_not_found', { attempt: i + 1, max_attempts: delays.length });
+				return null;
+			},
+			catch: (error) => {
+				workflowLog.errorWithException('workflow_poll_error', error, { attempt: i + 1, max_attempts: delays.length });
+				return new GitHubAPIError({ operation: 'listWorkflowRuns', cause: error });
+			},
+		});
+
+		// If we got an API error, continue polling (might be transient)
+		if (pollResult.isErr()) {
+			continue;
+		}
+
+		// If we found a run, return it
+		if (pollResult.value !== null) {
+			return Result.ok(pollResult.value);
 		}
 	}
 
 	workflowLog.warn('workflow_run_not_found_exhausted', { attempts: delays.length });
-	return null;
+	return Result.err(new NotFoundError({ resource: 'WorkflowRun', id: `${workflowFileName}/${triggeringActor}` }));
 }
 
 export async function getWorkflowRunStatus(
@@ -555,4 +624,3 @@ export async function deleteInstallation(env: Env, installationId: number): Prom
 	const octokit = new ResilientOctokit({ auth: token });
 	await octokit.apps.deleteInstallation({ installation_id: installationId });
 }
-

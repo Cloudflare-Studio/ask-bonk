@@ -381,18 +381,24 @@ describe("OIDC Claim Parsing", () => {
 			runner_environment: "github-hosted",
 		};
 
-		const { owner, repo } = extractRepoFromClaims(claims);
-		expect(owner).toBe("octocat");
-		expect(repo).toBe("hello-world");
+		const result = extractRepoFromClaims(claims);
+		expect(result.isOk()).toBe(true);
+		if (result.isOk()) {
+			expect(result.value.owner).toBe("octocat");
+			expect(result.value.repo).toBe("hello-world");
+		}
 	});
 
 	it("handles repos with multiple dashes/underscores", () => {
 		const claims = {
 			repository: "my-org/my-complex_repo-name",
 		} as any;
-		const { owner, repo } = extractRepoFromClaims(claims);
-		expect(owner).toBe("my-org");
-		expect(repo).toBe("my-complex_repo-name");
+		const result = extractRepoFromClaims(claims);
+		expect(result.isOk()).toBe(true);
+		if (result.isOk()) {
+			expect(result.value.owner).toBe("my-org");
+			expect(result.value.repo).toBe("my-complex_repo-name");
+		}
 	});
 });
 
@@ -409,8 +415,10 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 			repo: "test-repo",
 		});
 
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).toContain("Authorization");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).toContain("Authorization");
+		}
 	});
 
 	it("rejects requests with non-Bearer Authorization", async () => {
@@ -420,8 +428,10 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 			repo: "test-repo",
 		});
 
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).toContain("Authorization");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).toContain("Authorization");
+		}
 	});
 
 	it("rejects requests missing owner in body", async () => {
@@ -433,7 +443,7 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 		});
 
 		// Will fail either on OIDC validation or body validation - both are acceptable
-		expect("error" in result).toBe(true);
+		expect(result.isErr()).toBe(true);
 	});
 
 	it("rejects requests missing repo in body", async () => {
@@ -442,7 +452,7 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 			owner: "test-org",
 		});
 
-		expect("error" in result).toBe(true);
+		expect(result.isErr()).toBe(true);
 	});
 });
 
@@ -457,8 +467,10 @@ describe("PAT Exchange Security", () => {
 			repo: "test-repo",
 		});
 
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).toBe("PAT exchange is disabled");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).toBe("PAT exchange is disabled");
+		}
 	});
 
 	it("rejects non-PAT tokens even when enabled", async () => {
@@ -468,8 +480,10 @@ describe("PAT Exchange Security", () => {
 			repo: "test-repo",
 		});
 
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).toContain("expected a GitHub PAT");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).toContain("expected a GitHub PAT");
+		}
 	});
 
 	it("accepts github_pat_ prefix when enabled", async () => {
@@ -481,8 +495,10 @@ describe("PAT Exchange Security", () => {
 		});
 
 		// Should fail on API call, not on format validation
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).not.toContain("expected a GitHub PAT");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).not.toContain("expected a GitHub PAT");
+		}
 	});
 
 	it("accepts ghp_ prefix when enabled", async () => {
@@ -494,8 +510,10 @@ describe("PAT Exchange Security", () => {
 		});
 
 		// Should fail on API call, not on format validation
-		expect("error" in result).toBe(true);
-		expect((result as { error: string }).error).not.toContain("expected a GitHub PAT");
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error.message).not.toContain("expected a GitHub PAT");
+		}
 	});
 });
 

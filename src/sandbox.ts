@@ -1,13 +1,15 @@
-import { getSandbox } from "@cloudflare/sandbox";
-import { createOpencode } from "@cloudflare/sandbox/opencode";
-import type { Config, OpencodeClient } from "@opencode-ai/sdk";
-import { DEFAULT_MODEL, type Env, type AskRequest } from "./types";
-import { getInstallationToken } from "./github";
-import { withRetry } from "./retry";
-import { createLogger } from "./log";
+import { getSandbox } from '@cloudflare/sandbox';
+import { createOpencode } from '@cloudflare/sandbox/opencode';
+import type { Config, OpencodeClient } from '@opencode-ai/sdk';
+import { Result } from 'better-result';
+import { DEFAULT_MODEL, type Env, type AskRequest } from './types';
+import { getInstallationToken } from './github';
+import { withRetry } from './retry';
+import { createLogger } from './log';
+import { SandboxError, ValidationError } from './errors';
 
 // Runs OpenCode in the sandbox for the /ask endpoint.
-// Returns an SSE stream of events from the OpenCode session.
+// Returns a Result with either a readable SSE stream or a domain error.
 //
 // Flow:
 // 1. Clone repo using installation token
@@ -15,14 +17,11 @@ import { createLogger } from "./log";
 // 3. Start OpenCode with provided config (SDK handles merging with opencode.json)
 // 4. Send prompt to OpenCode
 // 5. Stream SSE events back to caller
-//
-// In future, responses may be routed to other destinations (email, Discord, etc)
-// but for now, SSE is the only response type.
 export async function runAsk(
 	env: Env,
 	installationId: number,
 	request: AskRequest,
-): Promise<ReadableStream> {
+): Promise<Result<ReadableStream, SandboxError | ValidationError>> {
 	const { id: askId, owner, repo, prompt, agent, model, config } = request;
 	const log = createLogger({ owner, repo, ask_id: askId, installation_id: installationId });
 
@@ -30,17 +29,19 @@ export async function runAsk(
 	const sandboxId = `${owner}-${repo}-${Date.now()}`;
 	const sandbox = getSandbox(env.Sandbox, sandboxId);
 	const repoUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
-	const workDir = "/home/user/workspace";
+	const workDir = '/home/user/workspace';
 
 	// Clone repository
-	try {
-		await withRetry(
-			() => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }),
-			'sandbox.gitCheckout'
-		);
-	} catch (error) {
-		log.errorWithException('sandbox_clone_failed', error);
-		throw error;
+	const cloneResult = await Result.tryPromise({
+		try: () => withRetry(() => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }), 'sandbox.gitCheckout'),
+		catch: (error) => {
+			log.errorWithException('sandbox_clone_failed', error);
+			return new SandboxError({ operation: 'gitCheckout', cause: error });
+		},
+	});
+
+	if (cloneResult.isErr()) {
+		return Result.err(cloneResult.error);
 	}
 
 	// Configure git identity for any commits OpenCode might make
@@ -53,10 +54,9 @@ export async function runAsk(
 	}
 
 	// Configure credential helper for git push
-	await sandbox.exec(
-		`git config credential.helper '!f() { echo "username=x-access-token"; echo "password=${token}"; }; f'`,
-		{ cwd: workDir },
-	);
+	await sandbox.exec(`git config credential.helper '!f() { echo "username=x-access-token"; echo "password=${token}"; }; f'`, {
+		cwd: workDir,
+	});
 
 	// Build OpenCode config - SDK merges with project's opencode.json automatically.
 	// We only need to set the API key for the opencode provider.
@@ -75,40 +75,56 @@ export async function runAsk(
 	};
 
 	// Start OpenCode in sandbox
-	let client: OpencodeClient;
-	try {
-		const opencode = await withRetry(
-			() => createOpencode<OpencodeClient>(sandbox, { directory: workDir, config: opencodeConfig }),
-			'sandbox.createOpencode'
-		);
-		client = opencode.client;
-	} catch (error) {
-		log.errorWithException('sandbox_opencode_start_failed', error);
-		throw error;
+	const opencodeResult = await Result.tryPromise({
+		try: async () => {
+			const opencode = await withRetry(
+				() => createOpencode<OpencodeClient>(sandbox, { directory: workDir, config: opencodeConfig }),
+				'sandbox.createOpencode',
+			);
+			return opencode.client;
+		},
+		catch: (error) => {
+			log.errorWithException('sandbox_opencode_start_failed', error);
+			return new SandboxError({ operation: 'createOpencode', cause: error });
+		},
+	});
+
+	if (opencodeResult.isErr()) {
+		return Result.err(opencodeResult.error);
 	}
+	const client = opencodeResult.value;
 
 	// Create session
-	const session = await withRetry(
-		() => client.session.create({ body: { title: `Ask: ${owner}/${repo}` }, query: { directory: workDir } }),
-		'opencode.session.create'
-	);
+	const sessionResult = await Result.tryPromise({
+		try: () =>
+			withRetry(
+				() => client.session.create({ body: { title: `Ask: ${owner}/${repo}` }, query: { directory: workDir } }),
+				'opencode.session.create',
+			),
+		catch: (error) => {
+			log.errorWithException('sandbox_session_create_failed', error);
+			return new SandboxError({ operation: 'session.create', cause: error });
+		},
+	});
 
-	if (!session.data) {
-		throw new Error("Failed to create OpenCode session");
+	if (sessionResult.isErr()) {
+		return Result.err(sessionResult.error);
+	}
+
+	if (!sessionResult.value.data) {
+		return Result.err(new SandboxError({ operation: 'session.create', cause: new Error('Failed to create OpenCode session') }));
 	}
 
 	// Build model config from request or use default
 	const modelString = model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL;
-	const [providerID, ...rest] = modelString.split("/");
-	const modelID = rest.join("/");
+	const [providerID, ...rest] = modelString.split('/');
+	const modelID = rest.join('/');
 
 	if (!providerID?.length || !modelID.length) {
-		throw new Error(`Invalid model ${modelString}. Model must be in the format "provider/model".`);
+		return Result.err(new ValidationError({ message: `Invalid model ${modelString}. Model must be in the format "provider/model".` }));
 	}
 
 	// Stream SSE events from the prompt
-	// The SDK's prompt method returns the final result, but for SSE streaming
-	// we need to use a different approach - subscribe to session events
 	const { readable, writable } = new TransformStream();
 	const writer = writable.getWriter();
 	const encoder = new TextEncoder();
@@ -125,59 +141,58 @@ export async function runAsk(
 	};
 
 	// Run the prompt in the background and stream events
-	const sessionId = session.data!.id;
+	const sessionId = sessionResult.value.data!.id;
 	const sessionLog = log.child({ session_id: sessionId });
 	const promptStartTime = Date.now();
 
 	(async () => {
 		let success = false;
 		try {
-			await sendEvent("session", { id: sessionId, askId });
+			await sendEvent('session', { id: sessionId, askId });
 
 			const promptResult = await withRetry(
-				() => client.session.prompt({
-					path: { id: sessionId },
-					query: { directory: workDir },
-					body: {
-						model: { providerID, modelID },
-						agent: agent ?? undefined,
-						parts: [{ type: "text", text: prompt }],
-					},
-				}),
-				'opencode.session.prompt'
+				() =>
+					client.session.prompt({
+						path: { id: sessionId },
+						query: { directory: workDir },
+						body: {
+							model: { providerID, modelID },
+							agent: agent ?? undefined,
+							parts: [{ type: 'text', text: prompt }],
+						},
+					}),
+				'opencode.session.prompt',
 			);
 
 			const parts = promptResult.data?.parts ?? [];
-			const textPart = parts.find((p: { type: string }) => p.type === "text") as
-				| { text?: string }
-				| undefined;
-			const response = textPart?.text ?? "No response";
+			const textPart = parts.find((p: { type: string }) => p.type === 'text') as { text?: string } | undefined;
+			const response = textPart?.text ?? 'No response';
 
 			// Check for changes
-			const statusResult = await sandbox.exec("git status --porcelain", { cwd: workDir });
+			const statusResult = await sandbox.exec('git status --porcelain', { cwd: workDir });
 			const hasChanges = statusResult.success && statusResult.stdout.trim().length > 0;
 
 			let changedFiles: string[] = [];
 			if (hasChanges) {
 				changedFiles = statusResult.stdout
 					.trim()
-					.split("\n")
+					.split('\n')
 					.map((line: string) => line.slice(3).trim())
 					.filter((f: string) => f.length > 0);
 			}
 
-			await sendEvent("response", {
+			await sendEvent('response', {
 				text: response,
 				changedFiles: changedFiles.length > 0 ? changedFiles : null,
 			});
 
-			await sendEvent("done", { success: true });
+			await sendEvent('done', { success: true });
 			success = true;
 		} catch (error) {
 			sessionLog.errorWithException('sandbox_prompt_failed', error, { duration_ms: Date.now() - promptStartTime });
 			// Try to send error event, but don't fail if stream is already closed
-			const message = error instanceof Error ? error.message : "Unknown error";
-			await sendEvent("error", { message, askId, sessionId });
+			const message = error instanceof Error ? error.message : 'Unknown error';
+			await sendEvent('error', { message, askId, sessionId });
 		} finally {
 			// Log completion with duration
 			if (success) {
@@ -192,5 +207,5 @@ export async function runAsk(
 		}
 	})();
 
-	return readable;
+	return Result.ok(readable);
 }

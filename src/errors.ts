@@ -67,18 +67,6 @@ export class SandboxError extends TaggedError('SandboxError')<{
 	}
 }
 
-export class RetryExhaustedError extends TaggedError('RetryExhaustedError')<{
-	label: string;
-	attempts: number;
-	message: string;
-	cause: unknown;
-}>() {
-	constructor(args: { label: string; attempts: number; cause: unknown }) {
-		const msg = args.cause instanceof Error ? args.cause.message : String(args.cause);
-		super({ ...args, message: `${args.label} failed after ${args.attempts} attempts: ${msg}` });
-	}
-}
-
 // Union types for Result error channels
 export type AuthError = OIDCValidationError | AuthorizationError;
 export type TokenExchangeError = AuthError | InstallationNotFoundError | GitHubAPIError;

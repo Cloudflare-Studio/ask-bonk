@@ -1,6 +1,13 @@
 import type { ImageData } from "./types";
-import { withRetry } from "./retry";
+import { Result } from 'better-result';
 import { log } from "./log";
+
+// Retry config for file downloads: 3 attempts with exponential backoff starting at 5s.
+const RETRY_CONFIG = {
+	times: 3,
+	delayMs: 5000,
+	backoff: 'exponential' as const,
+};
 
 // Extracts GitHub user-attachments (images/files) from comment markdown
 // and converts them to base64 for the AI prompt
@@ -75,8 +82,8 @@ async function downloadFile(
 	url: string,
 	accessToken: string
 ): Promise<{ mime: string; content: string } | null> {
-	try {
-		return await withRetry(async () => {
+	const result = await Result.tryPromise(
+		async () => {
 			const response = await fetch(url, {
 				headers: {
 					Authorization: `Bearer ${accessToken}`,
@@ -94,11 +101,15 @@ async function downloadFile(
 			const mime = contentType.startsWith("image/") ? contentType : "text/plain";
 
 			return { mime, content: base64 };
-		}, 'downloadFile');
-	} catch (error) {
-		log.errorWithException('file_download_error', error, { url });
+		},
+		{ retry: RETRY_CONFIG },
+	);
+
+	if (result.isErr()) {
+		log.errorWithException('file_download_error', result.error, { url });
 		return null;
 	}
+	return result.value;
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {

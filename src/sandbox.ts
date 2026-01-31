@@ -4,9 +4,15 @@ import type { Config, OpencodeClient } from '@opencode-ai/sdk';
 import { Result } from 'better-result';
 import { DEFAULT_MODEL, type Env, type AskRequest } from './types';
 import { getInstallationToken } from './github';
-import { withRetry } from './retry';
 import { createLogger } from './log';
 import { SandboxError, ValidationError } from './errors';
+
+// Retry config for sandbox operations: 3 attempts with exponential backoff starting at 5s.
+const RETRY_CONFIG = {
+	times: 3,
+	delayMs: 5000,
+	backoff: 'exponential' as const,
+};
 
 // Runs OpenCode in the sandbox for the /ask endpoint.
 // Returns a Result with either a readable SSE stream or a domain error.
@@ -32,13 +38,16 @@ export async function runAsk(
 	const workDir = '/home/user/workspace';
 
 	// Clone repository
-	const cloneResult = await Result.tryPromise({
-		try: () => withRetry(() => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }), 'sandbox.gitCheckout'),
-		catch: (error) => {
-			log.errorWithException('sandbox_clone_failed', error);
-			return new SandboxError({ operation: 'gitCheckout', cause: error });
+	const cloneResult = await Result.tryPromise(
+		{
+			try: () => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }),
+			catch: (error: unknown) => {
+				log.errorWithException('sandbox_clone_failed', error);
+				return new SandboxError({ operation: 'gitCheckout', cause: error });
+			},
 		},
-	});
+		{ retry: RETRY_CONFIG },
+	);
 
 	if (cloneResult.isErr()) {
 		return Result.err(cloneResult.error);
@@ -75,19 +84,19 @@ export async function runAsk(
 	};
 
 	// Start OpenCode in sandbox
-	const opencodeResult = await Result.tryPromise({
-		try: async () => {
-			const opencode = await withRetry(
-				() => createOpencode<OpencodeClient>(sandbox, { directory: workDir, config: opencodeConfig }),
-				'sandbox.createOpencode',
-			);
-			return opencode.client;
+	const opencodeResult = await Result.tryPromise(
+		{
+			try: async () => {
+				const opencode = await createOpencode<OpencodeClient>(sandbox, { directory: workDir, config: opencodeConfig });
+				return opencode.client;
+			},
+			catch: (error: unknown) => {
+				log.errorWithException('sandbox_opencode_start_failed', error);
+				return new SandboxError({ operation: 'createOpencode', cause: error });
+			},
 		},
-		catch: (error) => {
-			log.errorWithException('sandbox_opencode_start_failed', error);
-			return new SandboxError({ operation: 'createOpencode', cause: error });
-		},
-	});
+		{ retry: RETRY_CONFIG },
+	);
 
 	if (opencodeResult.isErr()) {
 		return Result.err(opencodeResult.error);
@@ -95,17 +104,16 @@ export async function runAsk(
 	const client = opencodeResult.value;
 
 	// Create session
-	const sessionResult = await Result.tryPromise({
-		try: () =>
-			withRetry(
-				() => client.session.create({ body: { title: `Ask: ${owner}/${repo}` }, query: { directory: workDir } }),
-				'opencode.session.create',
-			),
-		catch: (error) => {
-			log.errorWithException('sandbox_session_create_failed', error);
-			return new SandboxError({ operation: 'session.create', cause: error });
+	const sessionResult = await Result.tryPromise(
+		{
+			try: () => client.session.create({ body: { title: `Ask: ${owner}/${repo}` }, query: { directory: workDir } }),
+			catch: (error: unknown) => {
+				log.errorWithException('sandbox_session_create_failed', error);
+				return new SandboxError({ operation: 'session.create', cause: error });
+			},
 		},
-	});
+		{ retry: RETRY_CONFIG },
+	);
 
 	if (sessionResult.isErr()) {
 		return Result.err(sessionResult.error);
@@ -150,7 +158,7 @@ export async function runAsk(
 		try {
 			await sendEvent('session', { id: sessionId, askId });
 
-			const promptResult = await withRetry(
+			const promptResultWrapped = await Result.tryPromise(
 				() =>
 					client.session.prompt({
 						path: { id: sessionId },
@@ -161,8 +169,10 @@ export async function runAsk(
 							parts: [{ type: 'text', text: prompt }],
 						},
 					}),
-				'opencode.session.prompt',
+				{ retry: RETRY_CONFIG },
 			);
+			if (promptResultWrapped.isErr()) throw promptResultWrapped.error;
+			const promptResult = promptResultWrapped.value;
 
 			const parts = promptResult.data?.parts ?? [];
 			const textPart = parts.find((p: { type: string }) => p.type === 'text') as { text?: string } | undefined;

@@ -2,13 +2,23 @@ import { Octokit } from '@octokit/rest';
 import { retry } from '@octokit/plugin-retry';
 import { throttling } from '@octokit/plugin-throttling';
 import { createAppAuth } from '@octokit/auth-app';
+import { RequestError } from '@octokit/request-error';
 import { Webhooks } from '@octokit/webhooks';
 import { graphql } from '@octokit/graphql';
 import { Result } from 'better-result';
 import type { Env, GitHubIssue, GitHubPullRequest, IssueQueryResponse, PullRequestQueryResponse } from './types';
-import { withRetry } from './retry';
 import { createLogger } from './log';
 import { NotFoundError, GitHubAPIError } from './errors';
+
+// Retry config for transient failures (network, rate limits).
+// 3 attempts total, exponential backoff starting at 5s.
+// Don't retry client errors (4xx) - they won't succeed on retry.
+const RETRY_CONFIG = {
+	times: 3,
+	delayMs: 5000,
+	backoff: 'exponential' as const,
+	shouldRetry: (err: unknown) => !(err instanceof RequestError && err.status >= 400 && err.status < 500),
+};
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
@@ -19,7 +29,9 @@ export async function createOctokit(env: Env, installationId: number): Promise<O
 		installationId,
 	});
 
-	const { token } = await withRetry(() => auth({ type: 'installation' }), 'createOctokit.auth');
+	const result = await Result.tryPromise(() => auth({ type: 'installation' }), { retry: RETRY_CONFIG });
+	if (result.isErr()) throw result.error;
+	const { token } = result.value;
 
 	return new ResilientOctokit({
 		auth: token,
@@ -50,7 +62,9 @@ export async function createGraphQL(env: Env, installationId: number): Promise<t
 		installationId,
 	});
 
-	const { token } = await withRetry(() => auth({ type: 'installation' }), 'createGraphQL.auth');
+	const result = await Result.tryPromise(() => auth({ type: 'installation' }), { retry: RETRY_CONFIG });
+	if (result.isErr()) throw result.error;
+	const { token } = result.value;
 
 	return graphql.defaults({
 		headers: { authorization: `token ${token}` },
@@ -64,8 +78,9 @@ export async function getInstallationToken(env: Env, installationId: number): Pr
 		installationId,
 	});
 
-	const { token } = await withRetry(() => auth({ type: 'installation' }), 'getInstallationToken.auth');
-	return token;
+	const result = await Result.tryPromise(() => auth({ type: 'installation' }), { retry: RETRY_CONFIG });
+	if (result.isErr()) throw result.error;
+	return result.value.token;
 }
 
 export function createWebhooks(env: Env): Webhooks {
@@ -620,7 +635,8 @@ export async function deleteInstallation(env: Env, installationId: number): Prom
 		privateKey: env.GITHUB_APP_PRIVATE_KEY,
 	});
 
-	const { token } = await withRetry(() => auth({ type: 'app' }), 'deleteInstallation.auth');
-	const octokit = new ResilientOctokit({ auth: token });
+	const result = await Result.tryPromise(() => auth({ type: 'app' }), { retry: RETRY_CONFIG });
+	if (result.isErr()) throw result.error;
+	const octokit = new ResilientOctokit({ auth: result.value.token });
 	await octokit.apps.deleteInstallation({ installation_id: installationId });
 }

@@ -5,7 +5,6 @@ import { jwtVerify, createRemoteJWKSet } from 'jose';
 import { Result } from 'better-result';
 import type { Env } from './types';
 import { hasWriteAccess, getRepository } from './github';
-import { withRetry } from './retry';
 import { createLogger } from './log';
 import {
 	OIDCValidationError,
@@ -14,6 +13,16 @@ import {
 	GitHubAPIError,
 	type TokenExchangeError,
 } from './errors';
+
+// Retry config for transient failures (network, rate limits).
+// 3 attempts total, exponential backoff starting at 5s.
+// Don't retry client errors (4xx) - they won't succeed on retry.
+const RETRY_CONFIG = {
+	times: 3,
+	delayMs: 5000,
+	backoff: 'exponential' as const,
+	shouldRetry: (err: unknown) => !(err instanceof RequestError && err.status >= 400 && err.status < 500),
+};
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -109,33 +118,33 @@ export async function getInstallationId(
 	const { token } = await auth({ type: 'app' });
 	const octokit = new Octokit({ auth: token });
 
-	return Result.tryPromise({
-		try: async () => {
-			const response = await withRetry(
-				() => octokit.apps.getRepoInstallation({ owner, repo }),
-				`getInstallationId(${owner}/${repo})`,
-			);
-			const installationId = response.data.id;
+	return Result.tryPromise(
+		{
+			try: async () => {
+				const response = await octokit.apps.getRepoInstallation({ owner, repo });
+				const installationId = response.data.id;
 
-			// Cache for future use
-			await env.APP_INSTALLATIONS.put(`${owner}/${repo}`, String(installationId), {
-				expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS,
-			});
-			return installationId;
+				// Cache for future use
+				await env.APP_INSTALLATIONS.put(`${owner}/${repo}`, String(installationId), {
+					expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS,
+				});
+				return installationId;
+			},
+			catch: (err: unknown) => {
+				// 404 = app not installed on this repo (expected case)
+				if (err instanceof RequestError && err.status === 404) {
+					return new InstallationNotFoundError({ owner, repo });
+				}
+				// Other errors (network, rate limit, 5xx)
+				return new GitHubAPIError({
+					operation: 'getRepoInstallation',
+					cause: err,
+					statusCode: err instanceof RequestError ? err.status : undefined,
+				});
+			},
 		},
-		catch: (err) => {
-			// 404 = app not installed on this repo (expected case)
-			if (err instanceof RequestError && err.status === 404) {
-				return new InstallationNotFoundError({ owner, repo });
-			}
-			// Other errors (network, rate limit, 5xx)
-			return new GitHubAPIError({
-				operation: 'getRepoInstallation',
-				cause: err,
-				statusCode: err instanceof RequestError ? err.status : undefined,
-			});
-		},
-	});
+		{ retry: RETRY_CONFIG },
+	);
 }
 
 // Options for scoped installation token generation
@@ -173,8 +182,9 @@ async function generateInstallationToken(env: Env, installationId: number, optio
 		authOptions.permissions = options.permissions;
 	}
 
-	const { token } = await withRetry(() => auth(authOptions), 'generateInstallationToken.auth');
-	return token;
+	const result = await Result.tryPromise(() => auth(authOptions), { retry: RETRY_CONFIG });
+	if (result.isErr()) throw result.error;
+	return result.value.token;
 }
 
 // Response types for API endpoints

@@ -1,11 +1,15 @@
-import type {
-	IssueCommentEvent,
-	IssuesEvent,
-	PullRequestReviewCommentEvent,
-	PullRequestReviewEvent,
-} from "@octokit/webhooks-types";
-import { DEFAULT_MODEL, type Env, type EventContext, type ReviewCommentContext, type ScheduledEventContext, type WorkflowDispatchContext, type ScheduleEventPayload, type WorkflowDispatchPayload } from "./types";
-import { log } from "./log";
+import type { IssueCommentEvent, IssuesEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent } from '@octokit/webhooks-types';
+import {
+	DEFAULT_MODEL,
+	type Env,
+	type EventContext,
+	type ReviewCommentContext,
+	type ScheduledEventContext,
+	type WorkflowDispatchContext,
+	type ScheduleEventPayload,
+	type WorkflowDispatchPayload,
+} from './types';
+import { log } from './log';
 
 export function extractPrompt(body: string, reviewContext?: ReviewCommentContext): string {
 	const trimmed = body.trim();
@@ -17,9 +21,7 @@ export function extractPrompt(body: string, reviewContext?: ReviewCommentContext
 	return trimmed;
 }
 
-export function getReviewCommentContext(
-	payload: PullRequestReviewCommentEvent
-): ReviewCommentContext {
+export function getReviewCommentContext(payload: PullRequestReviewCommentEvent): ReviewCommentContext {
 	return {
 		file: payload.comment.path,
 		diffHunk: payload.comment.diff_hunk,
@@ -32,9 +34,9 @@ export function getReviewCommentContext(
 }
 
 export function isForkPR(payload: IssueCommentEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent): boolean {
-	if ("pull_request" in payload && payload.pull_request) {
+	if ('pull_request' in payload && payload.pull_request) {
 		const pr = payload.pull_request;
-		if ("head" in pr && "base" in pr) {
+		if ('head' in pr && 'base' in pr) {
 			const head = pr.head as { repo?: { full_name?: string } };
 			const base = pr.base as { repo?: { full_name?: string } };
 			return head.repo?.full_name !== base.repo?.full_name;
@@ -45,11 +47,11 @@ export function isForkPR(payload: IssueCommentEvent | PullRequestReviewCommentEv
 
 // Parse issue comment events - no mention filtering, that's handled by the action
 export function parseIssueCommentEvent(payload: IssueCommentEvent): {
-	context: Omit<EventContext, "env">;
+	context: Omit<EventContext, 'env'>;
 	prompt: string;
 	triggerCommentId: number;
 } | null {
-	if (payload.action !== "created") {
+	if (payload.action !== 'created') {
 		return null;
 	}
 
@@ -73,12 +75,12 @@ export function parseIssueCommentEvent(payload: IssueCommentEvent): {
 
 // Parse PR review comment events - no mention filtering, that's handled by the action
 export function parsePRReviewCommentEvent(payload: PullRequestReviewCommentEvent): {
-	context: Omit<EventContext, "env">;
+	context: Omit<EventContext, 'env'>;
 	prompt: string;
 	triggerCommentId: number;
 	reviewContext: ReviewCommentContext;
 } | null {
-	if (payload.action !== "created") {
+	if (payload.action !== 'created') {
 		return null;
 	}
 
@@ -110,11 +112,11 @@ export function parsePRReviewCommentEvent(payload: PullRequestReviewCommentEvent
 
 // Parse PR review events - no mention filtering, that's handled by the action
 export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
-	context: Omit<EventContext, "env">;
+	context: Omit<EventContext, 'env'>;
 	prompt: string;
 	triggerCommentId: number;
 } | null {
-	if (payload.action !== "submitted") {
+	if (payload.action !== 'submitted') {
 		return null;
 	}
 
@@ -149,25 +151,25 @@ export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
 // Both are processed the same way - filtering logic is handled by the workflow.
 // Other actions (deleted, labeled, etc.) are explicitly rejected.
 export function parseIssuesEvent(payload: IssuesEvent): {
-	context: Omit<EventContext, "env">;
+	context: Omit<EventContext, 'env'>;
 	issueTitle: string;
 	issueBody: string;
 	issueAuthor: string;
 } | null {
-	if (payload.action === "opened" || payload.action === "edited") {
+	if (payload.action === 'opened' || payload.action === 'edited') {
 		return {
 			context: {
 				owner: payload.repository.owner.login,
 				repo: payload.repository.name,
 				issueNumber: payload.issue.number,
 				commentId: 0,
-				actor: payload.action === "opened" ? payload.issue.user.login : payload.sender.login,
+				actor: payload.action === 'opened' ? payload.issue.user.login : payload.sender.login,
 				isPullRequest: false,
 				isPrivate: payload.repository.private,
 				defaultBranch: payload.repository.default_branch,
 			},
 			issueTitle: payload.issue.title,
-			issueBody: payload.issue.body ?? "",
+			issueBody: payload.issue.body ?? '',
 			issueAuthor: payload.issue.user.login,
 		};
 	}
@@ -178,40 +180,33 @@ export function parseIssuesEvent(payload: IssuesEvent): {
 
 export function getModel(env: Env): { providerID: string; modelID: string } {
 	const model = env.DEFAULT_MODEL ?? DEFAULT_MODEL;
-	const [providerID, ...rest] = model.split("/");
-	const modelID = rest.join("/");
+	const [providerID, ...rest] = model.split('/');
+	const modelID = rest.join('/');
 
 	if (!providerID?.length || !modelID.length) {
-		throw new Error(
-			`Invalid model ${model}. Model must be in the format "provider/model".`
-		);
+		throw new Error(`Invalid model ${model}. Model must be in the format "provider/model".`);
 	}
 
 	return { providerID, modelID };
 }
 
-export function formatResponse(
-	response: string,
-	changedFiles: string[] | null,
-	sessionLink: string | null,
-	model: string
-): string {
+export function formatResponse(response: string, changedFiles: string[] | null, sessionLink: string | null, model: string): string {
 	const parts: string[] = [response];
 
 	if (changedFiles && changedFiles.length > 0) {
-		parts.push("");
-		parts.push("<details>");
-		parts.push("<summary>Files changed</summary>");
-		parts.push("");
+		parts.push('');
+		parts.push('<details>');
+		parts.push('<summary>Files changed</summary>');
+		parts.push('');
 		for (const file of changedFiles) {
 			parts.push(`- \`${file}\``);
 		}
-		parts.push("");
-		parts.push("</details>");
+		parts.push('');
+		parts.push('</details>');
 	}
 
-	parts.push("");
-	parts.push("---");
+	parts.push('');
+	parts.push('---');
 
 	const footerParts: string[] = [];
 	if (sessionLink) {
@@ -219,18 +214,18 @@ export function formatResponse(
 	}
 	footerParts.push(`\`${model}\``);
 
-	parts.push(footerParts.join(" | "));
+	parts.push(footerParts.join(' | '));
 
-	return parts.join("\n");
+	return parts.join('\n');
 }
 
-export function generateBranchName(type: "issue" | "pr", issueNumber: number): string {
+export function generateBranchName(type: 'issue' | 'pr', issueNumber: number): string {
 	const timestamp = new Date()
 		.toISOString()
-		.replace(/[:-]/g, "")
-		.replace(/\.\d{3}Z/, "")
-		.split("T")
-		.join("");
+		.replace(/[:-]/g, '')
+		.replace(/\.\d{3}Z/, '')
+		.split('T')
+		.join('');
 	return `bonk/${type}${issueNumber}-${timestamp}`;
 }
 

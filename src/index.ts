@@ -18,16 +18,15 @@ import {
 	handleExchangeToken,
 	handleExchangeTokenForRepo,
 	handleExchangeTokenWithPAT,
-	validateGitHubOIDCToken,
-	extractRepoFromClaims,
 	getInstallationId,
+	extractBearerToken,
+	validateOIDCAndExtractRepo,
 } from './oidc';
 import { RepoAgent } from './agent';
 import { runAsk } from './sandbox';
 import { getAgentByName } from 'agents';
 import { emitMetric, queryAnalyticsEngine, renderBarChart, eventsPerRepoQuery } from './metrics';
 import { log, createLogger } from './log';
-import { InstallationNotFoundError } from './errors';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { RepoAgent };
@@ -47,6 +46,13 @@ const USER_EVENTS = ['issue_comment', 'pull_request_review_comment', 'issues'] a
 const REPO_EVENTS = ['schedule', 'workflow_dispatch'] as const;
 const META_EVENTS = ['installation'] as const;
 const SUPPORTED_EVENTS = [...USER_EVENTS, ...REPO_EVENTS, ...META_EVENTS] as const;
+
+// Determines the reaction target type and ID from a TrackWorkflowRequest
+function getReactionTarget(body: TrackWorkflowRequest): { targetId: number; targetType: ReactionTarget } {
+	if (body.comment_id) return { targetId: body.comment_id, targetType: 'issue_comment' };
+	if (body.review_comment_id) return { targetId: body.review_comment_id, targetType: 'pull_request_review_comment' };
+	return { targetId: body.issue_id!, targetType: 'issue' };
+}
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -210,17 +216,9 @@ const apiGithub = new Hono<{ Bindings: Env }>();
 apiGithub.post('/setup', async (c) => {
 	const startTime = Date.now();
 	const requestId = ulid();
-	const authHeader = c.req.header('Authorization');
-	if (!authHeader?.startsWith('Bearer ')) {
-		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
-	}
 
-	const oidcToken = authHeader.slice(7);
-	const validationResult = await validateGitHubOIDCToken(oidcToken);
-	if (validationResult.isErr()) {
-		return c.json({ error: validationResult.error.message }, 401);
-	}
-	const claims = validationResult.value;
+	const oidcToken = extractBearerToken(c.req.header('Authorization'));
+	if (!oidcToken) return c.json({ error: 'Missing or invalid Authorization header' }, 401);
 
 	let body: SetupWorkflowRequest;
 	try {
@@ -229,17 +227,14 @@ apiGithub.post('/setup', async (c) => {
 		return c.json({ error: 'Invalid JSON body' }, 400);
 	}
 
-	// Validate required fields
 	if (!body.owner || !body.repo || !body.issue_number || !body.default_branch) {
 		return c.json({ error: 'Missing required fields: owner, repo, issue_number, default_branch' }, 400);
 	}
 
-	// Verify owner/repo from OIDC claims matches request
-	const repoResult = extractRepoFromClaims(claims);
-	if (repoResult.isErr()) {
-		return c.json({ error: repoResult.error.message }, 401);
-	}
-	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
+	const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
+	if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
+
+	const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
@@ -284,17 +279,9 @@ apiGithub.post('/setup', async (c) => {
 apiGithub.post('/track', async (c) => {
 	const startTime = Date.now();
 	const requestId = ulid();
-	const authHeader = c.req.header('Authorization');
-	if (!authHeader?.startsWith('Bearer ')) {
-		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
-	}
 
-	const oidcToken = authHeader.slice(7);
-	const validationResult = await validateGitHubOIDCToken(oidcToken);
-	if (validationResult.isErr()) {
-		return c.json({ error: validationResult.error.message }, 401);
-	}
-	const claims = validationResult.value;
+	const oidcToken = extractBearerToken(c.req.header('Authorization'));
+	if (!oidcToken) return c.json({ error: 'Missing or invalid Authorization header' }, 401);
 
 	let body: TrackWorkflowRequest;
 	try {
@@ -303,17 +290,14 @@ apiGithub.post('/track', async (c) => {
 		return c.json({ error: 'Invalid JSON body' }, 400);
 	}
 
-	// Validate required fields
 	if (!body.owner || !body.repo || !body.run_id || !body.run_url || !body.issue_number || !body.created_at) {
 		return c.json({ error: 'Missing required fields: owner, repo, run_id, run_url, issue_number, created_at' }, 400);
 	}
 
-	// Verify owner/repo from OIDC claims matches request
-	const repoResult = extractRepoFromClaims(claims);
-	if (repoResult.isErr()) {
-		return c.json({ error: repoResult.error.message }, 401);
-	}
-	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
+	const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
+	if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
+
+	const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
@@ -338,15 +322,10 @@ apiGithub.post('/track', async (c) => {
 		// Create reaction if comment/issue ID provided
 		if (body.comment_id || body.review_comment_id || body.issue_id) {
 			const octokit = await createOctokit(c.env, installationId);
-			const targetId = body.comment_id ?? body.review_comment_id ?? body.issue_id!;
-			const reactionTarget: ReactionTarget = body.comment_id
-				? 'issue_comment'
-				: body.review_comment_id
-					? 'pull_request_review_comment'
-					: 'issue';
+			const { targetId, targetType } = getReactionTarget(body);
 
-			await createReaction(octokit, body.owner, body.repo, targetId, '+1', reactionTarget);
-			trackLog.info('reaction_created', { target_type: reactionTarget, target_id: targetId });
+			await createReaction(octokit, body.owner, body.repo, targetId, '+1', targetType);
+			trackLog.info('reaction_created', { target_type: targetType, target_id: targetId });
 		}
 
 		// Get/create RepoAgent and start tracking
@@ -382,17 +361,9 @@ apiGithub.post('/track', async (c) => {
 apiGithub.put('/track', async (c) => {
 	const startTime = Date.now();
 	const requestId = ulid();
-	const authHeader = c.req.header('Authorization');
-	if (!authHeader?.startsWith('Bearer ')) {
-		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
-	}
 
-	const oidcToken = authHeader.slice(7);
-	const validationResult = await validateGitHubOIDCToken(oidcToken);
-	if (validationResult.isErr()) {
-		return c.json({ error: validationResult.error.message }, 401);
-	}
-	const claims = validationResult.value;
+	const oidcToken = extractBearerToken(c.req.header('Authorization'));
+	if (!oidcToken) return c.json({ error: 'Missing or invalid Authorization header' }, 401);
 
 	let body: FinalizeWorkflowRequest;
 	try {
@@ -401,17 +372,14 @@ apiGithub.put('/track', async (c) => {
 		return c.json({ error: 'Invalid JSON body' }, 400);
 	}
 
-	// Validate required fields
 	if (!body.owner || !body.repo || !body.run_id || !body.status) {
 		return c.json({ error: 'Missing required fields: owner, repo, run_id, status' }, 400);
 	}
 
-	// Verify owner/repo from OIDC claims matches request
-	const repoResult = extractRepoFromClaims(claims);
-	if (repoResult.isErr()) {
-		return c.json({ error: repoResult.error.message }, 401);
-	}
-	const { owner: claimsOwner, repo: claimsRepo } = repoResult.value;
+	const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
+	if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
+
+	const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
 	if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}

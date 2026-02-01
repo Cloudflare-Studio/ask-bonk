@@ -2,23 +2,13 @@ import { Octokit } from '@octokit/rest';
 import { retry } from '@octokit/plugin-retry';
 import { throttling } from '@octokit/plugin-throttling';
 import { createAppAuth } from '@octokit/auth-app';
-import { RequestError } from '@octokit/request-error';
 import { Webhooks } from '@octokit/webhooks';
 import { graphql } from '@octokit/graphql';
 import { Result } from 'better-result';
 import type { Env, GitHubIssue, GitHubPullRequest, IssueQueryResponse, PullRequestQueryResponse } from './types';
 import { createLogger } from './log';
 import { NotFoundError, GitHubAPIError } from './errors';
-
-// Retry config for transient failures (network, rate limits).
-// 3 attempts total, exponential backoff starting at 5s.
-// Don't retry client errors (4xx) - they won't succeed on retry.
-const RETRY_CONFIG = {
-	times: 3,
-	delayMs: 5000,
-	backoff: 'exponential' as const,
-	shouldRetry: (err: unknown) => !(err instanceof RequestError && err.status >= 400 && err.status < 500),
-};
+import { RETRY_CONFIG, PR_TITLE_MAX_LENGTH, WORKFLOW_RUN_POLL_DELAYS_MS } from './constants';
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
@@ -97,10 +87,7 @@ export interface WebhookEvent {
 
 // Verifies a GitHub webhook signature and parses the payload.
 // Returns Result to distinguish signature failures from parse errors.
-export async function verifyWebhook(
-	webhooks: Webhooks,
-	request: Request,
-): Promise<Result<WebhookEvent, GitHubAPIError>> {
+export async function verifyWebhook(webhooks: Webhooks, request: Request): Promise<Result<WebhookEvent, GitHubAPIError>> {
 	const id = request.headers.get('x-github-delivery');
 	const name = request.headers.get('x-github-event');
 	const signature = request.headers.get('x-hub-signature-256');
@@ -220,7 +207,7 @@ export async function createPullRequest(
 	title: string,
 	body: string,
 ): Promise<number> {
-	const truncatedTitle = title.length > 256 ? title.slice(0, 253) + '...' : title;
+	const truncatedTitle = title.length > PR_TITLE_MAX_LENGTH ? title.slice(0, PR_TITLE_MAX_LENGTH - 3) + '...' : title;
 
 	const response = await octokit.pulls.create({
 		owner,
@@ -540,8 +527,7 @@ export interface WorkflowRunInfo {
 	conclusion: string | null;
 }
 
-// Polls for workflow run with backoff (0s, 10s, 20s, 30s) since GitHub
-// Actions takes time to queue runs after the triggering event.
+// Polls for workflow run with backoff since GitHub Actions takes time to queue runs.
 // Returns Result to distinguish not-found from API errors.
 export async function findWorkflowRun(
 	octokit: Octokit,
@@ -552,14 +538,14 @@ export async function findWorkflowRun(
 	triggeringActor: string,
 	afterTimestamp: string,
 ): Promise<Result<WorkflowRunInfo, NotFoundError | GitHubAPIError>> {
-	const delays = [0, 10_000, 20_000, 30_000];
 	const workflowLog = createLogger({ owner, repo });
+	const maxAttempts = WORKFLOW_RUN_POLL_DELAYS_MS.length;
 
-	for (let i = 0; i < delays.length; i++) {
-		const delay = delays[i];
-		if (delay > 0) {
-			workflowLog.info('workflow_poll_waiting', { delay_ms: delay, attempt: i + 1, max_attempts: delays.length });
-			await sleep(delay);
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		const delayMs = WORKFLOW_RUN_POLL_DELAYS_MS[attempt];
+		if (delayMs > 0) {
+			workflowLog.info('workflow_poll_waiting', { delay_ms: delayMs, attempt: attempt + 1, max_attempts: maxAttempts });
+			await sleep(delayMs);
 		}
 
 		const pollResult = await Result.tryPromise({
@@ -585,11 +571,11 @@ export async function findWorkflowRun(
 					};
 				}
 
-				workflowLog.info('workflow_run_not_found', { attempt: i + 1, max_attempts: delays.length });
+				workflowLog.info('workflow_run_not_found', { attempt: attempt + 1, max_attempts: maxAttempts });
 				return null;
 			},
 			catch: (error) => {
-				workflowLog.errorWithException('workflow_poll_error', error, { attempt: i + 1, max_attempts: delays.length });
+				workflowLog.errorWithException('workflow_poll_error', error, { attempt: attempt + 1, max_attempts: maxAttempts });
 				return new GitHubAPIError({ operation: 'listWorkflowRuns', cause: error });
 			},
 		});
@@ -605,7 +591,7 @@ export async function findWorkflowRun(
 		}
 	}
 
-	workflowLog.warn('workflow_run_not_found_exhausted', { attempts: delays.length });
+	workflowLog.warn('workflow_run_not_found_exhausted', { attempts: maxAttempts });
 	return Result.err(new NotFoundError({ resource: 'WorkflowRun', id: `${workflowFileName}/${triggeringActor}` }));
 }
 

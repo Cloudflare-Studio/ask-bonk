@@ -1,19 +1,11 @@
-import type { Octokit } from "@octokit/rest";
-import { DEFAULT_MODEL } from "./types";
-import {
-	createComment,
-	fileExists,
-	getDefaultBranchSha,
-	createBranch,
-	createOrUpdateFile,
-	createPullRequest,
-	findOpenPR,
-} from "./github";
-import workflowTemplate from "../cli/templates/bonk.yml.hbs";
-import { createLogger } from "./log";
+import type { Octokit } from '@octokit/rest';
+import { DEFAULT_MODEL } from './types';
+import { createComment, fileExists, getDefaultBranchSha, createBranch, createOrUpdateFile, createPullRequest, findOpenPR } from './github';
+import workflowTemplate from '../cli/templates/bonk.yml.hbs';
+import { createLogger } from './log';
 
-const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";
-const WORKFLOW_BRANCH = "bonk/add-workflow-file";
+const WORKFLOW_FILE_PATH = '.github/workflows/bonk.yml';
+const WORKFLOW_BRANCH = 'bonk/add-workflow-file';
 
 export interface SetupResult {
 	exists: boolean;
@@ -21,8 +13,8 @@ export interface SetupResult {
 	prNumber?: number;
 }
 
-const BOT_MENTION = "@ask-bonk";
-const BOT_COMMAND = "/bonk";
+const BOT_MENTION = '@ask-bonk';
+const BOT_COMMAND = '/bonk';
 
 function generateWorkflowContent(): string {
 	return workflowTemplate
@@ -37,7 +29,7 @@ export async function ensureWorkflowFile(
 	owner: string,
 	repo: string,
 	issueNumber: number,
-	defaultBranch: string
+	defaultBranch: string,
 ): Promise<SetupResult> {
 	const workflowLog = createLogger({ owner, repo, issue_number: issueNumber });
 	const hasWorkflow = await fileExists(octokit, owner, repo, WORKFLOW_FILE_PATH);
@@ -56,7 +48,7 @@ async function createWorkflowPR(
 	owner: string,
 	repo: string,
 	issueNumber: number,
-	defaultBranch: string
+	defaultBranch: string,
 ): Promise<SetupResult> {
 	const existingPR = await findOpenPR(octokit, owner, repo, WORKFLOW_BRANCH);
 	if (existingPR) {
@@ -65,7 +57,7 @@ async function createWorkflowPR(
 			owner,
 			repo,
 			issueNumber,
-			`Please merge PR #${existingPR.number} first for Bonk to run workflows.\n\n${existingPR.url}`
+			`Please merge PR #${existingPR.number} first for Bonk to run workflows.\n\n${existingPR.url}`,
 		);
 
 		return {
@@ -81,22 +73,14 @@ async function createWorkflowPR(
 		await createBranch(octokit, owner, repo, WORKFLOW_BRANCH, baseSha);
 	} catch (error) {
 		// Branch may exist from a previous closed PR
-		const errorMessage = error instanceof Error ? error.message : "";
-		if (!errorMessage.includes("Reference already exists")) {
+		const errorMessage = error instanceof Error ? error.message : '';
+		if (!errorMessage.includes('Reference already exists')) {
 			throw error;
 		}
 	}
 
 	const workflowContent = generateWorkflowContent();
-	await createOrUpdateFile(
-		octokit,
-		owner,
-		repo,
-		WORKFLOW_FILE_PATH,
-		workflowContent,
-		"Add Bonk workflow file",
-		WORKFLOW_BRANCH
-	);
+	await createOrUpdateFile(octokit, owner, repo, WORKFLOW_FILE_PATH, workflowContent, 'Add Bonk workflow file', WORKFLOW_BRANCH);
 
 	const prBody = `## Summary
 
@@ -126,15 +110,7 @@ Or use the slash command:
 \`\`\`
 `;
 
-	const prNumber = await createPullRequest(
-		octokit,
-		owner,
-		repo,
-		WORKFLOW_BRANCH,
-		defaultBranch,
-		"Add Bonk workflow",
-		prBody
-	);
+	const prNumber = await createPullRequest(octokit, owner, repo, WORKFLOW_BRANCH, defaultBranch, 'Add Bonk workflow', prBody);
 
 	const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
 
@@ -143,7 +119,7 @@ Or use the slash command:
 		owner,
 		repo,
 		issueNumber,
-		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`
+		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`,
 	);
 
 	return {

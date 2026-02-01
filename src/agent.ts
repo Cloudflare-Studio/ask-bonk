@@ -2,6 +2,7 @@ import { Agent } from 'agents';
 import type { Env } from './types';
 import { createOctokit, createComment, getWorkflowRunStatus } from './github';
 import { createLogger, type Logger } from './log';
+import { WORKFLOW_POLL_INTERVAL_SECS, MAX_WORKFLOW_TRACKING_MS } from './constants';
 
 export interface CheckStatusPayload {
 	runId: number;
@@ -15,10 +16,6 @@ interface RepoAgentState {
 	// Active workflow runs being tracked, keyed by run ID
 	activeRuns: Record<number, CheckStatusPayload>;
 }
-
-// Poll every 5 minutes as a safety net (action calls finalizeRun on completion)
-const POLL_INTERVAL_SECONDS = 300;
-const MAX_TRACKING_TIME_MS = 30 * 60 * 1000;
 
 // Tracks workflow runs per repo. ID format: "{owner}/{repo}"
 export class RepoAgent extends Agent<Env, RepoAgentState> {
@@ -62,8 +59,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 		this.setState({ ...this.state, activeRuns });
 
 		// Schedule polling as safety net
-		await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
-		log.info('run_poll_scheduled', { poll_interval_seconds: POLL_INTERVAL_SECONDS });
+		await this.schedule<CheckStatusPayload>(WORKFLOW_POLL_INTERVAL_SECS, 'checkWorkflowStatus', payload);
+		log.info('run_poll_scheduled', { poll_interval_seconds: WORKFLOW_POLL_INTERVAL_SECS });
 	}
 
 	async finalizeRun(runId: number, status: string): Promise<void> {
@@ -102,8 +99,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 		log.info('run_status_checking');
 
 		const elapsed = Date.now() - createdAt;
-		if (elapsed > MAX_TRACKING_TIME_MS) {
-			log.warn('run_timed_out', { elapsed_ms: elapsed, max_tracking_ms: MAX_TRACKING_TIME_MS });
+		if (elapsed > MAX_WORKFLOW_TRACKING_MS) {
+			log.warn('run_timed_out', { elapsed_ms: elapsed, max_tracking_ms: MAX_WORKFLOW_TRACKING_MS });
 			// Remove from activeRuns
 			const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
 			this.setState({ ...this.state, activeRuns: remainingRuns });
@@ -116,7 +113,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 			octokit = await createOctokit(this.env, this.state.installationId);
 		} catch (error) {
 			log.errorWithException('run_octokit_failed', error);
-			await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+			await this.schedule<CheckStatusPayload>(WORKFLOW_POLL_INTERVAL_SECS, 'checkWorkflowStatus', payload);
 			return;
 		}
 
@@ -137,27 +134,31 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 					log.info('run_succeeded');
 				}
 			} else {
-				await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+				await this.schedule<CheckStatusPayload>(WORKFLOW_POLL_INTERVAL_SECS, 'checkWorkflowStatus', payload);
 			}
 		} catch (error) {
 			log.errorWithException('run_status_check_failed', error);
-			await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+			await this.schedule<CheckStatusPayload>(WORKFLOW_POLL_INTERVAL_SECS, 'checkWorkflowStatus', payload);
+		}
+	}
+
+	private getFailureMessage(conclusion: string | null): string {
+		switch (conclusion) {
+			case 'timeout':
+				return 'Bonk workflow timed out.';
+			case 'failure':
+				return 'Bonk workflow failed. Check the logs for details.';
+			case 'cancelled':
+				return 'Bonk workflow was cancelled.';
+			default:
+				return `Bonk workflow finished with status: ${conclusion ?? 'unknown'}`;
 		}
 	}
 
 	private async postFailureComment(runId: number, runUrl: string, issueNumber: number, conclusion: string | null): Promise<void> {
 		const log = this.logger(runId, issueNumber);
 
-		const statusMessage =
-			conclusion === 'timeout'
-				? 'Bonk workflow timed out.'
-				: conclusion === 'failure'
-					? 'Bonk workflow failed. Check the logs for details.'
-					: conclusion === 'cancelled'
-						? 'Bonk workflow was cancelled.'
-						: `Bonk workflow finished with status: ${conclusion ?? 'unknown'}`;
-
-		const body = `${statusMessage}\n\n[View workflow run](${runUrl})`;
+		const body = `${this.getFailureMessage(conclusion)}\n\n[View workflow run](${runUrl})`;
 
 		try {
 			const octokit = await createOctokit(this.env, this.state.installationId);

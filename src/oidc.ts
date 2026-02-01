@@ -6,29 +6,12 @@ import { Result } from 'better-result';
 import type { Env } from './types';
 import { hasWriteAccess, getRepository } from './github';
 import { createLogger } from './log';
-import {
-	OIDCValidationError,
-	AuthorizationError,
-	InstallationNotFoundError,
-	GitHubAPIError,
-	type TokenExchangeError,
-} from './errors';
-
-// Retry config for transient failures (network, rate limits).
-// 3 attempts total, exponential backoff starting at 5s.
-// Don't retry client errors (4xx) - they won't succeed on retry.
-const RETRY_CONFIG = {
-	times: 3,
-	delayMs: 5000,
-	backoff: 'exponential' as const,
-	shouldRetry: (err: unknown) => !(err instanceof RequestError && err.status >= 400 && err.status < 500),
-};
+import { OIDCValidationError, AuthorizationError, InstallationNotFoundError, GitHubAPIError, type TokenExchangeError } from './errors';
+import { RETRY_CONFIG, APP_INSTALLATION_CACHE_TTL_SECS } from './constants';
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
 
-// TTL for cached installation IDs (30 minutes)
-export const APP_INSTALLATION_CACHE_TTL_SECS = 1800;
 const JWKS = createRemoteJWKSet(new URL(`${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`));
 
 // JWT claims from GitHub Actions OIDC token
@@ -79,14 +62,34 @@ export async function validateGitHubOIDCToken(
 
 // Extracts owner/repo from OIDC claims.
 // Returns Result to handle malformed repository claims.
-export function extractRepoFromClaims(
-	claims: GitHubActionsJWTClaims,
-): Result<{ owner: string; repo: string }, OIDCValidationError> {
+export function extractRepoFromClaims(claims: GitHubActionsJWTClaims): Result<{ owner: string; repo: string }, OIDCValidationError> {
 	const parts = claims.repository.split('/');
 	if (parts.length !== 2 || !parts[0] || !parts[1]) {
 		return Result.err(new OIDCValidationError({ message: `Invalid repository claim: ${claims.repository}` }));
 	}
 	return Result.ok({ owner: parts[0], repo: parts[1] });
+}
+
+// Extracts bearer token from Authorization header.
+// Returns null if header is missing or malformed.
+export function extractBearerToken(authHeader: string | null | undefined): string | null {
+	if (!authHeader?.startsWith('Bearer ')) return null;
+	return authHeader.slice(7);
+}
+
+// Validates OIDC token and extracts repo info in one call.
+// Common pattern used across /api/github/* endpoints.
+export async function validateOIDCAndExtractRepo(
+	token: string,
+): Promise<Result<{ claims: GitHubActionsJWTClaims; owner: string; repo: string }, OIDCValidationError>> {
+	const validationResult = await validateGitHubOIDCToken(token);
+	if (validationResult.isErr()) return validationResult;
+
+	const claims = validationResult.value;
+	const repoResult = extractRepoFromClaims(claims);
+	if (repoResult.isErr()) return repoResult;
+
+	return Result.ok({ claims, ...repoResult.value });
 }
 
 // Gets or looks up the installation ID for a repository.
@@ -213,10 +216,7 @@ export async function handleGetInstallation(env: Env, owner: string, repo: strin
 
 // Handler for POST /exchange_github_app_token
 // Exchanges a GitHub Actions OIDC token for a GitHub App installation token
-export async function handleExchangeToken(
-	env: Env,
-	authHeader: string | null,
-): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
+export async function handleExchangeToken(env: Env, authHeader: string | null): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
 	if (!authHeader?.startsWith('Bearer ')) {
 		return Result.err(new AuthorizationError({ message: 'Missing or invalid Authorization header', reason: 'missing_header' }));
 	}

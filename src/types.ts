@@ -1,10 +1,10 @@
-import type { Sandbox } from "@cloudflare/sandbox";
-import type { AgentNamespace } from "agents";
-import type { Config } from "@opencode-ai/sdk";
-import type { RepoAgent } from "./agent";
+import type { Sandbox } from '@cloudflare/sandbox';
+import type { AgentNamespace } from 'agents';
+import type { Config } from '@opencode-ai/sdk';
+import type { RepoAgent } from './agent';
 
 // Default model used across the application when no model is specified
-export const DEFAULT_MODEL = "opencode/claude-opus-4-5";
+export const DEFAULT_MODEL = 'opencode/claude-opus-4-5';
 
 // Environment bindings
 export interface Env {
@@ -44,8 +44,6 @@ export interface AskRequest {
 	// Valid opencode.json/jsonc config to pass into the OpenCode session
 	config?: Config;
 }
-
-
 
 // Context passed through event handling
 export interface EventContext {

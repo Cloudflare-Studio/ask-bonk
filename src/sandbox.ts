@@ -6,13 +6,7 @@ import { DEFAULT_MODEL, type Env, type AskRequest } from './types';
 import { getInstallationToken } from './github';
 import { createLogger } from './log';
 import { SandboxError, ValidationError } from './errors';
-
-// Retry config for sandbox operations: 3 attempts with exponential backoff starting at 5s.
-const RETRY_CONFIG = {
-	times: 3,
-	delayMs: 5000,
-	backoff: 'exponential' as const,
-};
+import { RETRY_CONFIG } from './constants';
 
 // Runs OpenCode in the sandbox for the /ask endpoint.
 // Returns a Result with either a readable SSE stream or a domain error.

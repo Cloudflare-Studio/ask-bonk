@@ -1,13 +1,14 @@
-import { RequestError } from '@octokit/request-error';
+import { RequestError } from "@octokit/request-error";
 
 // Retry configuration for transient failures (network issues, rate limits).
 // 3 attempts total with exponential backoff starting at 5 seconds.
 // Client errors (4xx) are not retried - they won't succeed.
 export const RETRY_CONFIG = {
-	times: 3,
-	delayMs: 5000,
-	backoff: 'exponential' as const,
-	shouldRetry: (err: unknown) => !(err instanceof RequestError && err.status >= 400 && err.status < 500),
+  times: 3,
+  delayMs: 5000,
+  backoff: "exponential" as const,
+  shouldRetry: (err: unknown) =>
+    !(err instanceof RequestError && err.status >= 400 && err.status < 500),
 } as const;
 
 // Installation ID cache TTL (30 minutes)

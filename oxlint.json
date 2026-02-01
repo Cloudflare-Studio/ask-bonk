@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "typescript", "react"],
+  "rules": {
+    "no-console": "off",
+    "no-unused-vars": "off",
+    "@typescript-eslint/no-unused-vars": "warn"
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    ".wrangler",
+    ".tanstack",
+    ".output",
+    "src/routeTree.gen.ts"
+  ]
+}

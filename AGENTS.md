@@ -37,6 +37,8 @@ bun run tsc --noEmit     # Type check
 bun run deploy           # Deploy to Cloudflare (wrangler)
 bun run dev              # Local development server
 bun run cli              # Run CLI tool
+bun run lint             # Lint with oxlint
+bun run format           # Format with oxfmt
 ```
 
 ### Test Notes
@@ -54,11 +56,10 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 
 ## Code Style
 
-### Formatting (enforced by .editorconfig + .prettierrc)
-- **Indentation**: Tabs (spaces for YAML files)
+### Formatting (enforced by .editorconfig + oxfmt)
+- **Indentation**: 2 spaces
 - **Line endings**: LF
-- **Print width**: 140 characters
-- **Quotes**: Single quotes
+- **Quotes**: Double quotes
 - **Semicolons**: Required
 - **Final newline**: Required
 
@@ -156,7 +157,7 @@ log.error('startup_failed', { reason: 'missing config' });
 
 ### Configuration
 - Prefer JSONC for config files (see `wrangler.jsonc`, `wrangler.test.jsonc`)
-- Use `.editorconfig` and `.prettierrc` for formatting
+- Use `.editorconfig` and `oxfmt` for formatting
 
 ### Dependencies
 - Minimize new dependencies unless necessary

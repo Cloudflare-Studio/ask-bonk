@@ -77,11 +77,11 @@ const SUPPORTED_EVENTS = [
   ...META_EVENTS,
 ] as const;
 
-// Determines the reaction target type and ID from a TrackWorkflowRequest
-function getReactionTarget(body: TrackWorkflowRequest): {
-  targetId: number;
-  targetType: ReactionTarget;
-} {
+// Determines the reaction target type and ID from a TrackWorkflowRequest.
+// Returns null if no reaction target ID is present.
+function getReactionTarget(
+  body: TrackWorkflowRequest,
+): { targetId: number; targetType: ReactionTarget } | null {
   if (body.comment_id)
     return { targetId: body.comment_id, targetType: "issue_comment" };
   if (body.review_comment_id)
@@ -89,7 +89,8 @@ function getReactionTarget(body: TrackWorkflowRequest): {
       targetId: body.review_comment_id,
       targetType: "pull_request_review_comment",
     };
-  return { targetId: body.issue_id!, targetType: "issue" };
+  if (body.issue_id) return { targetId: body.issue_id, targetType: "issue" };
+  return null;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -464,21 +465,20 @@ apiGithub.post("/track", async (c) => {
 
   try {
     // Create reaction if comment/issue ID provided
-    if (body.comment_id || body.review_comment_id || body.issue_id) {
+    const reactionTarget = getReactionTarget(body);
+    if (reactionTarget) {
       const octokit = await createOctokit(c.env, installationId);
-      const { targetId, targetType } = getReactionTarget(body);
-
       await createReaction(
         octokit,
         body.owner,
         body.repo,
-        targetId,
+        reactionTarget.targetId,
         "+1",
-        targetType,
+        reactionTarget.targetType,
       );
       trackLog.info("reaction_created", {
-        target_type: targetType,
-        target_id: targetId,
+        target_type: reactionTarget.targetType,
+        target_id: reactionTarget.targetId,
       });
     }
 

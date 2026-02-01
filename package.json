@@ -23,7 +23,7 @@
 		"@opencode-ai/plugin": "^1.1.48",
 		"@opencode-ai/sdk": "^1.1.48",
 		"agents": "^0.3.6",
-		"ai": "^6.0.64",
+		"ai": "^6.0.66",
 		"better-result": "^2.7.0",
 		"hono": "^4.11.7",
 		"jose": "^6.1.3",

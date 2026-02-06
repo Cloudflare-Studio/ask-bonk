@@ -142,7 +142,7 @@ stats.get("/actors", async (c) => {
     const data = await queryAnalyticsEngine(c.env, eventsByActorQuery);
     if (c.req.query("format") === "json") return c.json({ data });
     return c.text(
-      renderBarChart(data, "Webhook events per actor (last 30d)", "actor", "event_count"),
+      renderBarChart(data, "Mentions per actor (last 30d)", "actor", "event_count"),
     );
   } catch (error) {
     log.errorWithException("stats_query_failed", error);

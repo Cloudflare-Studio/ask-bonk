@@ -142,7 +142,7 @@ stats.get("/actors", async (c) => {
     const data = await queryAnalyticsEngine(c.env, eventsByActorQuery);
     if (c.req.query("format") === "json") return c.json({ data });
     return c.text(
-      renderBarChart(data, "Mentions per actor (last 30d)", "actor", "event_count"),
+      renderBarChart(data, "Mentions per actor (last 7d)", "actor", "event_count"),
     );
   } catch (error) {
     log.errorWithException("stats_query_failed", error);
@@ -453,7 +453,11 @@ apiGithub.post("/track", async (c) => {
   if (oidcResult.isErr())
     return c.json({ error: oidcResult.error.message }, 401);
 
-  const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
+  const {
+    owner: claimsOwner,
+    repo: claimsRepo,
+    claims,
+  } = oidcResult.value;
   if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
     return c.json(
       {
@@ -463,12 +467,14 @@ apiGithub.post("/track", async (c) => {
     );
   }
 
+  const actor = claims.actor;
   const trackLog = createLogger({
     request_id: requestId,
     owner: body.owner,
     repo: body.repo,
     issue_number: body.issue_number,
     run_id: body.run_id,
+    actor,
   });
 
   // Look up installation ID
@@ -526,6 +532,7 @@ apiGithub.post("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "track",
       status: "success",
+      actor,
       issueNumber: body.issue_number,
       runId: body.run_id,
     });
@@ -539,6 +546,7 @@ apiGithub.post("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "track",
       status: "error",
+      actor,
       errorCode: message.slice(0, 100),
       issueNumber: body.issue_number,
       runId: body.run_id,
@@ -574,7 +582,11 @@ apiGithub.put("/track", async (c) => {
   if (oidcResult.isErr())
     return c.json({ error: oidcResult.error.message }, 401);
 
-  const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
+  const {
+    owner: claimsOwner,
+    repo: claimsRepo,
+    claims,
+  } = oidcResult.value;
   if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
     return c.json(
       {
@@ -584,11 +596,13 @@ apiGithub.put("/track", async (c) => {
     );
   }
 
+  const actor = claims.actor;
   const finalizeLog = createLogger({
     request_id: requestId,
     owner: body.owner,
     repo: body.repo,
     run_id: body.run_id,
+    actor,
   });
 
   // Look up installation ID
@@ -628,6 +642,7 @@ apiGithub.put("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "finalize",
       status: body.status,
+      actor: actor,
       runId: body.run_id,
     });
     return c.json({ ok: true });
@@ -640,6 +655,7 @@ apiGithub.put("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "finalize",
       status: "error",
+      actor: actor,
       errorCode: message.slice(0, 100),
       runId: body.run_id,
     });

@@ -1,11 +1,11 @@
--- Mentions per actor (last 30 days)
+-- Mentions per actor (last 7 days)
+-- track events fire when a GitHub Action confirms an @mention and starts a workflow
 SELECT
   blob4 AS actor,
   COUNT() AS event_count
 FROM bonk_events
-WHERE timestamp > NOW() - INTERVAL '30' DAY
-  AND blob1 = 'webhook'
-  AND blob2 IN ('issue_comment', 'pull_request_review_comment')
+WHERE timestamp > NOW() - INTERVAL '7' DAY
+  AND blob1 = 'track'
   AND blob4 != ''
 GROUP BY actor
 ORDER BY event_count DESC

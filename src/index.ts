@@ -48,6 +48,7 @@ import {
   renderBarChart,
   eventsPerRepoQuery,
   errorsByRepoQuery,
+  eventsByActorQuery,
 } from "./metrics";
 import { log, createLogger } from "./log";
 
@@ -99,47 +100,57 @@ const app = new Hono<{ Bindings: Env }>();
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get("/health", (c) => c.text("OK"));
 
-// Public stats endpoint - shows events per repo as ASCII bar chart or JSON
-app.get("/stats", async (c) => {
+// Stats endpoints - public dashboards for webhook analytics
+const stats = new Hono<{ Bindings: Env }>();
+
+stats.use(async (c, next) => {
   const { CLOUDFLARE_ACCOUNT_ID, ANALYTICS_TOKEN } = c.env;
   if (!CLOUDFLARE_ACCOUNT_ID || !ANALYTICS_TOKEN) {
     return c.json({ error: "Stats endpoint is not configured" }, 500);
   }
+  await next();
+});
 
+stats.get("/events", async (c) => {
   try {
     const data = await queryAnalyticsEngine(c.env, eventsPerRepoQuery);
-    const format = c.req.query("format");
-
-    if (format === "json") {
-      return c.json({ data });
-    }
-
-    const chart = renderBarChart(
-      data as { repo: string; event_count: number }[],
-      "Webhook events per repo (last 30d)",
+    if (c.req.query("format") === "json") return c.json({ data });
+    return c.text(
+      renderBarChart(data, "Webhook events per repo (last 30d)", "repo", "event_count"),
     );
-    return c.text(chart);
   } catch (error) {
     log.errorWithException("stats_query_failed", error);
     return c.json({ error: "Failed to query stats" }, 500);
   }
 });
 
-// Public errors endpoint - shows errors by repo (last 24h)
-app.get("/errors", async (c) => {
-  const { CLOUDFLARE_ACCOUNT_ID, ANALYTICS_TOKEN } = c.env;
-  if (!CLOUDFLARE_ACCOUNT_ID || !ANALYTICS_TOKEN) {
-    return c.json({ error: "Errors endpoint is not configured" }, 500);
-  }
-
+stats.get("/errors", async (c) => {
   try {
     const data = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
-    return c.json({ data });
+    if (c.req.query("format") === "json") return c.json({ data });
+    return c.text(
+      renderBarChart(data, "Errors by repo (last 24h)", "repo", "error_count"),
+    );
   } catch (error) {
     log.errorWithException("errors_query_failed", error);
     return c.json({ error: "Failed to query errors" }, 500);
   }
 });
+
+stats.get("/actors", async (c) => {
+  try {
+    const data = await queryAnalyticsEngine(c.env, eventsByActorQuery);
+    if (c.req.query("format") === "json") return c.json({ data });
+    return c.text(
+      renderBarChart(data, "Webhook events per actor (last 30d)", "actor", "event_count"),
+    );
+  } catch (error) {
+    log.errorWithException("stats_query_failed", error);
+    return c.json({ error: "Failed to query stats" }, 500);
+  }
+});
+
+app.route("/stats", stats);
 
 // Webhooks endpoint - receives GitHub events, logs them
 // Tracking is now handled by the GitHub Action calling /api/github/track

@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import eventsPerRepoQuery from "../ae_queries/events_per_repo.sql";
 import errorsByRepoQuery from "../ae_queries/errors_by_repo.sql";
+import eventsByActorQuery from "../ae_queries/events_by_actor.sql";
 
 // Event types for categorizing metrics
 export type EventType =
@@ -59,12 +60,6 @@ export function emitMetric(env: Env, event: MetricEvent): void {
   });
 }
 
-// Row shape returned by events_per_repo.sql query
-interface EventsPerRepoRow {
-  repo: string;
-  event_count: number;
-}
-
 // Query Analytics Engine SQL API
 // https://developers.cloudflare.com/analytics/analytics-engine/worker-querying/
 export async function queryAnalyticsEngine(
@@ -101,28 +96,33 @@ export async function queryAnalyticsEngine(
   return result.data ?? [];
 }
 
-// Render ASCII bar chart for events per repo
+// Render ASCII bar chart from label/value pairs
 export function renderBarChart(
-  data: EventsPerRepoRow[],
+  data: Record<string, unknown>[],
   title: string,
+  labelKey: string,
+  valueKey: string,
 ): string {
   if (!data.length) return "No data available";
 
-  const maxCount = Math.max(...data.map((d) => d.event_count));
-  const maxLabel = Math.max(...data.map((d) => d.repo.length));
+  const labels = data.map((d) => String(d[labelKey] ?? ""));
+  const values = data.map((d) => Number(d[valueKey]) || 0);
+
+  const maxCount = Math.max(...values);
+  const maxLabel = Math.max(...labels.map((l) => l.length));
   const barWidth = 40;
 
   const header = `${title}\n${"─".repeat(maxLabel + barWidth + 10)}\n`;
-  const rows = data.map((row) => {
-    const label = row.repo.padEnd(maxLabel);
+  const rows = data.map((_, i) => {
+    const label = labels[i].padEnd(maxLabel);
     const barLen =
-      maxCount > 0 ? Math.round((row.event_count / maxCount) * barWidth) : 0;
+      maxCount > 0 ? Math.round((values[i] / maxCount) * barWidth) : 0;
     const bar = "█".repeat(barLen);
-    return `${label} | ${bar.padEnd(barWidth)} | ${row.event_count}`;
+    return `${label} | ${bar.padEnd(barWidth)} | ${values[i]}`;
   });
 
   return header + rows.join("\n");
 }
 
 // Bundled SQL queries
-export { eventsPerRepoQuery, errorsByRepoQuery };
+export { eventsPerRepoQuery, errorsByRepoQuery, eventsByActorQuery };

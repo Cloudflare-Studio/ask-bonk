@@ -101,10 +101,7 @@ export function parsePRReviewCommentEvent(
     return null;
   }
 
-  if (isForkPR(payload)) {
-    return null;
-  }
-
+  const fork = isForkPR(payload);
   const reviewContext = getReviewCommentContext(payload);
 
   return {
@@ -119,7 +116,7 @@ export function parsePRReviewCommentEvent(
       defaultBranch: payload.repository.default_branch,
       headBranch: payload.pull_request.head.ref,
       headSha: payload.pull_request.head.sha,
-      isFork: false,
+      isFork: fork,
     },
     prompt: extractPrompt(payload.comment.body, reviewContext),
     triggerCommentId: payload.comment.id,
@@ -141,9 +138,7 @@ export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
     return null;
   }
 
-  if (isForkPR(payload)) {
-    return null;
-  }
+  const fork = isForkPR(payload);
 
   return {
     context: {
@@ -157,7 +152,7 @@ export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
       defaultBranch: payload.repository.default_branch,
       headBranch: payload.pull_request.head.ref,
       headSha: payload.pull_request.head.sha,
-      isFork: false,
+      isFork: fork,
     },
     prompt: extractPrompt(payload.review.body),
     triggerCommentId: payload.review.id,

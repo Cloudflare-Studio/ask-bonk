@@ -40,6 +40,50 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Detect fork PR
+      id: fork
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        REPOSITORY: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        IS_FORK="false"
+        FORK_REPO=""
+
+        case "$EVENT_NAME" in
+          pull_request_review_comment|pull_request_review)
+            # PR events have head/base repo directly
+            if [ -n "$PR_HEAD_REPO" ] && [ -n "$PR_BASE_REPO" ]; then
+              if [ "$PR_HEAD_REPO" != "$PR_BASE_REPO" ]; then
+                IS_FORK="true"
+                FORK_REPO="$PR_HEAD_REPO"
+              fi
+            fi
+            ;;
+          issue_comment)
+            # For issue comments on PRs, the event payload has limited PR data.
+            # Use the GitHub API to check if the PR head repo differs.
+            PR_NUMBER="${{ github.event.issue.pull_request.url && github.event.issue.number || '' }}"
+            if [ -n "$PR_NUMBER" ]; then
+              PR_DATA=$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{head: .head.repo.full_name, base: .base.repo.full_name}' 2>/dev/null || echo '{}')
+              HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head // empty')
+              BASE_REPO=$(echo "$PR_DATA" | jq -r '.base // empty')
+              if [ -n "$HEAD_REPO" ] && [ -n "$BASE_REPO" ] && [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+                IS_FORK="true"
+                FORK_REPO="$HEAD_REPO"
+              fi
+            fi
+            ;;
+        esac
+
+        echo "is_fork=$IS_FORK" >> $GITHUB_OUTPUT
+        if [ "$IS_FORK" = "true" ]; then
+          echo "::notice::PR is from a fork ($FORK_REPO). Agent will run in comment-only mode."
+        fi
+
     - name: Check mentions
       id: mentions
       shell: bash
@@ -294,6 +338,59 @@ runs:
         ISSUE_ID: ${{ github.event.issue.id }}
       run: bun run ${{ github.action_path }}/script/track.ts
 
+    - name: Build prompt
+      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      id: prompt
+      shell: bash
+      env:
+        IS_FORK: ${{ steps.fork.outputs.is_fork }}
+        USER_PROMPT: ${{ inputs.prompt }}
+      run: |
+        read -r -d '' FORK_GUIDANCE << 'FORK_EOF' || true
+        IMPORTANT: This pull request is from a fork. You do NOT have push access to the fork branch.
+
+        You MUST NOT attempt to:
+        - Push commits or amend commits
+        - Create or switch branches on the fork
+        - Run git push in any form
+
+        You CAN and SHOULD:
+        - Read and analyze the code
+        - Post review comments on the PR using 'gh api' or 'gh pr comment'
+        - Use GitHub suggestion blocks in review comments to propose specific code changes:
+          ```suggestion
+          <corrected code here>
+          ```
+        - Comment on specific files/lines using 'gh api repos/{owner}/{repo}/pulls/{pr_number}/comments'
+
+        All your feedback must be delivered via PR comments only.
+        FORK_EOF
+
+        DELIMITER="BONK_PROMPT_$(head -c 16 /dev/urandom | xxd -p)"
+
+        if [ "$IS_FORK" = "true" ]; then
+          if [ -n "$USER_PROMPT" ]; then
+            {
+              echo "value<<$DELIMITER"
+              printf '%s\n\n%s' "$FORK_GUIDANCE" "$USER_PROMPT"
+              echo
+              echo "$DELIMITER"
+            } >> $GITHUB_OUTPUT
+          else
+            {
+              echo "value<<$DELIMITER"
+              echo "$FORK_GUIDANCE"
+              echo "$DELIMITER"
+            } >> $GITHUB_OUTPUT
+          fi
+        else
+          {
+            echo "value<<$DELIMITER"
+            echo "$USER_PROMPT"
+            echo "$DELIMITER"
+          } >> $GITHUB_OUTPUT
+        fi
+
     - name: Run opencode
       if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       id: opencode
@@ -307,7 +404,8 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
-        PROMPT: ${{ inputs.prompt }}
+        PROMPT: ${{ steps.prompt.outputs.value }}
+        IS_FORK: ${{ steps.fork.outputs.is_fork }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

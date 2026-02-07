@@ -3,6 +3,7 @@ import {
   extractPrompt,
   parseIssueCommentEvent,
   parsePRReviewCommentEvent,
+  parsePRReviewEvent,
   parseScheduleEvent,
   parseIssuesEvent,
   parseWorkflowDispatchEvent,
@@ -21,6 +22,7 @@ import type { Env } from "../src/types";
 import type {
   IssueCommentEvent,
   PullRequestReviewCommentEvent,
+  PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
 
 // Read fixtures
@@ -135,7 +137,7 @@ describe("PR Review Comment Event Parsing", () => {
     expect(result?.reviewContext.line).toBe(42);
   });
 
-  it("returns null for fork PRs", () => {
+  it("sets isFork true for fork PRs instead of dropping them", () => {
     const forkPayload = {
       ...prReviewCommentFixture,
       pull_request: {
@@ -149,7 +151,72 @@ describe("PR Review Comment Event Parsing", () => {
     const result = parsePRReviewCommentEvent(
       forkPayload as unknown as PullRequestReviewCommentEvent,
     );
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(true);
+    expect(result?.context.isPullRequest).toBe(true);
+  });
+
+  it("sets isFork false for same-repo PRs", () => {
+    const result = parsePRReviewCommentEvent(
+      prReviewCommentFixture as unknown as PullRequestReviewCommentEvent,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(false);
+  });
+});
+
+describe("PR Review Event Parsing", () => {
+  const basePRReviewPayload = {
+    action: "submitted",
+    review: {
+      id: 111222,
+      body: "/bonk review this",
+      user: { login: "reviewer" },
+    },
+    pull_request: {
+      number: 99,
+      head: {
+        ref: "feature-branch",
+        sha: "abc123",
+        repo: { full_name: "test-owner/test-repo" },
+      },
+      base: {
+        repo: { full_name: "test-owner/test-repo" },
+      },
+    },
+    repository: {
+      name: "test-repo",
+      owner: { login: "test-owner" },
+      private: false,
+      default_branch: "main",
+    },
+    installation: { id: 12345 },
+  };
+
+  it("sets isFork true for fork PRs", () => {
+    const forkPayload = {
+      ...basePRReviewPayload,
+      pull_request: {
+        ...basePRReviewPayload.pull_request,
+        head: {
+          ...basePRReviewPayload.pull_request.head,
+          repo: { full_name: "forked-owner/test-repo" },
+        },
+      },
+    };
+    const result = parsePRReviewEvent(
+      forkPayload as unknown as PullRequestReviewEvent,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(true);
+  });
+
+  it("sets isFork false for same-repo PRs", () => {
+    const result = parsePRReviewEvent(
+      basePRReviewPayload as unknown as PullRequestReviewEvent,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(false);
   });
 });
 

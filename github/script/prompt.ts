@@ -1,6 +1,10 @@
 // Detect fork PRs and build the final prompt for OpenCode.
 // Combines fork detection + prompt assembly into a single step.
-// Replaces the inline bash "Detect fork PR" and "Build prompt" steps.
+//
+// When a fork is detected and forks input is "true" (default): prepends fork guidance
+// to the prompt, constraining the agent to comment-only mode.
+// When a fork is detected and forks input is "false": posts a comment explaining
+// fork PRs aren't supported by this workflow, and sets skip=true to halt the run.
 
 import { core } from "./context";
 import { readFileSync } from "fs";
@@ -54,11 +58,82 @@ async function detectFork(): Promise<boolean> {
   }
 }
 
+// Post a comment on the PR explaining that fork PRs are not handled by this workflow.
+// Uses the GitHub API directly since we're running inside a GitHub Action.
+// Deduplicates using an HTML comment marker to avoid spamming on repeated mentions.
+const FORK_SKIP_MARKER = "<!-- bonk-fork-skip -->";
+
+async function commentForkSkipped(): Promise<void> {
+  const repository = process.env.REPOSITORY;
+  const ghToken = process.env.GH_TOKEN;
+  // ISSUE_NUMBER covers both PR events and issue_comment events on PRs
+  const issueNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER;
+
+  if (!repository || !ghToken || !issueNumber) {
+    core.warning("Cannot post fork skip comment: missing REPOSITORY, GH_TOKEN, or issue number");
+    return;
+  }
+
+  // Check if we already posted this comment to avoid duplicate spam
+  try {
+    const existingResp = await fetch(
+      `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=30&direction=desc`,
+      {
+        headers: {
+          Authorization: `Bearer ${ghToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
+    if (existingResp.ok) {
+      const comments = (await existingResp.json()) as Array<{ body?: string }>;
+      if (comments.some((c) => c.body?.includes(FORK_SKIP_MARKER))) {
+        core.info("Fork skip comment already exists, skipping duplicate.");
+        return;
+      }
+    }
+  } catch {
+    // If the dedup check fails, proceed to post anyway
+  }
+
+  const body =
+    `${FORK_SKIP_MARKER}\n` +
+    "> [!NOTE]\n" +
+    "> This workflow is configured to skip pull requests from forks. " +
+    "Fork PRs can be reviewed manually, or the workflow can be updated to " +
+    "handle forks in comment-only mode by setting `forks: true` in the action configuration.";
+
+  const resp = await fetch(
+    `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+      },
+      body: JSON.stringify({ body }),
+    },
+  );
+
+  if (!resp.ok) {
+    core.warning(`Failed to post fork skip comment: ${resp.status} ${resp.statusText}`);
+  }
+}
+
 async function main() {
   const isFork = await detectFork();
   core.setOutput("is_fork", String(isFork));
 
   if (isFork) {
+    const forksEnabled = process.env.FORKS !== "false";
+
+    if (!forksEnabled) {
+      core.info("PR is from a fork and forks input is disabled. Skipping.");
+      await commentForkSkipped();
+      core.setOutput("skip", "true");
+      return;
+    }
+
     core.info("PR is from a fork. Agent will run in comment-only mode.");
   }
 

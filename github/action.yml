@@ -32,6 +32,11 @@ inputs:
     required: false
     default: "https://ask-bonk.silverlock.workers.dev/auth"
 
+  forks:
+    description: "Handle PRs from forks (runs in comment-only mode). Set to 'false' to skip fork PRs entirely."
+    required: false
+    default: "true"
+
   opencode_dev:
     description: "Install OpenCode from dev branch instead of latest release"
     required: false
@@ -307,10 +312,12 @@ runs:
         GH_TOKEN: ${{ github.token }}
         USER_PROMPT: ${{ inputs.prompt }}
         ACTION_PATH: ${{ github.action_path }}
+        FORKS: ${{ inputs.forks }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
       run: bun run ${{ github.action_path }}/script/prompt.ts
 
     - name: Run opencode
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
       id: opencode
       shell: bash
       run: |

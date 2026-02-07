@@ -345,51 +345,24 @@ runs:
       env:
         IS_FORK: ${{ steps.fork.outputs.is_fork }}
         USER_PROMPT: ${{ inputs.prompt }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        read -r -d '' FORK_GUIDANCE << 'FORK_EOF' || true
-        IMPORTANT: This pull request is from a fork. You do NOT have push access to the fork branch.
+        PROMPT=""
+        if [ "$IS_FORK" = "true" ]; then
+          PROMPT="$(cat "$ACTION_PATH/fork_guidance.md")"
+        fi
+        if [ -n "$USER_PROMPT" ]; then
+          PROMPT="${PROMPT:+$PROMPT
 
-        You MUST NOT attempt to:
-        - Push commits or amend commits
-        - Create or switch branches on the fork
-        - Run git push in any form
-
-        You CAN and SHOULD:
-        - Read and analyze the code
-        - Post review comments on the PR using 'gh api' or 'gh pr comment'
-        - Use GitHub suggestion blocks in review comments to propose specific code changes:
-          ```suggestion
-          <corrected code here>
-          ```
-        - Comment on specific files/lines using 'gh api repos/{owner}/{repo}/pulls/{pr_number}/comments'
-
-        All your feedback must be delivered via PR comments only.
-        FORK_EOF
+        }$USER_PROMPT"
+        fi
 
         DELIMITER="BONK_PROMPT_$(head -c 16 /dev/urandom | xxd -p)"
-
-        if [ "$IS_FORK" = "true" ]; then
-          if [ -n "$USER_PROMPT" ]; then
-            {
-              echo "value<<$DELIMITER"
-              printf '%s\n\n%s' "$FORK_GUIDANCE" "$USER_PROMPT"
-              echo
-              echo "$DELIMITER"
-            } >> $GITHUB_OUTPUT
-          else
-            {
-              echo "value<<$DELIMITER"
-              echo "$FORK_GUIDANCE"
-              echo "$DELIMITER"
-            } >> $GITHUB_OUTPUT
-          fi
-        else
-          {
-            echo "value<<$DELIMITER"
-            echo "$USER_PROMPT"
-            echo "$DELIMITER"
-          } >> $GITHUB_OUTPUT
-        fi
+        {
+          echo "value<<$DELIMITER"
+          echo "$PROMPT"
+          echo "$DELIMITER"
+        } >> $GITHUB_OUTPUT
 
     - name: Run opencode
       if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'

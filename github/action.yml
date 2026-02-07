@@ -40,50 +40,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Detect fork PR
-      id: fork
-      shell: bash
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-        REPOSITORY: ${{ github.repository }}
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        IS_FORK="false"
-        FORK_REPO=""
-
-        case "$EVENT_NAME" in
-          pull_request_review_comment|pull_request_review)
-            # PR events have head/base repo directly
-            if [ -n "$PR_HEAD_REPO" ] && [ -n "$PR_BASE_REPO" ]; then
-              if [ "$PR_HEAD_REPO" != "$PR_BASE_REPO" ]; then
-                IS_FORK="true"
-                FORK_REPO="$PR_HEAD_REPO"
-              fi
-            fi
-            ;;
-          issue_comment)
-            # For issue comments on PRs, the event payload has limited PR data.
-            # Use the GitHub API to check if the PR head repo differs.
-            PR_NUMBER="${{ github.event.issue.pull_request.url && github.event.issue.number || '' }}"
-            if [ -n "$PR_NUMBER" ]; then
-              PR_DATA=$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{head: .head.repo.full_name, base: .base.repo.full_name}' 2>/dev/null || echo '{}')
-              HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head // empty')
-              BASE_REPO=$(echo "$PR_DATA" | jq -r '.base // empty')
-              if [ -n "$HEAD_REPO" ] && [ -n "$BASE_REPO" ] && [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-                IS_FORK="true"
-                FORK_REPO="$HEAD_REPO"
-              fi
-            fi
-            ;;
-        esac
-
-        echo "is_fork=$IS_FORK" >> $GITHUB_OUTPUT
-        if [ "$IS_FORK" = "true" ]; then
-          echo "::notice::PR is from a fork ($FORK_REPO). Agent will run in comment-only mode."
-        fi
-
     - name: Check mentions
       id: mentions
       shell: bash
@@ -94,7 +50,7 @@ runs:
         MENTIONS: ${{ inputs.mentions }}
       run: |
         BODY=""
-        
+
         case "$EVENT_NAME" in
           issue_comment|pull_request_review_comment)
             BODY="$COMMENT_BODY"
@@ -112,9 +68,9 @@ runs:
             exit 0
             ;;
         esac
-        
+
         IFS=',' read -ra MENTION_ARRAY <<< "$MENTIONS"
-        
+
         for mention in "${MENTION_ARRAY[@]}"; do
           mention="${mention#"${mention%%[![:space:]]*}"}"
           mention="${mention%"${mention##*[![:space:]]}"}"
@@ -124,7 +80,7 @@ runs:
             exit 0
           fi
         done
-        
+
         echo "No matching mention found in comment"
         echo "skip=true" >> $GITHUB_OUTPUT
 
@@ -302,19 +258,19 @@ runs:
         # Get GitHub Actions OIDC token
         OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=opencode-github-action" | jq -r '.value')
-        
+
         # Exchange for GitHub App installation token via Bonk's OIDC endpoint
         RESPONSE=$(curl -s -X POST "${{ inputs.oidc_base_url }}/exchange_github_app_token" \
           -H "Authorization: Bearer $OIDC_TOKEN" \
           -H "Content-Type: application/json")
-        
+
         APP_TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
-        
+
         if [ -z "$APP_TOKEN" ]; then
           echo "::error::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"')"
           exit 1
         fi
-        
+
         # Mask the token in logs and export for subsequent steps
         echo "::add-mask::$APP_TOKEN"
         echo "GH_TOKEN=$APP_TOKEN" >> $GITHUB_ENV
@@ -343,26 +299,15 @@ runs:
       id: prompt
       shell: bash
       env:
-        IS_FORK: ${{ steps.fork.outputs.is_fork }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || '' }}
+        GH_TOKEN: ${{ github.token }}
         USER_PROMPT: ${{ inputs.prompt }}
         ACTION_PATH: ${{ github.action_path }}
-      run: |
-        PROMPT=""
-        if [ "$IS_FORK" = "true" ]; then
-          PROMPT="$(cat "$ACTION_PATH/fork_guidance.md")"
-        fi
-        if [ -n "$USER_PROMPT" ]; then
-          PROMPT="${PROMPT:+$PROMPT
-
-        }$USER_PROMPT"
-        fi
-
-        DELIMITER="BONK_PROMPT_$(head -c 16 /dev/urandom | xxd -p)"
-        {
-          echo "value<<$DELIMITER"
-          echo "$PROMPT"
-          echo "$DELIMITER"
-        } >> $GITHUB_OUTPUT
+      run: bun run ${{ github.action_path }}/script/prompt.ts
 
     - name: Run opencode
       if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
@@ -378,7 +323,6 @@ runs:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
         PROMPT: ${{ steps.prompt.outputs.value }}
-        IS_FORK: ${{ steps.fork.outputs.is_fork }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

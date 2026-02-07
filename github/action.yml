@@ -94,14 +94,32 @@ runs:
       uses: actions/github-script@v7
       with:
         script: |
+          // Retry transient GitHub API errors (5xx) with exponential backoff
+          async function withRetry(fn, label, retries = 3, baseDelay = 2000) {
+            for (let attempt = 0; attempt <= retries; attempt++) {
+              try {
+                return await fn();
+              } catch (e) {
+                const isTransient = e.status >= 500;
+                if (attempt === retries || !isTransient) throw e;
+                const delay = baseDelay * Math.pow(2, attempt);
+                core.warning(`${label}: ${e.status} ${e.message} — retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            }
+          }
+
           const requiredPermission = '${{ inputs.permissions }}';
           const actor = context.actor;
 
-          const { data: permissionLevel } = await github.rest.repos.getCollaboratorPermissionLevel({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            username: actor
-          });
+          const { data: permissionLevel } = await withRetry(
+            () => github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: actor
+            }),
+            'Permission check'
+          );
           const permission = permissionLevel.permission;
 
           if (requiredPermission === 'CODEOWNERS') {
@@ -110,12 +128,15 @@ runs:
 
             for (const path of paths) {
               try {
-                const { data } = await github.rest.repos.getContent({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  path: path,
-                  ref: context.ref || 'HEAD'
-                });
+                const { data } = await withRetry(
+                  () => github.rest.repos.getContent({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    path: path,
+                    ref: context.ref || 'HEAD'
+                  }),
+                  `CODEOWNERS fetch (${path})`
+                );
                 codeownersContent = Buffer.from(data.content, 'base64').toString('utf8');
                 core.info(`Found CODEOWNERS at ${path}`);
                 break;
@@ -159,11 +180,14 @@ runs:
             for (const teamPath of teamPatterns) {
               const [org, team] = teamPath.split('/');
               try {
-                await github.rest.teams.getMembershipForUserInOrg({
-                  org: org,
-                  team_slug: team,
-                  username: actor
-                });
+                await withRetry(
+                  () => github.rest.teams.getMembershipForUserInOrg({
+                    org: org,
+                    team_slug: team,
+                    username: actor
+                  }),
+                  `Team membership check (@${teamPath})`
+                );
                 core.info(`User ${actor} is a member of team @${teamPath}`);
                 return;
               } catch (e) {

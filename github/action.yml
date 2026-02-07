@@ -314,6 +314,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         FORKS: ${{ inputs.forks }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: bun run ${{ github.action_path }}/script/prompt.ts
 
     - name: Run opencode

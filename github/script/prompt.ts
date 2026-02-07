@@ -10,12 +10,19 @@ import { core } from "./context";
 import { readFileSync } from "fs";
 import { join } from "path";
 
+interface ForkDetectionResult {
+  isFork: boolean;
+  // When we fetch PR data during detection (issue_comment events), cache it so
+  // resolveHeadSha() can reuse it instead of making a duplicate API call.
+  headSha?: string;
+}
+
 // Detect whether the current event is from a fork PR.
 // For pull_request_review_comment and pull_request_review events, head/base repo
 // are available directly in the event payload via env vars.
 // For issue_comment events on PRs, we fetch PR data via the GitHub API since the
 // issue_comment payload doesn't include full PR repo info.
-async function detectFork(): Promise<boolean> {
+async function detectFork(): Promise<ForkDetectionResult> {
   const eventName = process.env.EVENT_NAME;
   const headRepo = process.env.PR_HEAD_REPO;
   const baseRepo = process.env.PR_BASE_REPO;
@@ -27,13 +34,13 @@ async function detectFork(): Promise<boolean> {
     case "pull_request_review_comment":
     case "pull_request_review":
       if (headRepo && baseRepo) {
-        return headRepo !== baseRepo;
+        return { isFork: headRepo !== baseRepo };
       }
-      return false;
+      return { isFork: false };
 
     case "issue_comment":
       // Only check if this is a comment on a PR (PR_NUMBER is set)
-      if (!prNumber || !repository || !ghToken) return false;
+      if (!prNumber || !repository || !ghToken) return { isFork: false };
       try {
         const resp = await fetch(`https://api.github.com/repos/${repository}/pulls/${prNumber}`, {
           headers: {
@@ -41,20 +48,21 @@ async function detectFork(): Promise<boolean> {
             Accept: "application/vnd.github+json",
           },
         });
-        if (!resp.ok) return false;
+        if (!resp.ok) return { isFork: false };
         const pr = (await resp.json()) as {
-          head?: { repo?: { full_name?: string } };
+          head?: { repo?: { full_name?: string }; sha?: string };
           base?: { repo?: { full_name?: string } };
         };
         const head = pr.head?.repo?.full_name;
         const base = pr.base?.repo?.full_name;
-        return !!head && !!base && head !== base;
+        const isFork = !!head && !!base && head !== base;
+        return { isFork, headSha: pr.head?.sha };
       } catch {
-        return false;
+        return { isFork: false };
       }
 
     default:
-      return false;
+      return { isFork: false };
   }
 }
 
@@ -120,11 +128,53 @@ async function commentForkSkipped(): Promise<void> {
   }
 }
 
-async function main() {
-  const isFork = await detectFork();
-  core.setOutput("is_fork", String(isFork));
+// Resolve the PR number from available env vars.
+// ISSUE_NUMBER is set for both issue_comment and pull_request_review events.
+// PR_NUMBER is set for issue_comment events on PRs (from action.yml).
+function resolvePRNumber(): string {
+  return process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
+}
 
-  if (isFork) {
+// Resolve the HEAD SHA for the PR. Checks, in order:
+// 1. The HEAD_SHA env var (set from the event payload for pull_request_review events)
+// 2. A cached SHA from detectFork() (avoids a duplicate API call for issue_comment events)
+// 3. Fetching the PR via the GitHub API as a last resort
+async function resolveHeadSha(
+  prNumber: string,
+  repository: string,
+  cachedSha?: string,
+): Promise<string> {
+  const envSha = process.env.HEAD_SHA;
+  if (envSha) return envSha;
+
+  if (cachedSha) return cachedSha;
+
+  const ghToken = process.env.GH_TOKEN;
+  if (!prNumber || !repository || !ghToken) return "";
+
+  try {
+    const resp = await fetch(
+      `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
+      {
+        headers: {
+          Authorization: `Bearer ${ghToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
+    if (!resp.ok) return "";
+    const pr = (await resp.json()) as { head?: { sha?: string } };
+    return pr.head?.sha || "";
+  } catch {
+    return "";
+  }
+}
+
+async function main() {
+  const detection = await detectFork();
+  core.setOutput("is_fork", String(detection.isFork));
+
+  if (detection.isFork) {
     const forksEnabled = process.env.FORKS !== "false";
 
     if (!forksEnabled) {
@@ -140,13 +190,32 @@ async function main() {
   // Build prompt: fork guidance (if fork) + user prompt (if provided)
   const parts: string[] = [];
 
-  if (isFork) {
+  if (detection.isFork) {
     const actionPath = process.env.ACTION_PATH;
     if (!actionPath) {
       core.setFailed("ACTION_PATH not set");
       return;
     }
-    const guidance = readFileSync(join(actionPath, "fork_guidance.md"), "utf-8");
+
+    // Resolve concrete values for the fork guidance template.
+    // The LLM must know the exact PR number, owner/repo, and HEAD SHA so it
+    // cannot drift to a different PR (the root cause of the fork handling bug).
+    const prNumber = resolvePRNumber();
+    const repository = process.env.REPOSITORY || "";
+    const [owner = "", repo = ""] = repository.split("/");
+    const headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
+
+    if (!prNumber || !owner || !repo) {
+      core.setFailed("Cannot determine PR number or repository for fork guidance");
+      return;
+    }
+
+    let guidance = readFileSync(join(actionPath, "fork_guidance.md"), "utf-8");
+    guidance = guidance.replace(/\{\{PR_NUMBER\}\}/g, prNumber);
+    guidance = guidance.replace(/\{\{OWNER\}\}/g, owner);
+    guidance = guidance.replace(/\{\{REPO\}\}/g, repo);
+    guidance = guidance.replace(/\{\{HEAD_SHA\}\}/g, headSha || "UNKNOWN");
+
     parts.push(guidance.trim());
   }
 

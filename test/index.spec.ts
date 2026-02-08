@@ -452,6 +452,22 @@ describe("Pull Request Event Parsing", () => {
     const result = parsePullRequestEvent(basePRPayload);
     expect(result.context.isFork).toBe(false);
   });
+
+  it("treats null head.repo as fork (deleted fork repo)", () => {
+    const payload = {
+      ...basePRPayload,
+      pull_request: {
+        ...basePRPayload.pull_request,
+        head: {
+          ...(basePRPayload as any).pull_request.head,
+          repo: null,
+        },
+      },
+    } as unknown as PullRequestEvent;
+
+    const result = parsePullRequestEvent(payload);
+    expect(result.context.isFork).toBe(true);
+  });
 });
 
 describe("Workflow Dispatch Event Parsing", () => {

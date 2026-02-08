@@ -8,7 +8,6 @@ export interface Repo {
 
 export interface Issue {
   number: number;
-  id?: number;
 }
 
 export interface Comment {
@@ -53,18 +52,13 @@ export function getContext(): Context {
   }
 
   const issueNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER;
-  const issueId = process.env.ISSUE_ID;
   const commentId = process.env.COMMENT_ID;
-  const createdAt = process.env.COMMENT_CREATED_AT || process.env.ISSUE_CREATED_AT;
+  const createdAt =
+    process.env.COMMENT_CREATED_AT || process.env.ISSUE_CREATED_AT;
 
   return {
     repo: { owner, repo },
-    issue: issueNumber
-      ? {
-          number: parseInt(issueNumber, 10),
-          id: issueId ? parseInt(issueId, 10) : undefined,
-        }
-      : null,
+    issue: issueNumber ? { number: parseInt(issueNumber, 10) } : null,
     comment: commentId
       ? {
           id: parseInt(commentId, 10),

@@ -320,7 +320,6 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
         ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
-        ISSUE_ID: ${{ github.event.issue.id || github.event.pull_request.id }}
       run: bun run ${{ github.action_path }}/script/track.ts
 
     - name: Build prompt

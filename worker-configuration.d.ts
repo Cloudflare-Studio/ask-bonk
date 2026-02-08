@@ -10,8 +10,8 @@ declare namespace Cloudflare {
 		APP_INSTALLATIONS: KVNamespace;
 		BONK_EVENTS: AnalyticsEngineDataset;
 		RATE_LIMITER: RateLimit;
-		DEFAULT_MODEL: "opencode/claude-opus-4-5";
-		ALLOWED_ORGS: ["elithrar","cloudflare","ask-bonk"];
+		DEFAULT_MODEL: string;
+		ALLOWED_ORGS: string[];
 		Sandbox: DurableObjectNamespace<import("./src/index").Sandbox>;
 		REPO_AGENT: DurableObjectNamespace<import("./src/index").RepoAgent>;
 	}

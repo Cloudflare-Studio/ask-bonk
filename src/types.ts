@@ -18,11 +18,11 @@ export interface Env {
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
   OPENCODE_API_KEY: string;
-  DEFAULT_MODEL?: string;
+  DEFAULT_MODEL: string;
   // Shared secret for /ask endpoint - empty means endpoint is disabled
   ASK_SECRET?: string;
   // Allowed orgs/users for GitHub App installation - JSON array binding
-  ALLOWED_ORGS?: string[];
+  ALLOWED_ORGS: string[];
   // Analytics Engine query API credentials (for /stats endpoint)
   CLOUDFLARE_ACCOUNT_ID?: string;
   ANALYTICS_TOKEN?: string;

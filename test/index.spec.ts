@@ -165,6 +165,26 @@ describe("PR Review Comment Event Parsing", () => {
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(false);
   });
+
+  it("treats null head.repo as fork (deleted fork repo)", () => {
+    const payload = {
+      ...prReviewCommentFixture,
+      pull_request: {
+        ...prReviewCommentFixture.pull_request,
+        head: {
+          ...prReviewCommentFixture.pull_request.head,
+          repo: null,
+        },
+      },
+    };
+    const result = parsePRReviewCommentEvent(
+      payload as unknown as PullRequestReviewCommentEvent,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(true);
+    expect(result?.context.headBranch).toBe("feature-branch");
+    expect(result?.context.headSha).toBe("abc123");
+  });
 });
 
 describe("PR Review Event Parsing", () => {
@@ -219,6 +239,26 @@ describe("PR Review Event Parsing", () => {
     );
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(false);
+  });
+
+  it("treats null head.repo as fork (deleted fork repo)", () => {
+    const payload = {
+      ...basePRReviewPayload,
+      pull_request: {
+        ...basePRReviewPayload.pull_request,
+        head: {
+          ...basePRReviewPayload.pull_request.head,
+          repo: null,
+        },
+      },
+    };
+    const result = parsePRReviewEvent(
+      payload as unknown as PullRequestReviewEvent,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.context.isFork).toBe(true);
+    expect(result?.context.headBranch).toBe("feature-branch");
+    expect(result?.context.headSha).toBe("abc123");
   });
 });
 
@@ -384,7 +424,8 @@ describe("Issues Event Parsing", () => {
 });
 
 describe("Pull Request Event Parsing", () => {
-  const basePRPayload = {
+  // Plain object — cast to PullRequestEvent at the call boundary.
+  const basePRData = {
     action: "opened",
     pull_request: {
       number: 55,
@@ -405,10 +446,13 @@ describe("Pull Request Event Parsing", () => {
     },
     sender: { login: "testuser" },
     installation: { id: 12345 },
-  } as unknown as PullRequestEvent;
+  };
+
+  const parse = (data: Record<string, unknown>) =>
+    parsePullRequestEvent(data as unknown as PullRequestEvent);
 
   it("parses pull_request:opened event", () => {
-    const result = parsePullRequestEvent(basePRPayload);
+    const result = parse(basePRData);
 
     expect(result).not.toBeNull();
     expect(result.context.owner).toBe("test-owner");
@@ -422,51 +466,44 @@ describe("Pull Request Event Parsing", () => {
   });
 
   it("passes through all actions without filtering", () => {
-    const syncPayload = {
-      ...basePRPayload,
-      action: "synchronize",
-    } as unknown as PullRequestEvent;
-
-    const result = parsePullRequestEvent(syncPayload);
+    const result = parse({ ...basePRData, action: "synchronize" });
     expect(result.action).toBe("synchronize");
     expect(result.context.issueNumber).toBe(55);
   });
 
   it("sets isFork true for fork PRs", () => {
-    const forkPayload = {
-      ...basePRPayload,
+    const result = parse({
+      ...basePRData,
       pull_request: {
-        ...basePRPayload.pull_request,
+        ...basePRData.pull_request,
         head: {
-          ...(basePRPayload as any).pull_request.head,
+          ...basePRData.pull_request.head,
           repo: { full_name: "forked-owner/test-repo" },
         },
       },
-    } as unknown as PullRequestEvent;
-
-    const result = parsePullRequestEvent(forkPayload);
+    });
     expect(result.context.isFork).toBe(true);
   });
 
   it("sets isFork false for same-repo PRs", () => {
-    const result = parsePullRequestEvent(basePRPayload);
+    const result = parse(basePRData);
     expect(result.context.isFork).toBe(false);
   });
 
   it("treats null head.repo as fork (deleted fork repo)", () => {
-    const payload = {
-      ...basePRPayload,
+    const result = parse({
+      ...basePRData,
       pull_request: {
-        ...basePRPayload.pull_request,
+        ...basePRData.pull_request,
         head: {
-          ...(basePRPayload as any).pull_request.head,
+          ...basePRData.pull_request.head,
           repo: null,
         },
       },
-    } as unknown as PullRequestEvent;
-
-    const result = parsePullRequestEvent(payload);
+    });
     expect(result.context.isFork).toBe(true);
+    expect(result.context.headBranch).toBe("feature-branch");
+    expect(result.context.headSha).toBe("abc123");
   });
 });
 

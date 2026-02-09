@@ -34,10 +34,8 @@ async function detectFork(): Promise<ForkDetectionResult> {
     case "pull_request":
     case "pull_request_review_comment":
     case "pull_request_review":
-      if (headRepo && baseRepo) {
-        return { isFork: headRepo !== baseRepo };
-      }
-      return { isFork: false };
+      // A null/missing head repo means the fork was deleted — still a fork PR.
+      return { isFork: !headRepo || headRepo !== baseRepo };
 
     case "issue_comment":
       // Only check if this is a comment on a PR (PR_NUMBER is set)
@@ -59,7 +57,8 @@ async function detectFork(): Promise<ForkDetectionResult> {
         };
         const head = pr.head?.repo?.full_name;
         const base = pr.base?.repo?.full_name;
-        const isFork = !!head && !!base && head !== base;
+        // A null/missing head repo means the fork was deleted — still a fork PR.
+        const isFork = !head || head !== base;
         return { isFork, headSha: pr.head?.sha };
       } catch {
         return { isFork: false };

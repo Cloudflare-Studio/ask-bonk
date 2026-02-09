@@ -44,7 +44,15 @@ export function getReviewCommentContext(
   };
 }
 
-export function isForkPR(
+// A null/missing head repo (deleted fork) is treated as a fork.
+function detectFork(
+  headRepoFullName: string | undefined | null,
+  baseRepoFullName: string | undefined | null,
+): boolean {
+  return !headRepoFullName || headRepoFullName !== baseRepoFullName;
+}
+
+function isForkPR(
   payload:
     | IssueCommentEvent
     | PullRequestReviewCommentEvent
@@ -53,9 +61,9 @@ export function isForkPR(
   if ("pull_request" in payload && payload.pull_request) {
     const pr = payload.pull_request;
     if ("head" in pr && "base" in pr) {
-      const head = pr.head as { repo?: { full_name?: string } };
-      const base = pr.base as { repo?: { full_name?: string } };
-      return head.repo?.full_name !== base.repo?.full_name;
+      const head = pr.head as { repo?: { full_name?: string } | null };
+      const base = pr.base as { repo?: { full_name?: string } | null };
+      return detectFork(head.repo?.full_name, base.repo?.full_name);
     }
   }
   return false;
@@ -200,10 +208,10 @@ export function parsePullRequestEvent(payload: PullRequestEvent): {
   context: Omit<EventContext, "env">;
   action: string;
 } {
-  const headRepo = payload.pull_request.head.repo?.full_name;
-  const baseRepo = payload.pull_request.base.repo?.full_name;
-  // null head repo means the fork was deleted — still a fork PR
-  const isFork = !headRepo || headRepo !== baseRepo;
+  const isFork = detectFork(
+    payload.pull_request.head.repo?.full_name,
+    payload.pull_request.base.repo?.full_name,
+  );
 
   return {
     context: {

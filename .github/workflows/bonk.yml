@@ -6,6 +6,10 @@ on:
   pull_request_review_comment:
     types: [created]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   bonk:
     if: github.event.sender.type != 'Bot'
@@ -21,17 +25,14 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
       - name: Run Bonk
         uses: ask-bonk/ask-bonk/github@main
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_AI_GATEWAY_ACCOUNT_ID }}
+          CLOUDFLARE_GATEWAY_ID: ${{ secrets.CF_AI_GATEWAY_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
         with:
-          model: opencode/claude-opus-4-6
+          model: "cloudflare-ai-gateway/anthropic/claude-opus-4-6"
+          agent: docs # use our Docs agent by default in this repo
           mentions: "/bonk,@ask-bonk"
-          permissions: write
+          permissions: CODEOWNERS

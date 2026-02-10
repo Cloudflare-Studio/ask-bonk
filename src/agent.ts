@@ -2,6 +2,7 @@ import { Agent } from "agents";
 import type { Env } from "./types";
 import { createOctokit, createComment, getWorkflowRunStatus } from "./github";
 import { createLogger, type Logger } from "./log";
+import type { InstallationSource } from "./oidc";
 import {
   WORKFLOW_POLL_INTERVAL_SECS,
   MAX_WORKFLOW_TRACKING_MS,
@@ -16,6 +17,7 @@ export interface CheckStatusPayload {
 
 interface RepoAgentState {
   installationId: number;
+  installationSource?: InstallationSource;
   // Active workflow runs being tracked, keyed by run ID
   activeRuns: Record<number, CheckStatusPayload>;
 }
@@ -39,11 +41,15 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       run_id: runId,
       issue_number: issueNumber,
       installation_id: this.state.installationId || undefined,
+      installation_source: this.state.installationSource,
     });
   }
 
-  async setInstallationId(id: number): Promise<void> {
-    this.setState({ ...this.state, installationId: id });
+  async setInstallationId(
+    id: number,
+    source: InstallationSource,
+  ): Promise<void> {
+    this.setState({ ...this.state, installationId: id, installationSource: source });
   }
 
   async trackRun(

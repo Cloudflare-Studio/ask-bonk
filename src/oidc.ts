@@ -117,6 +117,13 @@ export async function validateOIDCAndExtractRepo(
   return Result.ok({ claims, ...repoResult.value });
 }
 
+export type InstallationSource = "cache" | "api";
+
+export interface InstallationLookup {
+  id: number;
+  source: InstallationSource;
+}
+
 // Gets or looks up the installation ID for a repository.
 // Returns Result with InstallationNotFoundError for missing installations,
 // or GitHubAPIError for transient failures.
@@ -124,7 +131,9 @@ export async function getInstallationId(
   env: Env,
   owner: string,
   repo: string,
-): Promise<Result<number, InstallationNotFoundError | GitHubAPIError>> {
+): Promise<
+  Result<InstallationLookup, InstallationNotFoundError | GitHubAPIError>
+> {
   const installLog = createLogger({ owner, repo });
 
   // Check cache first, with validation
@@ -132,7 +141,7 @@ export async function getInstallationId(
   if (cached) {
     const id = parseInt(cached, 10);
     if (!Number.isNaN(id)) {
-      return Result.ok(id);
+      return Result.ok({ id, source: "cache" as const });
     }
     installLog.warn("installation_cache_invalid", { cached_value: cached });
   }
@@ -163,7 +172,7 @@ export async function getInstallationId(
             expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS,
           },
         );
-        return installationId;
+        return { id: installationId, source: "api" as const };
       },
       catch: (err: unknown) => {
         // 404 = app not installed on this repo (expected case)
@@ -248,7 +257,7 @@ export async function handleGetInstallation(
   const result = await getInstallationId(env, owner, repo);
 
   if (result.isOk()) {
-    return { installation: { id: result.value } };
+    return { installation: { id: result.value.id } };
   }
 
   // InstallationNotFoundError or GitHubAPIError - return null installation
@@ -292,7 +301,8 @@ export async function handleExchangeToken(
   if (installationResult.isErr()) {
     return Result.err(installationResult.error);
   }
-  const installationId = installationResult.value;
+  const { id: installationId, source: installationSource } =
+    installationResult.value;
 
   // Generate scoped token
   return Result.tryPromise({
@@ -312,6 +322,7 @@ export async function handleExchangeToken(
       createLogger({ owner, repo }).errorWithException(
         "token_generation_failed",
         err,
+        { installation_id: installationId, installation_source: installationSource },
       );
       return new GitHubAPIError({
         operation: "generateInstallationToken",
@@ -400,7 +411,8 @@ export async function handleExchangeTokenForRepo(
   if (sourceInstallationResult.isErr()) {
     return Result.err(sourceInstallationResult.error);
   }
-  const sourceInstallationId = sourceInstallationResult.value;
+  const { id: sourceInstallationId, source: sourceInstallationSource } =
+    sourceInstallationResult.value;
 
   const targetInstallationResult = await getInstallationId(
     env,
@@ -410,7 +422,8 @@ export async function handleExchangeTokenForRepo(
   if (targetInstallationResult.isErr()) {
     return Result.err(targetInstallationResult.error);
   }
-  const targetInstallationId = targetInstallationResult.value;
+  const { id: targetInstallationId, source: targetInstallationSource } =
+    targetInstallationResult.value;
 
   // Generate tokens for security checks
   return Result.tryPromise({
@@ -485,6 +498,10 @@ export async function handleExchangeTokenForRepo(
 
       // Audit log: successful cross-repo token issuance
       crossRepoLog.info("cross_repo_token_issued", {
+        source_installation_id: sourceInstallationId,
+        source_installation_source: sourceInstallationSource,
+        target_installation_id: targetInstallationId,
+        target_installation_source: targetInstallationSource,
         source_visibility: sourceVisibility,
         target_visibility: targetVisibility,
         run_id: claims.run_id,
@@ -501,6 +518,12 @@ export async function handleExchangeTokenForRepo(
       crossRepoLog.errorWithException(
         "cross_repo_token_generation_failed",
         err,
+        {
+          source_installation_id: sourceInstallationId,
+          source_installation_source: sourceInstallationSource,
+          target_installation_id: targetInstallationId,
+          target_installation_source: targetInstallationSource,
+        },
       );
       return new GitHubAPIError({
         operation: "generateCrossRepoToken",
@@ -596,7 +619,8 @@ export async function handleExchangeTokenWithPAT(
   if (installationResult.isErr()) {
     return Result.err(installationResult.error);
   }
-  const installationId = installationResult.value;
+  const { id: installationId, source: installationSource } =
+    installationResult.value;
 
   // Generate scoped token
   return Result.tryPromise({
@@ -612,12 +636,18 @@ export async function handleExchangeTokenWithPAT(
       });
 
       // Audit log: PAT exchange
-      patLog.info("pat_token_exchanged");
+      patLog.info("pat_token_exchanged", {
+        installation_id: installationId,
+        installation_source: installationSource,
+      });
 
       return { token };
     },
     catch: (err) => {
-      patLog.errorWithException("pat_token_exchange_failed", err);
+      patLog.errorWithException("pat_token_exchange_failed", err, {
+        installation_id: installationId,
+        installation_source: installationSource,
+      });
       return new GitHubAPIError({
         operation: "generateInstallationToken",
         cause: err,

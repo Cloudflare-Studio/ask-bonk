@@ -214,7 +214,7 @@ export async function createOctokitForRepo(
       });
       await env.APP_INSTALLATIONS.delete(`${owner}/${repo}`);
       const freshResult = await getInstallationId(env, owner, repo);
-      if (freshResult.isErr()) throw error;
+      if (freshResult.isErr()) throw freshResult.error;
       const fresh = freshResult.value;
       log.info("installation_cache_refreshed", {
         old_installation_id: installation.id,

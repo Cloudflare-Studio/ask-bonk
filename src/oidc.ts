@@ -4,7 +4,7 @@ import { RequestError } from "@octokit/request-error";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { Result } from "better-result";
 import type { Env } from "./types";
-import { hasWriteAccess, getRepository } from "./github";
+import { createOctokit, hasWriteAccess, getRepository } from "./github";
 import { createLogger } from "./log";
 import {
   OIDCValidationError,
@@ -189,6 +189,42 @@ export async function getInstallationId(
     },
     { retry: RETRY_CONFIG },
   );
+}
+
+// Creates an Octokit client for a repo, retrying with a fresh installation lookup
+// if a cached installation ID turns out to be stale (404 from token endpoint).
+export async function createOctokitForRepo(
+  env: Env,
+  owner: string,
+  repo: string,
+  installation: InstallationLookup,
+): Promise<{ octokit: Octokit; installation: InstallationLookup }> {
+  try {
+    const octokit = await createOctokit(env, installation.id);
+    return { octokit, installation };
+  } catch (error) {
+    if (
+      installation.source === "cache" &&
+      error instanceof RequestError &&
+      error.status === 404
+    ) {
+      const log = createLogger({ owner, repo });
+      log.warn("installation_cache_stale", {
+        installation_id: installation.id,
+      });
+      await env.APP_INSTALLATIONS.delete(`${owner}/${repo}`);
+      const freshResult = await getInstallationId(env, owner, repo);
+      if (freshResult.isErr()) throw error;
+      const fresh = freshResult.value;
+      log.info("installation_cache_refreshed", {
+        old_installation_id: installation.id,
+        installation_id: fresh.id,
+      });
+      const octokit = await createOctokit(env, fresh.id);
+      return { octokit, installation: fresh };
+    }
+    throw error;
+  }
 }
 
 // Options for scoped installation token generation

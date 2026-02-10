@@ -16,7 +16,6 @@ import type {
   SetupWorkflowRequest,
 } from "./types";
 import {
-  createOctokit,
   createWebhooks,
   verifyWebhook,
   createReaction,
@@ -40,6 +39,7 @@ import {
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
   getInstallationId,
+  createOctokitForRepo,
   extractBearerToken,
   validateOIDCAndExtractRepo,
 } from "./oidc";
@@ -385,11 +385,19 @@ apiGithub.post("/setup", async (c) => {
       404,
     );
   }
-  const { id: installationId, source: installationSource } =
+  let { id: installationId, source: installationSource } =
     installationResult.value;
 
   try {
-    const octokit = await createOctokit(c.env, installationId);
+    const { octokit, installation } = await createOctokitForRepo(
+      c.env,
+      body.owner,
+      body.repo,
+      installationResult.value,
+    );
+    installationId = installation.id;
+    installationSource = installation.source;
+
     const result = await ensureWorkflowFile(
       octokit,
       body.owner,
@@ -509,14 +517,21 @@ apiGithub.post("/track", async (c) => {
       404,
     );
   }
-  const { id: installationId, source: installationSource } =
+  let { id: installationId, source: installationSource } =
     installationResult.value;
 
   try {
     // Create reaction if comment/issue ID provided
     const reactionTarget = getReactionTarget(body);
     if (reactionTarget) {
-      const octokit = await createOctokit(c.env, installationId);
+      const { octokit, installation } = await createOctokitForRepo(
+        c.env,
+        body.owner,
+        body.repo,
+        { id: installationId, source: installationSource },
+      );
+      installationId = installation.id;
+      installationSource = installation.source;
       await createReaction(
         octokit,
         body.owner,

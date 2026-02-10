@@ -1,8 +1,12 @@
 import { Agent } from "agents";
 import type { Env } from "./types";
-import { createOctokit, createComment, getWorkflowRunStatus } from "./github";
+import { createComment, getWorkflowRunStatus } from "./github";
 import { createLogger, type Logger } from "./log";
-import type { InstallationSource } from "./oidc";
+import {
+  createOctokitForRepo,
+  type InstallationSource,
+  type InstallationLookup,
+} from "./oidc";
 import {
   WORKFLOW_POLL_INTERVAL_SECS,
   MAX_WORKFLOW_TRACKING_MS,
@@ -50,6 +54,29 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     source: InstallationSource,
   ): Promise<void> {
     this.setState({ ...this.state, installationId: id, installationSource: source });
+  }
+
+  // Wraps createOctokitForRepo with state updates on cache refresh.
+  // Legacy DOs without installationSource are treated as cached (triggering retry on 404).
+  private async getOctokit() {
+    const installation: InstallationLookup = {
+      id: this.state.installationId,
+      source: this.state.installationSource ?? "cache",
+    };
+    const { octokit, installation: fresh } = await createOctokitForRepo(
+      this.env,
+      this.owner,
+      this.repo,
+      installation,
+    );
+    if (fresh.id !== this.state.installationId) {
+      this.setState({
+        ...this.state,
+        installationId: fresh.id,
+        installationSource: fresh.source,
+      });
+    }
+    return octokit;
   }
 
   async trackRun(
@@ -132,7 +159,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
     let octokit;
     try {
-      octokit = await createOctokit(this.env, this.state.installationId);
+      octokit = await this.getOctokit();
     } catch (error) {
       log.errorWithException("run_octokit_failed", error);
       await this.schedule<CheckStatusPayload>(
@@ -213,7 +240,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     const body = `${this.getFailureMessage(conclusion)}\n\n[View workflow run](${runUrl})`;
 
     try {
-      const octokit = await createOctokit(this.env, this.state.installationId);
+      const octokit = await this.getOctokit();
       await createComment(octokit, this.owner, this.repo, issueNumber, body);
       log.info("failure_comment_posted", { conclusion });
     } catch (error) {

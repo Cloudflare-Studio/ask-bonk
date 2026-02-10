@@ -13,12 +13,7 @@ export type EventType =
   | "failure_comment";
 
 // Status values for tracking outcomes
-export type EventStatus =
-  | "success"
-  | "failure"
-  | "error"
-  | "skipped"
-  | "cancelled";
+export type EventStatus = "success" | "failure" | "error" | "skipped" | "cancelled";
 
 // Metric event structure matching WAE schema
 // index1 (blob): {owner}/{repo} - primary grouping key
@@ -85,9 +80,7 @@ export async function queryAnalyticsEngine(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(
-      `Analytics Engine query failed: ${response.status} ${text}`,
-    );
+    throw new Error(`Analytics Engine query failed: ${response.status} ${text}`);
   }
 
   const result = (await response.json()) as {
@@ -115,8 +108,7 @@ export function renderBarChart(
   const header = `${title}\n${"─".repeat(maxLabel + barWidth + 10)}\n`;
   const rows = data.map((_, i) => {
     const label = labels[i].padEnd(maxLabel);
-    const barLen =
-      maxCount > 0 ? Math.round((values[i] / maxCount) * barWidth) : 0;
+    const barLen = maxCount > 0 ? Math.round((values[i] / maxCount) * barWidth) : 0;
     const bar = "█".repeat(barLen);
     return `${label} | ${bar.padEnd(barWidth)} | ${values[i]}`;
   });

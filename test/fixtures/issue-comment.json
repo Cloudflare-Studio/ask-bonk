@@ -1,25 +1,25 @@
 {
-	"action": "created",
-	"issue": {
-		"number": 42,
-		"pull_request": null
-	},
-	"comment": {
-		"id": 123456,
-		"body": "@ask-bonk fix the type error in utils.ts",
-		"user": {
-			"login": "testuser"
-		}
-	},
-	"repository": {
-		"name": "test-repo",
-		"owner": {
-			"login": "test-owner"
-		},
-		"private": false,
-		"default_branch": "main"
-	},
-	"installation": {
-		"id": 12345
-	}
+  "action": "created",
+  "issue": {
+    "number": 42,
+    "pull_request": null
+  },
+  "comment": {
+    "id": 123456,
+    "body": "@ask-bonk fix the type error in utils.ts",
+    "user": {
+      "login": "testuser"
+    }
+  },
+  "repository": {
+    "name": "test-repo",
+    "owner": {
+      "login": "test-owner"
+    },
+    "private": false,
+    "default_branch": "main"
+  },
+  "installation": {
+    "id": 12345
+  }
 }

@@ -12,10 +12,7 @@ import {
   formatResponse,
   generateBranchName,
 } from "../src/events";
-import type {
-  ScheduleEventPayload,
-  WorkflowDispatchPayload,
-} from "../src/types";
+import type { ScheduleEventPayload, WorkflowDispatchPayload } from "../src/types";
 import type { IssuesEvent } from "@octokit/webhooks-types";
 import { extractRepoFromClaims } from "../src/oidc";
 import { sanitizeSecrets } from "../src/log";
@@ -84,9 +81,7 @@ describe("Prompt Extraction", () => {
 
 describe("Issue Comment Event Parsing", () => {
   it("parses valid issue comment event", () => {
-    const result = parseIssueCommentEvent(
-      issueCommentFixture as unknown as IssueCommentEvent,
-    );
+    const result = parseIssueCommentEvent(issueCommentFixture as unknown as IssueCommentEvent);
 
     expect(result).not.toBeNull();
     expect(result?.context.owner).toBe("test-owner");
@@ -99,9 +94,7 @@ describe("Issue Comment Event Parsing", () => {
 
   it("returns null for non-created action", () => {
     const payload = { ...issueCommentFixture, action: "deleted" };
-    const result = parseIssueCommentEvent(
-      payload as unknown as IssueCommentEvent,
-    );
+    const result = parseIssueCommentEvent(payload as unknown as IssueCommentEvent);
     expect(result).toBeNull();
   });
 
@@ -114,9 +107,7 @@ describe("Issue Comment Event Parsing", () => {
         body: "just a regular comment",
       },
     };
-    const result = parseIssueCommentEvent(
-      payload as unknown as IssueCommentEvent,
-    );
+    const result = parseIssueCommentEvent(payload as unknown as IssueCommentEvent);
     // Should parse - action will filter based on mentions
     expect(result).not.toBeNull();
     expect(result?.prompt).toBe("just a regular comment");
@@ -177,9 +168,7 @@ describe("PR Review Comment Event Parsing", () => {
         },
       },
     };
-    const result = parsePRReviewCommentEvent(
-      payload as unknown as PullRequestReviewCommentEvent,
-    );
+    const result = parsePRReviewCommentEvent(payload as unknown as PullRequestReviewCommentEvent);
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
     expect(result?.context.headBranch).toBe("feature-branch");
@@ -226,17 +215,13 @@ describe("PR Review Event Parsing", () => {
         },
       },
     };
-    const result = parsePRReviewEvent(
-      forkPayload as unknown as PullRequestReviewEvent,
-    );
+    const result = parsePRReviewEvent(forkPayload as unknown as PullRequestReviewEvent);
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
   });
 
   it("sets isFork false for same-repo PRs", () => {
-    const result = parsePRReviewEvent(
-      basePRReviewPayload as unknown as PullRequestReviewEvent,
-    );
+    const result = parsePRReviewEvent(basePRReviewPayload as unknown as PullRequestReviewEvent);
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(false);
   });
@@ -252,9 +237,7 @@ describe("PR Review Event Parsing", () => {
         },
       },
     };
-    const result = parsePRReviewEvent(
-      payload as unknown as PullRequestReviewEvent,
-    );
+    const result = parsePRReviewEvent(payload as unknown as PullRequestReviewEvent);
     expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
     expect(result?.context.headBranch).toBe("feature-branch");
@@ -279,12 +262,7 @@ describe("Model Configuration", () => {
 
 describe("Response Formatting", () => {
   it("formats basic response", () => {
-    const response = formatResponse(
-      "Here is the fix",
-      null,
-      null,
-      "anthropic/claude-opus-4-5",
-    );
+    const response = formatResponse("Here is the fix", null, null, "anthropic/claude-opus-4-5");
     expect(response).toContain("Here is the fix");
     expect(response).toContain("`anthropic/claude-opus-4-5`");
   });
@@ -534,9 +512,7 @@ describe("Workflow Dispatch Event Parsing", () => {
 
   it("returns null for missing ref", () => {
     const payload = { ...validPayload, ref: "" };
-    const result = parseWorkflowDispatchEvent(
-      payload as WorkflowDispatchPayload,
-    );
+    const result = parseWorkflowDispatchEvent(payload as WorkflowDispatchPayload);
     expect(result).toBeNull();
   });
 });
@@ -579,8 +555,7 @@ describe("OIDC Claim Parsing", () => {
       event_name: "push",
       ref: "refs/heads/main",
       ref_type: "branch",
-      job_workflow_ref:
-        "octocat/hello-world/.github/workflows/ci.yml@refs/heads/main",
+      job_workflow_ref: "octocat/hello-world/.github/workflows/ci.yml@refs/heads/main",
       runner_environment: "github-hosted",
     };
 
@@ -641,13 +616,9 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
     const { handleExchangeTokenForRepo } = await import("../src/oidc");
     // Using a fake token - it will fail OIDC validation, but that's fine
     // We're testing that the handler validates body params too
-    const result = await handleExchangeTokenForRepo(
-      testEnv,
-      "Bearer fake.jwt.token",
-      {
-        repo: "test-repo",
-      },
-    );
+    const result = await handleExchangeTokenForRepo(testEnv, "Bearer fake.jwt.token", {
+      repo: "test-repo",
+    });
 
     // Will fail either on OIDC validation or body validation - both are acceptable
     expect(result.isErr()).toBe(true);
@@ -655,13 +626,9 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 
   it("rejects requests missing repo in body", async () => {
     const { handleExchangeTokenForRepo } = await import("../src/oidc");
-    const result = await handleExchangeTokenForRepo(
-      testEnv,
-      "Bearer fake.jwt.token",
-      {
-        owner: "test-org",
-      },
-    );
+    const result = await handleExchangeTokenForRepo(testEnv, "Bearer fake.jwt.token", {
+      owner: "test-org",
+    });
 
     expect(result.isErr()).toBe(true);
   });
@@ -673,14 +640,10 @@ describe("PAT Exchange Security", () => {
 
   it("rejects PAT exchange when disabled (default)", async () => {
     const { handleExchangeTokenWithPAT } = await import("../src/oidc");
-    const result = await handleExchangeTokenWithPAT(
-      patEnvDisabled,
-      "Bearer github_pat_test123",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
-    );
+    const result = await handleExchangeTokenWithPAT(patEnvDisabled, "Bearer github_pat_test123", {
+      owner: "test-org",
+      repo: "test-repo",
+    });
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
@@ -690,14 +653,10 @@ describe("PAT Exchange Security", () => {
 
   it("rejects non-PAT tokens even when enabled", async () => {
     const { handleExchangeTokenWithPAT } = await import("../src/oidc");
-    const result = await handleExchangeTokenWithPAT(
-      patEnvEnabled,
-      "Bearer ghs_servicetoken123",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
-    );
+    const result = await handleExchangeTokenWithPAT(patEnvEnabled, "Bearer ghs_servicetoken123", {
+      owner: "test-org",
+      repo: "test-repo",
+    });
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
@@ -727,14 +686,10 @@ describe("PAT Exchange Security", () => {
   it("accepts ghp_ prefix when enabled", async () => {
     const { handleExchangeTokenWithPAT } = await import("../src/oidc");
     // This will fail at the GitHub API call, but should pass the PAT format check
-    const result = await handleExchangeTokenWithPAT(
-      patEnvEnabled,
-      "Bearer ghp_valid_format",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
-    );
+    const result = await handleExchangeTokenWithPAT(patEnvEnabled, "Bearer ghp_valid_format", {
+      owner: "test-org",
+      repo: "test-repo",
+    });
 
     // Should fail on API call, not on format validation
     expect(result.isErr()).toBe(true);
@@ -746,12 +701,9 @@ describe("PAT Exchange Security", () => {
 
 describe("Logging Security", () => {
   it("redacts tokens in HTTPS URLs", () => {
-    const url =
-      "https://x-access-token:ghp_secret123@github.com/owner/repo.git";
+    const url = "https://x-access-token:ghp_secret123@github.com/owner/repo.git";
     const sanitized = sanitizeSecrets(url);
-    expect(sanitized).toBe(
-      "https://x-access-token:[REDACTED]@github.com/owner/repo.git",
-    );
+    expect(sanitized).toBe("https://x-access-token:[REDACTED]@github.com/owner/repo.git");
     expect(sanitized).not.toContain("ghp_secret123");
   });
 
@@ -766,8 +718,7 @@ describe("Logging Security", () => {
   });
 
   it("handles multiple URLs in the same string", () => {
-    const message =
-      "Tried https://user:pass1@example.com and https://other:pass2@example.org";
+    const message = "Tried https://user:pass1@example.com and https://other:pass2@example.org";
     const sanitized = sanitizeSecrets(message);
     expect(sanitized).not.toContain("pass1");
     expect(sanitized).not.toContain("pass2");

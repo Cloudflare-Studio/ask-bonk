@@ -2,15 +2,8 @@ import { Agent } from "agents";
 import type { Env } from "./types";
 import { createComment, getWorkflowRunStatus } from "./github";
 import { createLogger, type Logger } from "./log";
-import {
-  createOctokitForRepo,
-  type InstallationSource,
-  type InstallationLookup,
-} from "./oidc";
-import {
-  WORKFLOW_POLL_INTERVAL_SECS,
-  MAX_WORKFLOW_TRACKING_MS,
-} from "./constants";
+import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
+import { WORKFLOW_POLL_INTERVAL_SECS, MAX_WORKFLOW_TRACKING_MS } from "./constants";
 
 export interface CheckStatusPayload {
   runId: number;
@@ -49,10 +42,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     });
   }
 
-  async setInstallationId(
-    id: number,
-    source: InstallationSource,
-  ): Promise<void> {
+  async setInstallationId(id: number, source: InstallationSource): Promise<void> {
     this.setState({ ...this.state, installationId: id, installationSource: source });
   }
 
@@ -79,11 +69,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     return octokit;
   }
 
-  async trackRun(
-    runId: number,
-    runUrl: string,
-    issueNumber: number,
-  ): Promise<void> {
+  async trackRun(runId: number, runUrl: string, issueNumber: number): Promise<void> {
     const log = this.logger(runId, issueNumber);
     log.info("run_tracking_started", { run_url: runUrl });
 
@@ -171,12 +157,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
 
     try {
-      const status = await getWorkflowRunStatus(
-        octokit,
-        this.owner,
-        this.repo,
-        runId,
-      );
+      const status = await getWorkflowRunStatus(octokit, this.owner, this.repo, runId);
 
       log.info("run_status_fetched", {
         status: status.status,
@@ -190,12 +171,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
         // On success, OpenCode posts the response - we stay silent
         if (status.conclusion !== "success") {
-          await this.postFailureComment(
-            runId,
-            runUrl,
-            issueNumber,
-            status.conclusion,
-          );
+          await this.postFailureComment(runId, runUrl, issueNumber, status.conclusion);
         } else {
           log.info("run_succeeded");
         }

@@ -39,8 +39,7 @@ export async function runAsk(
   // Clone repository
   const cloneResult = await Result.tryPromise(
     {
-      try: () =>
-        sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }),
+      try: () => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }),
       catch: (error: unknown) => {
         log.errorWithException("sandbox_clone_failed", error);
         return new SandboxError({ operation: "gitCheckout", cause: error });
@@ -159,9 +158,7 @@ export async function runAsk(
   // Helper to write SSE events safely. Returns false if the write failed (e.g., stream closed).
   const sendEvent = async (event: string, data: unknown): Promise<boolean> => {
     try {
-      await writer.write(
-        encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-      );
+      await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       return true;
     } catch (error) {
       log.errorWithException("sandbox_sse_write_failed", error, { event });
@@ -205,8 +202,7 @@ export async function runAsk(
       const statusResult = await sandbox.exec("git status --porcelain", {
         cwd: workDir,
       });
-      const hasChanges =
-        statusResult.success && statusResult.stdout.trim().length > 0;
+      const hasChanges = statusResult.success && statusResult.stdout.trim().length > 0;
 
       let changedFiles: string[] = [];
       if (hasChanges) {

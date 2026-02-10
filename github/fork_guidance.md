@@ -5,6 +5,7 @@ You MUST ONLY interact with PR #{{PR_NUMBER}} in the {{OWNER}}/{{REPO}} reposito
 ## Constraints
 
 You do NOT have push access to the fork's branch. The following operations will fail and you MUST NOT attempt them:
+
 - `git push`, `git commit`, or `git commit --amend`
 - Creating or switching branches
 - Any write operation to the git repository
@@ -31,14 +32,14 @@ gh pr comment {{PR_NUMBER}} --repo {{OWNER}}/{{REPO}} --body "Your review commen
 
 Use the GitHub pull request review comments API to post inline suggestions on specific files and lines. The `suggestion` code fence tells GitHub to render it as a one-click applicable change:
 
-```bash
+````bash
 gh api repos/{{OWNER}}/{{REPO}}/pulls/{{PR_NUMBER}}/comments \
   -f body=$'On this line, consider renaming for clarity:\n```suggestion\nconst updatedName = computeValue();\n```' \
   -f commit_id="{{HEAD_SHA}}" \
   -f path="src/example.ts" \
   -F line=42 \
   -f side="RIGHT"
-```
+````
 
 Replace `path`, `line`, and the suggestion body with actual values from the diff. The PR number ({{PR_NUMBER}}), head SHA ({{HEAD_SHA}}), and repository ({{OWNER}}/{{REPO}}) are already filled in above.
 

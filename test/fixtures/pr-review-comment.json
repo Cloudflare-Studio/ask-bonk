@@ -1,43 +1,43 @@
 {
-	"action": "created",
-	"pull_request": {
-		"number": 99,
-		"head": {
-			"ref": "feature-branch",
-			"sha": "abc123",
-			"repo": {
-				"full_name": "test-owner/test-repo"
-			}
-		},
-		"base": {
-			"repo": {
-				"full_name": "test-owner/test-repo"
-			}
-		}
-	},
-	"comment": {
-		"id": 789012,
-		"body": "/bonk improve this function",
-		"path": "src/utils.ts",
-		"line": 42,
-		"original_line": 40,
-		"position": 10,
-		"commit_id": "abc123",
-		"original_commit_id": "def456",
-		"diff_hunk": "@@ -38,6 +38,8 @@ function doSomething() {\n+  const x = 1;\n+  return x;\n }",
-		"user": {
-			"login": "reviewer"
-		}
-	},
-	"repository": {
-		"name": "test-repo",
-		"owner": {
-			"login": "test-owner"
-		},
-		"private": false,
-		"default_branch": "main"
-	},
-	"installation": {
-		"id": 12345
-	}
+  "action": "created",
+  "pull_request": {
+    "number": 99,
+    "head": {
+      "ref": "feature-branch",
+      "sha": "abc123",
+      "repo": {
+        "full_name": "test-owner/test-repo"
+      }
+    },
+    "base": {
+      "repo": {
+        "full_name": "test-owner/test-repo"
+      }
+    }
+  },
+  "comment": {
+    "id": 789012,
+    "body": "/bonk improve this function",
+    "path": "src/utils.ts",
+    "line": 42,
+    "original_line": 40,
+    "position": 10,
+    "commit_id": "abc123",
+    "original_commit_id": "def456",
+    "diff_hunk": "@@ -38,6 +38,8 @@ function doSomething() {\n+  const x = 1;\n+  return x;\n }",
+    "user": {
+      "login": "reviewer"
+    }
+  },
+  "repository": {
+    "name": "test-repo",
+    "owner": {
+      "login": "test-owner"
+    },
+    "private": false,
+    "default_branch": "main"
+  },
+  "installation": {
+    "id": 12345
+  }
 }

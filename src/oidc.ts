@@ -18,9 +18,7 @@ import { RETRY_CONFIG, APP_INSTALLATION_CACHE_TTL_SECS } from "./constants";
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
 
-const JWKS = createRemoteJWKSet(
-  new URL(`${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`),
-);
+const JWKS = createRemoteJWKSet(new URL(`${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`));
 
 // JWT claims from GitHub Actions OIDC token
 export interface GitHubActionsJWTClaims {
@@ -90,9 +88,7 @@ export function extractRepoFromClaims(
 
 // Extracts bearer token from Authorization header.
 // Returns null if header is missing or malformed.
-export function extractBearerToken(
-  authHeader: string | null | undefined,
-): string | null {
+export function extractBearerToken(authHeader: string | null | undefined): string | null {
   if (!authHeader?.startsWith("Bearer ")) return null;
   return authHeader.slice(7);
 }
@@ -102,10 +98,7 @@ export function extractBearerToken(
 export async function validateOIDCAndExtractRepo(
   token: string,
 ): Promise<
-  Result<
-    { claims: GitHubActionsJWTClaims; owner: string; repo: string },
-    OIDCValidationError
-  >
+  Result<{ claims: GitHubActionsJWTClaims; owner: string; repo: string }, OIDCValidationError>
 > {
   const validationResult = await validateGitHubOIDCToken(token);
   if (validationResult.isErr()) return validationResult;
@@ -131,9 +124,7 @@ export async function getInstallationId(
   env: Env,
   owner: string,
   repo: string,
-): Promise<
-  Result<InstallationLookup, InstallationNotFoundError | GitHubAPIError>
-> {
+): Promise<Result<InstallationLookup, InstallationNotFoundError | GitHubAPIError>> {
   const installLog = createLogger({ owner, repo });
 
   // Check cache first, with validation
@@ -165,13 +156,9 @@ export async function getInstallationId(
         const installationId = response.data.id;
 
         // Cache for future use
-        await env.APP_INSTALLATIONS.put(
-          `${owner}/${repo}`,
-          String(installationId),
-          {
-            expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS,
-          },
-        );
+        await env.APP_INSTALLATIONS.put(`${owner}/${repo}`, String(installationId), {
+          expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS,
+        });
         return { id: installationId, source: "api" as const };
       },
       catch: (err: unknown) => {
@@ -203,11 +190,7 @@ export async function createOctokitForRepo(
     const octokit = await createOctokit(env, installation.id);
     return { octokit, installation };
   } catch (error) {
-    if (
-      installation.source === "cache" &&
-      error instanceof RequestError &&
-      error.status === 404
-    ) {
+    if (installation.source === "cache" && error instanceof RequestError && error.status === 404) {
       const log = createLogger({ owner, repo });
       log.warn("installation_cache_stale", {
         installation_id: installation.id,
@@ -337,8 +320,7 @@ export async function handleExchangeToken(
   if (installationResult.isErr()) {
     return Result.err(installationResult.error);
   }
-  const { id: installationId, source: installationSource } =
-    installationResult.value;
+  const { id: installationId, source: installationSource } = installationResult.value;
 
   // Generate scoped token
   return Result.tryPromise({
@@ -355,11 +337,10 @@ export async function handleExchangeToken(
       return { token };
     },
     catch: (err) => {
-      createLogger({ owner, repo }).errorWithException(
-        "token_generation_failed",
-        err,
-        { installation_id: installationId, installation_source: installationSource },
-      );
+      createLogger({ owner, repo }).errorWithException("token_generation_failed", err, {
+        installation_id: installationId,
+        installation_source: installationSource,
+      });
       return new GitHubAPIError({
         operation: "generateInstallationToken",
         cause: err,
@@ -439,22 +420,14 @@ export async function handleExchangeTokenForRepo(
   }
 
   // Get installation IDs for both repos
-  const sourceInstallationResult = await getInstallationId(
-    env,
-    sourceOwner,
-    sourceRepoName,
-  );
+  const sourceInstallationResult = await getInstallationId(env, sourceOwner, sourceRepoName);
   if (sourceInstallationResult.isErr()) {
     return Result.err(sourceInstallationResult.error);
   }
   const { id: sourceInstallationId, source: sourceInstallationSource } =
     sourceInstallationResult.value;
 
-  const targetInstallationResult = await getInstallationId(
-    env,
-    body.owner,
-    body.repo,
-  );
+  const targetInstallationResult = await getInstallationId(env, body.owner, body.repo);
   if (targetInstallationResult.isErr()) {
     return Result.err(targetInstallationResult.error);
   }
@@ -464,46 +437,25 @@ export async function handleExchangeTokenForRepo(
   // Generate tokens for security checks
   return Result.tryPromise({
     try: async () => {
-      const sourceToken = await generateInstallationToken(
-        env,
-        sourceInstallationId,
-      );
-      const targetToken = await generateInstallationToken(
-        env,
-        targetInstallationId,
-        {
-          repositoryNames: [body.repo!],
-          permissions: {
-            contents: "write",
-            pull_requests: "write",
-            issues: "write",
-            metadata: "read",
-          },
+      const sourceToken = await generateInstallationToken(env, sourceInstallationId);
+      const targetToken = await generateInstallationToken(env, targetInstallationId, {
+        repositoryNames: [body.repo!],
+        permissions: {
+          contents: "write",
+          pull_requests: "write",
+          issues: "write",
+          metadata: "read",
         },
-      );
+      });
 
       const sourceOctokit = new Octokit({ auth: sourceToken });
       const targetOctokit = new Octokit({ auth: targetToken });
 
       // Security check 2: Visibility restriction
-      const sourceData = await getRepository(
-        sourceOctokit,
-        sourceOwner,
-        sourceRepoName,
-      );
-      const targetData = await getRepository(
-        targetOctokit,
-        body.owner!,
-        body.repo!,
-      );
-      const sourceVisibility = sourceData.visibility as
-        | "public"
-        | "private"
-        | "internal";
-      const targetVisibility = targetData.visibility as
-        | "public"
-        | "private"
-        | "internal";
+      const sourceData = await getRepository(sourceOctokit, sourceOwner, sourceRepoName);
+      const targetData = await getRepository(targetOctokit, body.owner!, body.repo!);
+      const sourceVisibility = sourceData.visibility as "public" | "private" | "internal";
+      const targetVisibility = targetData.visibility as "public" | "private" | "internal";
 
       if (sourceVisibility === "public" && targetVisibility !== "public") {
         crossRepoLog.warn("cross_repo_denied_visibility", {
@@ -511,19 +463,13 @@ export async function handleExchangeTokenForRepo(
           target_visibility: targetVisibility,
         });
         throw new AuthorizationError({
-          message:
-            "Cross-repo access denied: public repos cannot access private/internal repos",
+          message: "Cross-repo access denied: public repos cannot access private/internal repos",
           reason: "visibility",
         });
       }
 
       // Security check 3: Actor write access
-      const hasAccess = await hasWriteAccess(
-        targetOctokit,
-        body.owner!,
-        body.repo!,
-        actor,
-      );
+      const hasAccess = await hasWriteAccess(targetOctokit, body.owner!, body.repo!, actor);
       if (!hasAccess) {
         crossRepoLog.warn("cross_repo_denied_no_write_access");
         throw new AuthorizationError({
@@ -551,16 +497,12 @@ export async function handleExchangeTokenForRepo(
       if (AuthorizationError.is(err)) {
         return err;
       }
-      crossRepoLog.errorWithException(
-        "cross_repo_token_generation_failed",
-        err,
-        {
-          source_installation_id: sourceInstallationId,
-          source_installation_source: sourceInstallationSource,
-          target_installation_id: targetInstallationId,
-          target_installation_source: targetInstallationSource,
-        },
-      );
+      crossRepoLog.errorWithException("cross_repo_token_generation_failed", err, {
+        source_installation_id: sourceInstallationId,
+        source_installation_source: sourceInstallationSource,
+        target_installation_id: targetInstallationId,
+        target_installation_source: targetInstallationSource,
+      });
       return new GitHubAPIError({
         operation: "generateCrossRepoToken",
         cause: err,
@@ -647,16 +589,11 @@ export async function handleExchangeTokenWithPAT(
   }
 
   // Get installation ID
-  const installationResult = await getInstallationId(
-    env,
-    body.owner,
-    body.repo,
-  );
+  const installationResult = await getInstallationId(env, body.owner, body.repo);
   if (installationResult.isErr()) {
     return Result.err(installationResult.error);
   }
-  const { id: installationId, source: installationSource } =
-    installationResult.value;
+  const { id: installationId, source: installationSource } = installationResult.value;
 
   // Generate scoped token
   return Result.tryPromise({

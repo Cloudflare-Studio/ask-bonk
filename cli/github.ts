@@ -92,41 +92,26 @@ export function branchExists(repo: string, branch: string): boolean {
   }
 }
 
-export function createBranch(
-  repo: string,
-  branch: string,
-  baseBranch: string,
-): boolean {
+export function createBranch(repo: string, branch: string, baseBranch: string): boolean {
   try {
-    const sha = execSync(
-      `gh api repos/${repo}/git/ref/heads/${baseBranch} --jq '.object.sha'`,
-      {
-        encoding: "utf-8",
-      },
-    ).trim();
-    execSync(
-      `gh api repos/${repo}/git/refs -f ref=refs/heads/${branch} -f sha=${sha}`,
-      { stdio: "ignore" },
-    );
+    const sha = execSync(`gh api repos/${repo}/git/ref/heads/${baseBranch} --jq '.object.sha'`, {
+      encoding: "utf-8",
+    }).trim();
+    execSync(`gh api repos/${repo}/git/refs -f ref=refs/heads/${branch} -f sha=${sha}`, {
+      stdio: "ignore",
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-export function getFileSha(
-  repo: string,
-  path: string,
-  branch: string,
-): string | null {
+export function getFileSha(repo: string, path: string, branch: string): string | null {
   try {
-    const result = execSync(
-      `gh api repos/${repo}/contents/${path}?ref=${branch} --jq '.sha'`,
-      {
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const result = execSync(`gh api repos/${repo}/contents/${path}?ref=${branch} --jq '.sha'`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     return result.trim() || null;
   } catch {
     return null;
@@ -182,20 +167,7 @@ export function createPR(
   try {
     const result = spawnSync(
       "gh",
-      [
-        "pr",
-        "create",
-        "-R",
-        repo,
-        "-H",
-        head,
-        "-B",
-        base,
-        "-t",
-        title,
-        "-F",
-        "-",
-      ],
+      ["pr", "create", "-R", repo, "-H", head, "-B", base, "-t", title, "-F", "-"],
       {
         input: body,
         encoding: "utf-8",
@@ -212,12 +184,9 @@ export function createPR(
 
 export function findExistingPR(repo: string, branch: string): string | null {
   try {
-    const result = execSync(
-      `gh pr list -R ${repo} -H ${branch} --json url --jq '.[0].url'`,
-      {
-        encoding: "utf-8",
-      },
-    );
+    const result = execSync(`gh pr list -R ${repo} -H ${branch} --json url --jq '.[0].url'`, {
+      encoding: "utf-8",
+    });
     return result.trim() || null;
   } catch {
     return null;
@@ -249,10 +218,7 @@ export async function checkAppInstallation(repo: string): Promise<boolean> {
   }
 }
 
-export async function waitForAppInstallation(
-  repo: string,
-  maxRetries = 12,
-): Promise<boolean> {
+export async function waitForAppInstallation(repo: string, maxRetries = 12): Promise<boolean> {
   for (let i = 0; i < maxRetries; i++) {
     if (await checkAppInstallation(repo)) {
       return true;

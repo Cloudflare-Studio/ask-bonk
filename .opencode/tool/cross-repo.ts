@@ -19,8 +19,7 @@ function shellEscape(str: string): string {
 function isValidRepoIdentifier(value: string): boolean {
   if (!value || value.length > 100) return false;
   // Block path traversal sequences and path separators
-  if (value.includes("..") || value.includes("/") || value.includes("\\"))
-    return false;
+  if (value.includes("..") || value.includes("/") || value.includes("\\")) return false;
   // Allow typical GitHub identifier characters
   return /^[a-zA-Z0-9._-]+$/.test(value);
 }
@@ -33,18 +32,12 @@ function isValidRepoIdentifier(value: string): boolean {
 // - For non-existent paths: returns fullPath after validating all existing parents
 //   (inherent TOCTOU window exists for new file writes — mitigated by parent validation)
 // - Fails closed on unexpected errors (only ENOENT is treated as "path doesn't exist")
-function safeResolvePath(
-  basePath: string,
-  relativePath: string,
-): string | null {
+function safeResolvePath(basePath: string, relativePath: string): string | null {
   const normalizedBase = resolve(basePath);
   const fullPath = resolve(normalizedBase, relativePath);
 
   // Check the string path first (handles .. sequences)
-  if (
-    !fullPath.startsWith(normalizedBase + "/") &&
-    fullPath !== normalizedBase
-  ) {
+  if (!fullPath.startsWith(normalizedBase + "/") && fullPath !== normalizedBase) {
     return null;
   }
 
@@ -72,10 +65,7 @@ function safeResolvePath(
 
     // Path doesn't exist — check parent directories for escaping symlinks
     let checkPath = resolve(fullPath, "..");
-    while (
-      checkPath !== normalizedBase &&
-      checkPath.startsWith(normalizedBase)
-    ) {
+    while (checkPath !== normalizedBase && checkPath.startsWith(normalizedBase)) {
       try {
         const realParent = realpathSync(checkPath);
         if (!realParent.startsWith(realBase + "/") && realParent !== realBase) {
@@ -96,10 +86,7 @@ function safeResolvePath(
 
 // State tracking for cloned repos across tool invocations
 // Key format: "{sessionID}/{owner}/{repo}" to isolate repos per session
-const clonedRepos = new Map<
-  string,
-  { path: string; token: string; defaultBranch: string }
->();
+const clonedRepos = new Map<string, { path: string; token: string; defaultBranch: string }>();
 
 // Get session-scoped clone path: {tmpdir}/{sessionId}/{owner}-{repo}
 // This ensures concurrent agents/sub-agents don't clobber each other
@@ -162,36 +149,21 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
     owner: tool.schema.string().describe("Repository owner (org or user)"),
     repo: tool.schema.string().describe("Repository name"),
     operation: tool.schema
-      .enum([
-        "clone",
-        "branch",
-        "commit",
-        "push",
-        "pr",
-        "exec",
-        "read",
-        "write",
-        "list",
-      ])
+      .enum(["clone", "branch", "commit", "push", "pr", "exec", "read", "write", "list"])
       .describe("Operation to perform on the target repository"),
 
     // Operation-specific args
     branch: tool.schema
       .string()
       .optional()
-      .describe(
-        "Branch name for 'branch' operation, or specific branch to clone for 'clone'",
-      ),
+      .describe("Branch name for 'branch' operation, or specific branch to clone for 'clone'"),
     message: tool.schema
       .string()
       .optional()
       .describe(
         "Commit message for 'commit' operation. For 'pr' operation, this is the PR body/description - include a meaningful summary of changes (use markdown with ## Summary header).",
       ),
-    title: tool.schema
-      .string()
-      .optional()
-      .describe("PR title for 'pr' operation"),
+    title: tool.schema.string().optional().describe("PR title for 'pr' operation"),
     base: tool.schema
       .string()
       .optional()
@@ -203,13 +175,8 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
     path: tool.schema
       .string()
       .optional()
-      .describe(
-        "File path for 'read', 'write', or 'list' operations (relative to repo root)",
-      ),
-    content: tool.schema
-      .string()
-      .optional()
-      .describe("File content for 'write' operation"),
+      .describe("File path for 'read', 'write', or 'list' operations (relative to repo root)"),
+    content: tool.schema.string().optional().describe("File content for 'write' operation"),
   },
 
   async execute(args, ctx: ToolContext) {
@@ -221,9 +188,7 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
     try {
       switch (args.operation) {
         case "clone":
-          return stringify(
-            await cloneRepo(ctx.sessionID, args.owner, args.repo, args.branch),
-          );
+          return stringify(await cloneRepo(ctx.sessionID, args.owner, args.repo, args.branch));
 
         case "branch": {
           const state = clonedRepos.get(repoKey);
@@ -349,9 +314,7 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
               error: "Content required for 'write' operation",
             });
           }
-          return stringify(
-            await writeFile(state.path, args.path, args.content),
-          );
+          return stringify(await writeFile(state.path, args.path, args.content));
         }
 
         case "list": {
@@ -385,10 +348,7 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 
 // Execution context types for the cross-repo tool
 // Simplified to: GitHub Actions (OIDC available), Interactive (TTY), Non-interactive (everything else)
-type ExecutionContextType =
-  | "github-actions"
-  | "interactive"
-  | "non-interactive";
+type ExecutionContextType = "github-actions" | "interactive" | "non-interactive";
 
 interface ExecutionContext {
   type: ExecutionContextType;
@@ -409,10 +369,7 @@ function isGitHubActions(): boolean {
 
 // Check if OIDC permissions are available (requires id-token: write in workflow)
 function hasOIDCPermissions(): boolean {
-  return !!(
-    process.env.ACTIONS_ID_TOKEN_REQUEST_URL &&
-    process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
-  );
+  return !!(process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
 }
 
 // Check if running in an interactive terminal context
@@ -513,17 +470,14 @@ async function getTokenViaOIDC(
           "OIDC_BASE_URL environment variable not set. Ensure the workflow passes oidc_base_url to the OpenCode action.",
       };
     }
-    const exchangeResponse = await fetch(
-      `${oidcBaseUrl}/exchange_github_app_token_for_repo`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${oidcToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ owner, repo }),
+    const exchangeResponse = await fetch(`${oidcBaseUrl}/exchange_github_app_token_for_repo`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${oidcToken}`,
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({ owner, repo }),
+    });
 
     if (!exchangeResponse.ok) {
       const errorBody = await exchangeResponse.text();
@@ -590,10 +544,8 @@ async function getTargetRepoToken(
   // Build context-specific error message
   const contextHints: Record<ExecutionContextType, string> = {
     "github-actions": "Add 'id-token: write' permission or set GITHUB_TOKEN.",
-    interactive:
-      "Run 'gh auth login' to authenticate, or set GH_TOKEN/GITHUB_TOKEN.",
-    "non-interactive":
-      "Set GH_TOKEN/GITHUB_TOKEN, or ensure 'gh auth login' was run.",
+    interactive: "Run 'gh auth login' to authenticate, or set GH_TOKEN/GITHUB_TOKEN.",
+    "non-interactive": "Set GH_TOKEN/GITHUB_TOKEN, or ensure 'gh auth login' was run.",
   };
 
   return {
@@ -719,9 +671,7 @@ async function commitChanges(
   }
 
   // Check if there are changes to commit
-  const statusResult = await run(
-    `git -C ${shellEscape(repoPath)} status --porcelain`,
-  );
+  const statusResult = await run(`git -C ${shellEscape(repoPath)} status --porcelain`);
   if (!statusResult.stdout.trim()) {
     return { success: false, error: "No changes to commit" };
   }
@@ -749,26 +699,17 @@ async function pushBranch(
   token: string,
 ): Promise<{ success: boolean; error?: string }> {
   // Get current branch
-  const branchResult = await run(
-    `git -C ${shellEscape(repoPath)} rev-parse --abbrev-ref HEAD`,
-  );
+  const branchResult = await run(`git -C ${shellEscape(repoPath)} rev-parse --abbrev-ref HEAD`);
   const branch = branchResult.stdout.trim();
 
   // Get remote URL and inject token
-  const remoteResult = await run(
-    `git -C ${shellEscape(repoPath)} remote get-url origin`,
-  );
+  const remoteResult = await run(`git -C ${shellEscape(repoPath)} remote get-url origin`);
   let remoteUrl = remoteResult.stdout.trim();
 
   // Ensure token is in the URL for push
   if (!remoteUrl.includes("x-access-token")) {
-    remoteUrl = remoteUrl.replace(
-      "https://",
-      `https://x-access-token:${token}@`,
-    );
-    await run(
-      `git -C ${shellEscape(repoPath)} remote set-url origin ${shellEscape(remoteUrl)}`,
-    );
+    remoteUrl = remoteUrl.replace("https://", `https://x-access-token:${token}@`);
+    await run(`git -C ${shellEscape(repoPath)} remote set-url origin ${shellEscape(remoteUrl)}`);
   }
 
   // Push with upstream tracking
@@ -796,15 +737,11 @@ async function createPR(
   error?: string;
 }> {
   // Get current branch
-  const branchResult = await run(
-    `git -C ${shellEscape(repoPath)} rev-parse --abbrev-ref HEAD`,
-  );
+  const branchResult = await run(`git -C ${shellEscape(repoPath)} rev-parse --abbrev-ref HEAD`);
   const headBranch = branchResult.stdout.trim();
 
   // Use gh CLI with token auth and properly escaped arguments
-  const bodyArg = body
-    ? `--body ${shellEscape(body)}`
-    : `--body ${shellEscape("")}`;
+  const bodyArg = body ? `--body ${shellEscape(body)}` : `--body ${shellEscape("")}`;
   const baseArg = base ? `--base ${shellEscape(base)}` : "";
 
   const prResult = await run(
@@ -875,17 +812,13 @@ async function listFiles(
   subPath?: string,
 ): Promise<{ success: boolean; files?: string[]; error?: string }> {
   // Safely resolve the path if subPath provided, preventing traversal attacks
-  const targetPath = subPath
-    ? safeResolvePath(repoPath, subPath)
-    : resolve(repoPath);
+  const targetPath = subPath ? safeResolvePath(repoPath, subPath) : resolve(repoPath);
   if (!targetPath) {
     return { success: false, error: "Invalid path: path traversal detected" };
   }
 
   // List files excluding .git directory
-  const result = await run(
-    `find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*'`,
-  );
+  const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*'`);
   if (!result.success) {
     return { success: false, error: `Failed to list files: ${result.stderr}` };
   }
@@ -922,8 +855,7 @@ async function execCommand(
     JSON.stringify({
       event: "cross_repo_exec",
       repo_path: repoPath,
-      command_preview:
-        command.slice(0, 100) + (command.length > 100 ? "..." : ""),
+      command_preview: command.slice(0, 100) + (command.length > 100 ? "..." : ""),
     }),
   );
 
@@ -958,8 +890,7 @@ async function run(
         // Disable git's terminal prompts - fail fast instead of waiting for input
         GIT_TERMINAL_PROMPT: "0",
         // Disable SSH interactive prompts
-        GIT_SSH_COMMAND:
-          "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new",
+        GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new",
         // Disable pagers that might wait for input
         GIT_PAGER: "cat",
         PAGER: "cat",

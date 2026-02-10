@@ -17,19 +17,13 @@ export async function extractImages(
 ): Promise<{ processedBody: string; images: ImageData[] }> {
   const images: ImageData[] = [];
   const mdMatches = [
-    ...body.matchAll(
-      /!?\[.*?\]\((https:\/\/github\.com\/user-attachments\/[^)]+)\)/gi,
-    ),
+    ...body.matchAll(/!?\[.*?\]\((https:\/\/github\.com\/user-attachments\/[^)]+)\)/gi),
   ];
   const tagMatches = [
-    ...body.matchAll(
-      /<img .*?src="(https:\/\/github\.com\/user-attachments\/[^"]+)" \/>/gi,
-    ),
+    ...body.matchAll(/<img .*?src="(https:\/\/github\.com\/user-attachments\/[^"]+)" \/>/gi),
   ];
 
-  const matches = [...mdMatches, ...tagMatches].sort(
-    (a, b) => (a.index ?? 0) - (b.index ?? 0),
-  );
+  const matches = [...mdMatches, ...tagMatches].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
 
   if (matches.length === 0) {
     return { processedBody: body, images: [] };
@@ -95,13 +89,10 @@ async function downloadFile(
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const contentType =
-        response.headers.get("content-type") || "application/octet-stream";
+      const contentType = response.headers.get("content-type") || "application/octet-stream";
       const arrayBuffer = await response.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
-      const mime = contentType.startsWith("image/")
-        ? contentType
-        : "text/plain";
+      const mime = contentType.startsWith("image/") ? contentType : "text/plain";
 
       return { mime, content: base64 };
     },

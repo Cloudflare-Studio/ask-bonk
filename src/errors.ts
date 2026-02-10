@@ -18,9 +18,7 @@ export class AuthorizationError extends TaggedError("AuthorizationError")<{
 }>() {}
 
 // GitHub App installation errors
-export class InstallationNotFoundError extends TaggedError(
-  "InstallationNotFoundError",
-)<{
+export class InstallationNotFoundError extends TaggedError("InstallationNotFoundError")<{
   owner: string;
   repo: string;
   message: string;
@@ -56,13 +54,8 @@ export class GitHubAPIError extends TaggedError("GitHubAPIError")<{
   cause: unknown;
   statusCode?: number;
 }>() {
-  constructor(args: {
-    operation: string;
-    cause: unknown;
-    statusCode?: number;
-  }) {
-    const msg =
-      args.cause instanceof Error ? args.cause.message : String(args.cause);
+  constructor(args: { operation: string; cause: unknown; statusCode?: number }) {
+    const msg = args.cause instanceof Error ? args.cause.message : String(args.cause);
     super({
       operation: args.operation,
       cause: args.cause,
@@ -78,15 +71,11 @@ export class SandboxError extends TaggedError("SandboxError")<{
   cause: unknown;
 }>() {
   constructor(args: { operation: string; cause: unknown }) {
-    const msg =
-      args.cause instanceof Error ? args.cause.message : String(args.cause);
+    const msg = args.cause instanceof Error ? args.cause.message : String(args.cause);
     super({ ...args, message: `Sandbox ${args.operation} failed: ${msg}` });
   }
 }
 
 // Union types for Result error channels
 export type AuthError = OIDCValidationError | AuthorizationError;
-export type TokenExchangeError =
-  | AuthError
-  | InstallationNotFoundError
-  | GitHubAPIError;
+export type TokenExchangeError = AuthError | InstallationNotFoundError | GitHubAPIError;

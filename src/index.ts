@@ -79,19 +79,14 @@ const USER_EVENTS = [
 ] as const;
 const REPO_EVENTS = ["schedule", "workflow_dispatch"] as const;
 const META_EVENTS = ["installation"] as const;
-const SUPPORTED_EVENTS = [
-  ...USER_EVENTS,
-  ...REPO_EVENTS,
-  ...META_EVENTS,
-] as const;
+const SUPPORTED_EVENTS = [...USER_EVENTS, ...REPO_EVENTS, ...META_EVENTS] as const;
 
 // Determines the reaction target type and ID from a TrackWorkflowRequest.
 // Returns null if no reaction target ID is present.
 function getReactionTarget(
   body: TrackWorkflowRequest,
 ): { targetId: number; targetType: ReactionTarget } | null {
-  if (body.comment_id)
-    return { targetId: body.comment_id, targetType: "issue_comment" };
+  if (body.comment_id) return { targetId: body.comment_id, targetType: "issue_comment" };
   if (body.review_comment_id)
     return {
       targetId: body.review_comment_id,
@@ -134,9 +129,7 @@ stats.get("/errors", async (c) => {
   try {
     const data = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
     if (c.req.query("format") === "json") return c.json({ data });
-    return c.text(
-      renderBarChart(data, "Errors by repo (last 24h)", "repo", "error_count"),
-    );
+    return c.text(renderBarChart(data, "Errors by repo (last 24h)", "repo", "error_count"));
   } catch (error) {
     log.errorWithException("errors_query_failed", error);
     return c.json({ error: "Failed to query errors" }, 500);
@@ -147,9 +140,7 @@ stats.get("/actors", async (c) => {
   try {
     const data = await queryAnalyticsEngine(c.env, eventsByActorQuery);
     if (c.req.query("format") === "json") return c.json({ data });
-    return c.text(
-      renderBarChart(data, "Mentions per actor (last 7d)", "actor", "event_count"),
-    );
+    return c.text(renderBarChart(data, "Mentions per actor (last 7d)", "actor", "event_count"));
   } catch (error) {
     log.errorWithException("stats_query_failed", error);
     return c.json({ error: "Failed to query stats" }, 500);
@@ -191,10 +182,7 @@ ask.post("/", async (c) => {
 
   // Validate required fields
   if (!rawBody.owner || !rawBody.repo || !rawBody.prompt) {
-    return c.json(
-      { error: "Missing required fields: owner, repo, prompt" },
-      400,
-    );
+    return c.json({ error: "Missing required fields: owner, repo, prompt" }, 400);
   }
 
   // Build full request with ID
@@ -206,11 +194,7 @@ ask.post("/", async (c) => {
   });
 
   // Look up installation ID for this repo (uses cache, falls back to GitHub API)
-  const installationResult = await getInstallationId(
-    c.env,
-    body.owner,
-    body.repo,
-  );
+  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
   if (installationResult.isErr()) {
     askLog.error("ask_no_installation", {
       duration_ms: Date.now() - startTime,
@@ -223,8 +207,7 @@ ask.post("/", async (c) => {
       404,
     );
   }
-  const { id: installationId, source: installationSource } =
-    installationResult.value;
+  const { id: installationId, source: installationSource } = installationResult.value;
 
   const streamResult = await runAsk(c.env, installationId, body);
   if (streamResult.isErr()) {
@@ -283,11 +266,7 @@ auth.post("/exchange_github_app_token_for_repo", async (c) => {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  const result = await handleExchangeTokenForRepo(
-    c.env,
-    authHeader ?? null,
-    body,
-  );
+  const result = await handleExchangeTokenForRepo(c.env, authHeader ?? null, body);
   if (result.isErr()) {
     return c.json({ error: result.error.message }, 401);
   }
@@ -304,11 +283,7 @@ auth.post("/exchange_github_app_token_with_pat", async (c) => {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  const result = await handleExchangeTokenWithPAT(
-    c.env,
-    authHeader ?? null,
-    body,
-  );
+  const result = await handleExchangeTokenWithPAT(c.env, authHeader ?? null, body);
   if (result.isErr()) {
     return c.json({ error: result.error.message }, 401);
   }
@@ -326,8 +301,7 @@ apiGithub.post("/setup", async (c) => {
   const requestId = ulid();
 
   const oidcToken = extractBearerToken(c.req.header("Authorization"));
-  if (!oidcToken)
-    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  if (!oidcToken) return c.json({ error: "Missing or invalid Authorization header" }, 401);
 
   let body: SetupWorkflowRequest;
   try {
@@ -339,16 +313,14 @@ apiGithub.post("/setup", async (c) => {
   if (!body.owner || !body.repo || !body.issue_number || !body.default_branch) {
     return c.json(
       {
-        error:
-          "Missing required fields: owner, repo, issue_number, default_branch",
+        error: "Missing required fields: owner, repo, issue_number, default_branch",
       },
       400,
     );
   }
 
   const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
-  if (oidcResult.isErr())
-    return c.json({ error: oidcResult.error.message }, 401);
+  if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
 
   const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
   if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
@@ -368,11 +340,7 @@ apiGithub.post("/setup", async (c) => {
   });
 
   // Look up installation ID
-  const installationResult = await getInstallationId(
-    c.env,
-    body.owner,
-    body.repo,
-  );
+  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
   if (installationResult.isErr()) {
     setupLog.error("setup_no_installation", {
       duration_ms: Date.now() - startTime,
@@ -385,8 +353,7 @@ apiGithub.post("/setup", async (c) => {
       404,
     );
   }
-  let { id: installationId, source: installationSource } =
-    installationResult.value;
+  let { id: installationId, source: installationSource } = installationResult.value;
 
   try {
     const { octokit, installation } = await createOctokitForRepo(
@@ -444,8 +411,7 @@ apiGithub.post("/track", async (c) => {
   const requestId = ulid();
 
   const oidcToken = extractBearerToken(c.req.header("Authorization"));
-  if (!oidcToken)
-    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  if (!oidcToken) return c.json({ error: "Missing or invalid Authorization header" }, 401);
 
   let body: TrackWorkflowRequest;
   try {
@@ -464,22 +430,16 @@ apiGithub.post("/track", async (c) => {
   ) {
     return c.json(
       {
-        error:
-          "Missing required fields: owner, repo, run_id, run_url, issue_number, created_at",
+        error: "Missing required fields: owner, repo, run_id, run_url, issue_number, created_at",
       },
       400,
     );
   }
 
   const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
-  if (oidcResult.isErr())
-    return c.json({ error: oidcResult.error.message }, 401);
+  if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
 
-  const {
-    owner: claimsOwner,
-    repo: claimsRepo,
-    claims,
-  } = oidcResult.value;
+  const { owner: claimsOwner, repo: claimsRepo, claims } = oidcResult.value;
   if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
     return c.json(
       {
@@ -500,11 +460,7 @@ apiGithub.post("/track", async (c) => {
   });
 
   // Look up installation ID
-  const installationResult = await getInstallationId(
-    c.env,
-    body.owner,
-    body.repo,
-  );
+  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
   if (installationResult.isErr()) {
     trackLog.error("track_no_installation", {
       duration_ms: Date.now() - startTime,
@@ -517,19 +473,16 @@ apiGithub.post("/track", async (c) => {
       404,
     );
   }
-  let { id: installationId, source: installationSource } =
-    installationResult.value;
+  let { id: installationId, source: installationSource } = installationResult.value;
 
   try {
     // Create reaction if comment/issue ID provided
     const reactionTarget = getReactionTarget(body);
     if (reactionTarget) {
-      const { octokit, installation } = await createOctokitForRepo(
-        c.env,
-        body.owner,
-        body.repo,
-        { id: installationId, source: installationSource },
-      );
+      const { octokit, installation } = await createOctokitForRepo(c.env, body.owner, body.repo, {
+        id: installationId,
+        source: installationSource,
+      });
       installationId = installation.id;
       installationSource = installation.source;
       await createReaction(
@@ -595,8 +548,7 @@ apiGithub.put("/track", async (c) => {
   const requestId = ulid();
 
   const oidcToken = extractBearerToken(c.req.header("Authorization"));
-  if (!oidcToken)
-    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  if (!oidcToken) return c.json({ error: "Missing or invalid Authorization header" }, 401);
 
   let body: FinalizeWorkflowRequest;
   try {
@@ -606,21 +558,13 @@ apiGithub.put("/track", async (c) => {
   }
 
   if (!body.owner || !body.repo || !body.run_id || !body.status) {
-    return c.json(
-      { error: "Missing required fields: owner, repo, run_id, status" },
-      400,
-    );
+    return c.json({ error: "Missing required fields: owner, repo, run_id, status" }, 400);
   }
 
   const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
-  if (oidcResult.isErr())
-    return c.json({ error: oidcResult.error.message }, 401);
+  if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
 
-  const {
-    owner: claimsOwner,
-    repo: claimsRepo,
-    claims,
-  } = oidcResult.value;
+  const { owner: claimsOwner, repo: claimsRepo, claims } = oidcResult.value;
   if (claimsOwner !== body.owner || claimsRepo !== body.repo) {
     return c.json(
       {
@@ -640,11 +584,7 @@ apiGithub.put("/track", async (c) => {
   });
 
   // Look up installation ID
-  const installationResult = await getInstallationId(
-    c.env,
-    body.owner,
-    body.repo,
-  );
+  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
   if (installationResult.isErr()) {
     finalizeLog.error("finalize_no_installation", {
       duration_ms: Date.now() - startTime,
@@ -657,8 +597,7 @@ apiGithub.put("/track", async (c) => {
       404,
     );
   }
-  const { id: installationId, source: installationSource } =
-    installationResult.value;
+  const { id: installationId, source: installationSource } = installationResult.value;
 
   try {
     // Get RepoAgent and finalize
@@ -728,8 +667,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     | undefined;
   const owner = repository?.owner?.login;
   const repoName = repository?.name;
-  const repoKey =
-    owner && repoName ? `${owner}/${repoName}` : "unknown/unknown";
+  const repoKey = owner && repoName ? `${owner}/${repoName}` : "unknown/unknown";
   const sender = (payload.sender as { login?: string })?.login;
   const issue = payload.issue as { number?: number } | undefined;
   const pr = payload.pull_request as { number?: number } | undefined;
@@ -747,9 +685,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
   try {
     // Handle meta events (installation) before other checks - these may delete installations
-    const isMetaEvent = META_EVENTS.includes(
-      event.name as (typeof META_EVENTS)[number],
-    );
+    const isMetaEvent = META_EVENTS.includes(event.name as (typeof META_EVENTS)[number]);
     if (isMetaEvent) {
       await handleMetaEvent(event.name, event.payload, env);
       webhookLog.info("webhook_completed", {
@@ -784,11 +720,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return new Response("OK", { status: 200 });
     }
 
-    if (
-      !SUPPORTED_EVENTS.includes(
-        event.name as (typeof SUPPORTED_EVENTS)[number],
-      )
-    ) {
+    if (!SUPPORTED_EVENTS.includes(event.name as (typeof SUPPORTED_EVENTS)[number])) {
       webhookLog.info("webhook_unsupported_event", {
         event_type: event.name,
         duration_ms: Date.now() - startTime,
@@ -798,9 +730,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
     // Route events to appropriate handlers based on type
     // All handlers now just log - tracking is done via /api/github/track
-    const isUserEvent = USER_EVENTS.includes(
-      event.name as (typeof USER_EVENTS)[number],
-    );
+    const isUserEvent = USER_EVENTS.includes(event.name as (typeof USER_EVENTS)[number]);
     if (isUserEvent) {
       await handleUserEvent(event.name, event.payload, env);
     } else {
@@ -835,8 +765,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       eventSubtype: event.name,
       status: "error",
       actor: sender,
-      errorCode:
-        error instanceof Error ? error.message.slice(0, 100) : "unknown",
+      errorCode: error instanceof Error ? error.message.slice(0, 100) : "unknown",
       issueNumber,
       isPrivate,
       isPullRequest,
@@ -847,11 +776,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
 // User-driven events: issue comments, PR review comments, issues
 // Now just logs the event - tracking is done by the action calling /api/github/track
-async function handleUserEvent(
-  eventName: string,
-  payload: unknown,
-  _env: Env,
-): Promise<void> {
+async function handleUserEvent(eventName: string, payload: unknown, _env: Env): Promise<void> {
   switch (eventName) {
     case "issue_comment":
       await handleIssueComment(payload as IssueCommentEvent);
@@ -873,11 +798,7 @@ async function handleUserEvent(
 
 // Repo-driven events: schedule, workflow_dispatch
 // Just logs - processed by the GitHub Action directly
-async function handleRepoEvent(
-  eventName: string,
-  payload: unknown,
-  _env: Env,
-): Promise<void> {
+async function handleRepoEvent(eventName: string, payload: unknown, _env: Env): Promise<void> {
   switch (eventName) {
     case "schedule":
       await handleScheduleEvent(payload as ScheduleEventPayload);
@@ -891,11 +812,7 @@ async function handleRepoEvent(
 // Meta events: GitHub App lifecycle events (installation)
 // Handles GitHub App installation lifecycle events (created, deleted)
 // Auto-uninstalls from orgs not in ALLOWED_ORGS
-async function handleMetaEvent(
-  eventName: string,
-  payload: unknown,
-  env: Env,
-): Promise<void> {
+async function handleMetaEvent(eventName: string, payload: unknown, env: Env): Promise<void> {
   if (eventName !== "installation") return;
 
   const p = payload as {
@@ -947,9 +864,7 @@ async function handleIssueComment(payload: IssueCommentEvent): Promise<void> {
   }).info("issue_comment_received");
 }
 
-async function handlePRReviewComment(
-  payload: PullRequestReviewCommentEvent,
-): Promise<void> {
+async function handlePRReviewComment(payload: PullRequestReviewCommentEvent): Promise<void> {
   const parsed = parsePRReviewCommentEvent(payload);
   if (!parsed) return;
 
@@ -961,9 +876,7 @@ async function handlePRReviewComment(
   }).info("pr_review_comment_received");
 }
 
-async function handlePRReviewEvent(
-  payload: PullRequestReviewEvent,
-): Promise<void> {
+async function handlePRReviewEvent(payload: PullRequestReviewEvent): Promise<void> {
   const parsed = parsePRReviewEvent(payload);
   if (!parsed) return;
 
@@ -975,9 +888,7 @@ async function handlePRReviewEvent(
   }).info("pr_review_received");
 }
 
-async function handlePullRequestEvent(
-  payload: PullRequestEvent,
-): Promise<void> {
+async function handlePullRequestEvent(payload: PullRequestEvent): Promise<void> {
   const parsed = parsePullRequestEvent(payload);
 
   createLogger({
@@ -989,19 +900,16 @@ async function handlePullRequestEvent(
 }
 
 // Schedule events are handled by the GitHub Action directly - Bonk webhook just logs
-async function handleScheduleEvent(
-  payload: ScheduleEventPayload,
-): Promise<void> {
+async function handleScheduleEvent(payload: ScheduleEventPayload): Promise<void> {
   const parsed = parseScheduleEvent(payload);
   if (!parsed) {
     log.error("schedule_event_invalid");
     return;
   }
 
-  createLogger({ owner: parsed.owner, repo: parsed.repo }).info(
-    "schedule_event_received",
-    { schedule: parsed.schedule },
-  );
+  createLogger({ owner: parsed.owner, repo: parsed.repo }).info("schedule_event_received", {
+    schedule: parsed.schedule,
+  });
 }
 
 async function handleIssuesEvent(payload: IssuesEvent): Promise<void> {
@@ -1017,9 +925,7 @@ async function handleIssuesEvent(payload: IssuesEvent): Promise<void> {
 }
 
 // Handle workflow_dispatch events for manual workflow triggers.
-async function handleWorkflowDispatchEvent(
-  payload: WorkflowDispatchPayload,
-): Promise<void> {
+async function handleWorkflowDispatchEvent(payload: WorkflowDispatchPayload): Promise<void> {
   const parsed = parseWorkflowDispatchEvent(payload);
   if (!parsed) {
     log.error("workflow_dispatch_invalid");

@@ -21,9 +21,7 @@ describe("cross-repo tool", () => {
 
   describe("execute() error handling", () => {
     it("returns error JSON when repo not cloned (branch operation)", async () => {
-      const { default: crossRepoTool } = await import(
-        "../../.opencode/tool/cross-repo"
-      );
+      const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo");
 
       const result = await crossRepoTool.execute(
         {
@@ -41,9 +39,7 @@ describe("cross-repo tool", () => {
     });
 
     it("returns error JSON for unknown operation", async () => {
-      const { default: crossRepoTool } = await import(
-        "../../.opencode/tool/cross-repo"
-      );
+      const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo");
 
       const result = await crossRepoTool.execute(
         {
@@ -60,9 +56,7 @@ describe("cross-repo tool", () => {
     });
 
     it("never throws - always returns valid JSON", async () => {
-      const { default: crossRepoTool } = await import(
-        "../../.opencode/tool/cross-repo"
-      );
+      const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo");
 
       // Various bad inputs that should not throw
       const badInputs = [
@@ -74,10 +68,7 @@ describe("cross-repo tool", () => {
 
       for (const input of badInputs) {
         // Should not throw
-        const result = await crossRepoTool.execute(
-          input as any,
-          mockToolContext,
-        );
+        const result = await crossRepoTool.execute(input as any, mockToolContext);
 
         // Should return valid JSON
         expect(() => JSON.parse(result)).not.toThrow();
@@ -89,9 +80,7 @@ describe("cross-repo tool", () => {
     });
 
     it("returns error when required args missing for operations", async () => {
-      const { default: crossRepoTool } = await import(
-        "../../.opencode/tool/cross-repo"
-      );
+      const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo");
 
       // These will hit "not cloned" before arg validation, but that's still a graceful error
       const missingArgCases = [
@@ -100,10 +89,7 @@ describe("cross-repo tool", () => {
       ];
 
       for (const input of missingArgCases) {
-        const result = await crossRepoTool.execute(
-          input as any,
-          mockToolContext,
-        );
+        const result = await crossRepoTool.execute(input as any, mockToolContext);
         const parsed = JSON.parse(result);
         expect(parsed.success).toBe(false);
         // Either "not cloned" or missing arg - both are graceful errors

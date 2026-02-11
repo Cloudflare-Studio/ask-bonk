@@ -58,7 +58,8 @@ function createMockEnv(overrides: Partial<Env> = {}): Env {
 
   return new Proxy(values as unknown as Env, {
     get(target, prop, receiver) {
-      if (typeof prop === "symbol" || prop === "toJSON") {
+      // Allow symbols, serialization helpers, and thenable checks (Promise.resolve probes .then)
+      if (typeof prop === "symbol" || prop === "toJSON" || prop === "then") {
         return Reflect.get(target, prop, receiver);
       }
       if (prop in target) {
@@ -911,7 +912,8 @@ describe("Logging Security", () => {
       label: "redacts multiple URLs in same string",
       input:
         "Tried https://user:pass1@example.com and https://other:pass2@example.org",
-      expected: null, // just check mustNotContain
+      expected:
+        "Tried https://user:[REDACTED]@example.com and https://other:[REDACTED]@example.org",
       mustNotContain: ["pass1", "pass2"],
     },
     {

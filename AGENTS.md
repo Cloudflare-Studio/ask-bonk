@@ -176,6 +176,9 @@ log.error('startup_failed', { reason: 'missing config' });
 - GraphQL for fetching issue/PR context (avoids multiple REST calls)
 - REST for mutations (comments, reactions, PRs)
 
+### Releases
+- Ignore changes to `.github/` directories when writing release notes — those are internal workflow configs, not user-facing
+
 ### Durable Objects
 - `RepoAgent`: Tracks workflow runs per repo, posts failure comments
 - ID format: `{owner}/{repo}`

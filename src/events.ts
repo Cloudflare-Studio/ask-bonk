@@ -12,8 +12,10 @@ import {
   type ReviewCommentContext,
   type ScheduledEventContext,
   type WorkflowDispatchContext,
+  type WorkflowRunContext,
   type ScheduleEventPayload,
   type WorkflowDispatchPayload,
+  type WorkflowRunPayload,
 } from "./types";
 import { log } from "./log";
 
@@ -325,5 +327,39 @@ export function parseWorkflowDispatchEvent(
     sender: payload.sender.login,
     inputs: payload.inputs ?? {},
     workflow: payload.workflow ?? null,
+  };
+}
+
+// Conclusions that warrant failure handling. We allowlist rather than denylist
+// to avoid false positives from conclusions like "neutral" or "stale".
+const FAILURE_CONCLUSIONS = new Set([
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+]);
+
+// Parse workflow_run.completed events for failed Bonk workflows.
+// Returns null for non-completed events, successful runs, or non-Bonk workflows.
+export function parseWorkflowRunEvent(
+  payload: WorkflowRunPayload,
+): WorkflowRunContext | null {
+  if (payload.action !== "completed") return null;
+
+  const run = payload.workflow_run;
+  if (!run || !payload.repository) return null;
+
+  if (!run.conclusion || !FAILURE_CONCLUSIONS.has(run.conclusion)) return null;
+
+  return {
+    owner: payload.repository.owner.login,
+    repo: payload.repository.name,
+    runId: run.id,
+    conclusion: run.conclusion,
+    workflowName: run.name,
+    workflowPath: run.path,
+    runUrl: run.html_url,
+    triggerEvent: run.event,
+    isPrivate: payload.repository.private,
   };
 }

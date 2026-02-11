@@ -8,6 +8,7 @@ import {
   parseScheduleEvent,
   parseIssuesEvent,
   parseWorkflowDispatchEvent,
+  parseWorkflowRunEvent,
   getModel,
   formatResponse,
   generateBranchName,
@@ -15,6 +16,7 @@ import {
 import type {
   ScheduleEventPayload,
   WorkflowDispatchPayload,
+  WorkflowRunPayload,
 } from "../src/types";
 import type { IssuesEvent } from "@octokit/webhooks-types";
 import { extractRepoFromClaims } from "../src/oidc";
@@ -741,6 +743,91 @@ describe("PAT Exchange Security", () => {
     if (result.isErr()) {
       expect(result.error.message).not.toContain("expected a GitHub PAT");
     }
+  });
+});
+
+describe("Workflow Run Event Parsing", () => {
+  const validPayload: WorkflowRunPayload = {
+    action: "completed",
+    workflow_run: {
+      id: 12345,
+      name: "Bonk",
+      path: ".github/workflows/bonk.yml",
+      status: "completed",
+      conclusion: "failure",
+      html_url: "https://github.com/test-owner/test-repo/actions/runs/12345",
+      event: "issue_comment",
+      head_branch: "main",
+    },
+    repository: {
+      owner: { login: "test-owner" },
+      name: "test-repo",
+      full_name: "test-owner/test-repo",
+      private: false,
+    },
+    sender: { login: "testuser" },
+  };
+
+  it("parses valid failure event", () => {
+    const result = parseWorkflowRunEvent(validPayload);
+
+    expect(result).not.toBeNull();
+    expect(result?.owner).toBe("test-owner");
+    expect(result?.repo).toBe("test-repo");
+    expect(result?.runId).toBe(12345);
+    expect(result?.conclusion).toBe("failure");
+    expect(result?.workflowName).toBe("Bonk");
+    expect(result?.workflowPath).toBe(".github/workflows/bonk.yml");
+    expect(result?.triggerEvent).toBe("issue_comment");
+  });
+
+  it("returns null for non-completed action", () => {
+    const payload = { ...validPayload, action: "requested" };
+    expect(parseWorkflowRunEvent(payload)).toBeNull();
+  });
+
+  it("returns null for successful conclusion", () => {
+    const payload = {
+      ...validPayload,
+      workflow_run: { ...validPayload.workflow_run, conclusion: "success" },
+    };
+    expect(parseWorkflowRunEvent(payload)).toBeNull();
+  });
+
+  it("returns null for skipped conclusion", () => {
+    const payload = {
+      ...validPayload,
+      workflow_run: { ...validPayload.workflow_run, conclusion: "skipped" },
+    };
+    expect(parseWorkflowRunEvent(payload)).toBeNull();
+  });
+
+  it("returns null for neutral conclusion (not in allowlist)", () => {
+    const payload = {
+      ...validPayload,
+      workflow_run: { ...validPayload.workflow_run, conclusion: "neutral" },
+    };
+    expect(parseWorkflowRunEvent(payload)).toBeNull();
+  });
+
+  it("parses cancelled conclusion", () => {
+    const payload = {
+      ...validPayload,
+      workflow_run: { ...validPayload.workflow_run, conclusion: "cancelled" },
+    };
+    const result = parseWorkflowRunEvent(payload);
+    expect(result).not.toBeNull();
+    expect(result?.conclusion).toBe("cancelled");
+  });
+
+  it("parses timed_out conclusion", () => {
+    const payload = {
+      ...validPayload,
+      workflow_run: { ...validPayload.workflow_run, conclusion: "timed_out" },
+    };
+    const result = parseWorkflowRunEvent(payload);
+    expect(result).not.toBeNull();
+    expect(result?.conclusion).toBe("timed_out");
   });
 });
 

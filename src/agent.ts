@@ -1,7 +1,13 @@
 import { Agent } from "agents";
 import type { Env } from "./types";
-import { createComment, getWorkflowRunStatus } from "./github";
+import {
+  createComment,
+  createReaction,
+  getWorkflowRunStatus,
+  type ReactionTarget,
+} from "./github";
 import { createLogger, type Logger } from "./log";
+import { emitMetric } from "./metrics";
 import {
   createOctokitForRepo,
   type InstallationSource,
@@ -17,16 +23,31 @@ export interface CheckStatusPayload {
   runUrl: string;
   issueNumber: number;
   createdAt: number;
+  // Reaction target for failure feedback on the original triggering comment
+  reactionTargetId?: number;
+  reactionTargetType?: ReactionTarget;
 }
+
+// TTL for recently finalized runs (1 hour). Entries older than this are pruned
+// when new runs are finalized or workflow_run webhooks arrive.
+const RECENTLY_FINALIZED_TTL_MS = 60 * 60 * 1000;
 
 interface RepoAgentState {
   installationId: number;
   installationSource?: InstallationSource;
   // Active workflow runs being tracked, keyed by run ID
   activeRuns: Record<number, CheckStatusPayload>;
+  // Recently finalized run IDs with timestamps, used to distinguish
+  // "already handled" from "never tracked" in workflow_run webhooks
+  recentlyFinalizedRuns?: Record<number, number>;
 }
 
 // Tracks workflow runs per repo. ID format: "{owner}/{repo}"
+//
+// Three finalization paths (in order of preference):
+// 1. Action calls PUT /api/github/track -> finalizeRun()
+// 2. Polling safety net -> checkWorkflowStatus() detects completion/timeout
+// 3. workflow_run webhook -> handleWorkflowRunCompleted() catches missed runs
 export class RepoAgent extends Agent<Env, RepoAgentState> {
   initialState: RepoAgentState = { installationId: 0, activeRuns: {} };
 
@@ -79,10 +100,24 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     return octokit;
   }
 
+  // Removes a run from activeRuns and records it in recentlyFinalizedRuns.
+  // Called from all three finalization paths (action-driven, polling, timeout).
+  private removeAndRecordRun(runId: number): void {
+    const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
+    const recentlyFinalized = this.pruneRecentlyFinalized();
+    recentlyFinalized[runId] = Date.now();
+    this.setState({
+      ...this.state,
+      activeRuns: remainingRuns,
+      recentlyFinalizedRuns: recentlyFinalized,
+    });
+  }
+
   async trackRun(
     runId: number,
     runUrl: string,
     issueNumber: number,
+    reactionTarget?: { id: number; type: ReactionTarget },
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
     log.info("run_tracking_started", { run_url: runUrl });
@@ -92,6 +127,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       runUrl,
       issueNumber,
       createdAt: Date.now(),
+      reactionTargetId: reactionTarget?.id,
+      reactionTargetType: reactionTarget?.type,
     };
 
     // Store in activeRuns state
@@ -120,13 +157,11 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       return;
     }
 
-    // Remove from activeRuns (this effectively "cancels" the polling)
-    const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
-    this.setState({ ...this.state, activeRuns: remainingRuns });
+    this.removeAndRecordRun(runId);
 
-    // Post failure comment if needed
+    // Post failure comment + reaction if needed
     if (status !== "success" && status !== "skipped") {
-      await this.postFailureComment(runId, run.runUrl, run.issueNumber, status);
+      await this.postFailureComment(runId, run.runUrl, run.issueNumber, status, run);
     } else {
       log.info("run_completed_no_comment", { status });
     }
@@ -150,10 +185,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         elapsed_ms: elapsed,
         max_tracking_ms: MAX_WORKFLOW_TRACKING_MS,
       });
-      // Remove from activeRuns
-      const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
-      this.setState({ ...this.state, activeRuns: remainingRuns });
-      await this.postFailureComment(runId, runUrl, issueNumber, "timeout");
+      this.removeAndRecordRun(runId);
+      await this.postFailureComment(runId, runUrl, issueNumber, "timeout", payload);
       return;
     }
 
@@ -184,9 +217,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       });
 
       if (status.status === "completed") {
-        // Remove from activeRuns
-        const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
-        this.setState({ ...this.state, activeRuns: remainingRuns });
+        this.removeAndRecordRun(runId);
 
         // On success, OpenCode posts the response - we stay silent
         if (status.conclusion !== "success") {
@@ -195,6 +226,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
             runUrl,
             issueNumber,
             status.conclusion,
+            payload,
           );
         } else {
           log.info("run_succeeded");
@@ -216,6 +248,54 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
   }
 
+  // Handle a workflow_run.completed webhook. This is the safety net for runs
+  // that were tracked but never finalized (network failure, etc.) and for runs
+  // that were never tracked at all (OIDC failure before track step).
+  async handleWorkflowRunCompleted(
+    runId: number,
+    conclusion: string | null,
+    runUrl: string,
+  ): Promise<void> {
+    const log = this.logger(runId);
+
+    // Run is still active -- finalize it now (the action's finalize call never arrived)
+    if (this.state.activeRuns[runId]) {
+      log.warn("run_finalized_by_workflow_webhook", { conclusion });
+      await this.finalizeRun(runId, conclusion ?? "failure");
+      return;
+    }
+
+    // Run was already finalized through the normal path -- nothing to do
+    if (this.state.recentlyFinalizedRuns?.[runId]) {
+      log.info("workflow_run_already_finalized");
+      return;
+    }
+
+    // Run was never tracked (e.g., OIDC failure before track step).
+    // We don't have the issue number, so we can only emit a metric.
+    // Uses "finalize" eventType (not "failure_comment") since no comment was posted.
+    log.warn("run_untracked_failure", { conclusion, run_url: runUrl });
+    emitMetric(this.env, {
+      repo: `${this.owner}/${this.repo}`,
+      eventType: "finalize",
+      status: "failure",
+      errorCode: `untracked: ${conclusion ?? "unknown"}`,
+      runId,
+    });
+  }
+
+  private pruneRecentlyFinalized(): Record<number, number> {
+    const now = Date.now();
+    const entries = this.state.recentlyFinalizedRuns ?? {};
+    const pruned: Record<number, number> = {};
+    for (const [id, ts] of Object.entries(entries)) {
+      if (now - ts < RECENTLY_FINALIZED_TTL_MS) {
+        pruned[Number(id)] = ts;
+      }
+    }
+    return pruned;
+  }
+
   private getFailureMessage(conclusion: string | null): string {
     switch (conclusion) {
       case "timeout":
@@ -234,6 +314,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     runUrl: string,
     issueNumber: number,
     conclusion: string | null,
+    run?: CheckStatusPayload,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
 
@@ -243,8 +324,35 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       const octokit = await this.getOctokit();
       await createComment(octokit, this.owner, this.repo, issueNumber, body);
       log.info("failure_comment_posted", { conclusion });
+
+      // Add a confused reaction on the original triggering comment.
+      // createReaction() silently catches errors, so this won't throw.
+      if (run?.reactionTargetId && run?.reactionTargetType) {
+        await createReaction(
+          octokit,
+          this.owner,
+          this.repo,
+          run.reactionTargetId,
+          "confused",
+          run.reactionTargetType,
+        );
+        log.info("failure_reaction_added", {
+          target_type: run.reactionTargetType,
+          target_id: run.reactionTargetId,
+        });
+      }
     } catch (error) {
       log.errorWithException("failure_comment_failed", error, { conclusion });
     }
+
+    // Emit failure metric to WAE so /stats/errors captures workflow failures
+    emitMetric(this.env, {
+      repo: `${this.owner}/${this.repo}`,
+      eventType: "failure_comment",
+      status: "failure",
+      errorCode: conclusion ?? "unknown",
+      issueNumber,
+      runId,
+    });
   }
 }

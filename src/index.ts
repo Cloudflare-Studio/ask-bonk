@@ -22,7 +22,11 @@ import {
   deleteInstallation,
   type ReactionTarget,
 } from "./github";
-import type { ScheduleEventPayload, WorkflowDispatchPayload } from "./types";
+import type {
+  ScheduleEventPayload,
+  WorkflowDispatchPayload,
+  WorkflowRunPayload,
+} from "./types";
 import {
   parseIssueCommentEvent,
   parseIssuesEvent,
@@ -31,6 +35,7 @@ import {
   parsePullRequestEvent,
   parseScheduleEvent,
   parseWorkflowDispatchEvent,
+  parseWorkflowRunEvent,
 } from "./events";
 import { ensureWorkflowFile } from "./workflow";
 import {
@@ -77,7 +82,7 @@ const USER_EVENTS = [
   "pull_request",
   "issues",
 ] as const;
-const REPO_EVENTS = ["schedule", "workflow_dispatch"] as const;
+const REPO_EVENTS = ["schedule", "workflow_dispatch", "workflow_run"] as const;
 const META_EVENTS = ["installation"] as const;
 const SUPPORTED_EVENTS = [
   ...USER_EVENTS,
@@ -135,7 +140,7 @@ stats.get("/errors", async (c) => {
     const data = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
     if (c.req.query("format") === "json") return c.json({ data });
     return c.text(
-      renderBarChart(data, "Errors by repo (last 24h)", "repo", "error_count"),
+      renderBarChart(data, "Failures by repo (last 24h)", "repo", "error_count"),
     );
   } catch (error) {
     log.errorWithException("errors_query_failed", error);
@@ -552,7 +557,14 @@ apiGithub.post("/track", async (c) => {
       `${body.owner}/${body.repo}`,
     );
     await agent.setInstallationId(installationId, installationSource);
-    await agent.trackRun(body.run_id, body.run_url, body.issue_number);
+    await agent.trackRun(
+      body.run_id,
+      body.run_url,
+      body.issue_number,
+      reactionTarget
+        ? { id: reactionTarget.targetId, type: reactionTarget.targetType }
+        : undefined,
+    );
 
     trackLog.info("track_completed", {
       installation_id: installationId,
@@ -871,12 +883,12 @@ async function handleUserEvent(
   }
 }
 
-// Repo-driven events: schedule, workflow_dispatch
-// Just logs - processed by the GitHub Action directly
+// Repo-driven events: schedule, workflow_dispatch, workflow_run
+// schedule/workflow_dispatch just log. workflow_run is a safety net for failure detection.
 async function handleRepoEvent(
   eventName: string,
   payload: unknown,
-  _env: Env,
+  env: Env,
 ): Promise<void> {
   switch (eventName) {
     case "schedule":
@@ -884,6 +896,9 @@ async function handleRepoEvent(
       break;
     case "workflow_dispatch":
       await handleWorkflowDispatchEvent(payload as WorkflowDispatchPayload);
+      break;
+    case "workflow_run":
+      await handleWorkflowRunEvent(payload as WorkflowRunPayload, env);
       break;
   }
 }
@@ -1031,4 +1046,66 @@ async function handleWorkflowDispatchEvent(
     repo: parsed.repo,
     actor: parsed.sender,
   }).info("workflow_dispatch_received");
+}
+
+// Safety net for failed Bonk workflow runs. Catches two cases:
+// 1. Runs that were tracked but never finalized (network failure in finalize step)
+// 2. Runs that were never tracked at all (OIDC failure before track step)
+//
+// NOTE: Requires "workflow_run" to be enabled in the GitHub App webhook event
+// subscriptions (github.com > Developer Settings > GitHub Apps > Permissions & events).
+// Without it, this handler never executes and Scenario B (pre-track failures) stays invisible.
+async function handleWorkflowRunEvent(
+  payload: WorkflowRunPayload,
+  env: Env,
+): Promise<void> {
+  const parsed = parseWorkflowRunEvent(payload);
+  if (!parsed) return;
+
+  // Only process Bonk workflows -- ignore other workflows in the same repo.
+  // Match on the workflow file path (e.g. ".github/workflows/bonk.yml") rather
+  // than the display name, since users can customize the name but standard Bonk
+  // filenames all start with "bonk" (bonk.yml, bonk-scheduled.yml, etc.).
+  const filename = parsed.workflowPath.split("/").pop()?.toLowerCase() ?? "";
+  if (!filename.startsWith("bonk")) {
+    return;
+  }
+
+  const runLog = createLogger({
+    owner: parsed.owner,
+    repo: parsed.repo,
+    run_id: parsed.runId,
+  });
+  runLog.info("workflow_run_received", {
+    conclusion: parsed.conclusion,
+    trigger_event: parsed.triggerEvent,
+    workflow_path: parsed.workflowPath,
+    run_url: parsed.runUrl,
+  });
+
+  try {
+    const agent = await getAgentByName<Env, RepoAgent>(
+      env.REPO_AGENT,
+      `${parsed.owner}/${parsed.repo}`,
+    );
+    await agent.handleWorkflowRunCompleted(
+      parsed.runId,
+      parsed.conclusion,
+      parsed.runUrl,
+    );
+  } catch (error) {
+    // Only emit a metric when the handler itself fails. The agent emits
+    // its own metrics for tracked/untracked failures internally.
+    runLog.errorWithException("workflow_run_handler_failed", error);
+    emitMetric(env, {
+      repo: `${parsed.owner}/${parsed.repo}`,
+      eventType: "webhook",
+      eventSubtype: "workflow_run",
+      status: "error",
+      errorCode:
+        error instanceof Error ? error.message.slice(0, 100) : "unknown",
+      runId: parsed.runId,
+      isPrivate: parsed.isPrivate,
+    });
+  }
 }

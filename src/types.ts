@@ -235,6 +235,43 @@ export interface WorkflowDispatchPayload {
   workflow?: string;
 }
 
+// GitHub workflow_run event payload structure (minimal type: only fields we use)
+export interface WorkflowRunPayload {
+  action: string;
+  workflow_run: {
+    id: number;
+    name: string;
+    // Workflow file path relative to repo root, e.g. ".github/workflows/bonk.yml"
+    path: string;
+    status: string;
+    conclusion: string | null;
+    html_url: string;
+    event: string;
+    head_branch: string;
+  };
+  repository: {
+    owner: { login: string };
+    name: string;
+    full_name: string;
+    private: boolean;
+  };
+  sender: { login: string };
+}
+
+// Parsed context from a workflow_run webhook event
+export interface WorkflowRunContext {
+  owner: string;
+  repo: string;
+  runId: number;
+  conclusion: string | null;
+  workflowName: string;
+  // Workflow file path, e.g. ".github/workflows/bonk.yml"
+  workflowPath: string;
+  runUrl: string;
+  triggerEvent: string;
+  isPrivate: boolean;
+}
+
 // Request to start tracking a workflow run (POST /api/github/track)
 export interface TrackWorkflowRequest {
   owner: string;

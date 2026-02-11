@@ -47,7 +47,7 @@ export function getReviewCommentContext(
 }
 
 // A null/missing head repo (deleted fork) is treated as a fork.
-function detectFork(
+export function detectFork(
   headRepoFullName: string | undefined | null,
   baseRepoFullName: string | undefined | null,
 ): boolean {

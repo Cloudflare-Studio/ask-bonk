@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractPrompt,
+  detectFork,
   parseIssueCommentEvent,
   parsePRReviewCommentEvent,
   parsePRReviewEvent,
@@ -13,17 +14,21 @@ import {
   formatResponse,
   generateBranchName,
 } from "../src/events";
+import {
+  extractRepoFromClaims,
+  handleExchangeTokenForRepo,
+  handleExchangeTokenWithPAT,
+} from "../src/oidc";
+import { sanitizeSecrets } from "../src/log";
+import type { Env } from "../src/types";
 import type {
   ScheduleEventPayload,
   WorkflowDispatchPayload,
   WorkflowRunPayload,
 } from "../src/types";
-import type { IssuesEvent } from "@octokit/webhooks-types";
-import { extractRepoFromClaims } from "../src/oidc";
-import { sanitizeSecrets } from "../src/log";
-import type { Env } from "../src/types";
 import type {
   IssueCommentEvent,
+  IssuesEvent,
   PullRequestEvent,
   PullRequestReviewCommentEvent,
   PullRequestReviewEvent,
@@ -33,27 +38,82 @@ import type {
 import issueCommentFixture from "./fixtures/issue-comment.json";
 import prReviewCommentFixture from "./fixtures/pr-review-comment.json";
 
-// Helper to create mock Env with optional overrides - avoids duplicating the full object
+// Proxy-based mock Env that throws on unexpected property access.
+// Ensures tests only touch properties they explicitly provide, preventing
+// silent undefined returns from missing stubs.
 function createMockEnv(overrides: Partial<Env> = {}): Env {
-  return {
-    Sandbox: {} as Env["Sandbox"],
-    REPO_AGENT: {} as Env["REPO_AGENT"],
+  const values: Record<string, unknown> = {
     APP_INSTALLATIONS: {
       get: async () => null,
       put: async () => {},
-    } as unknown as Env["APP_INSTALLATIONS"],
-    RATE_LIMITER: {} as Env["RATE_LIMITER"],
-    BONK_EVENTS: {} as Env["BONK_EVENTS"],
+    },
     GITHUB_APP_ID: "123",
     GITHUB_APP_PRIVATE_KEY: "test-key",
     GITHUB_WEBHOOK_SECRET: "test-secret",
     OPENCODE_API_KEY: "test-api-key",
     DEFAULT_MODEL: "anthropic/claude-opus-4-5",
+    ALLOWED_ORGS: [],
     ...overrides,
   };
+
+  return new Proxy(values as unknown as Env, {
+    get(target, prop, receiver) {
+      if (typeof prop === "symbol" || prop === "toJSON") {
+        return Reflect.get(target, prop, receiver);
+      }
+      if (prop in target) {
+        return Reflect.get(target, prop, receiver);
+      }
+      // Optional Env fields (marked with `?` in the Env interface) don't need stubs
+      if (
+        prop === "ASK_SECRET" ||
+        prop === "CLOUDFLARE_ACCOUNT_ID" ||
+        prop === "ANALYTICS_TOKEN" ||
+        prop === "ENABLE_PAT_EXCHANGE"
+      ) {
+        return undefined;
+      }
+      throw new Error(
+        `Mock Env: unexpected property access "${String(prop)}". Add it to createMockEnv overrides.`,
+      );
+    },
+  });
 }
 
-const mockEnv = createMockEnv();
+// ---------------------------------------------------------------------------
+// Fork Detection (tested once, directly against the exported helper)
+// ---------------------------------------------------------------------------
+
+describe("Fork Detection", () => {
+  it.each([
+    {
+      head: "forked-owner/repo",
+      base: "owner/repo",
+      expected: true,
+      label: "different full_name",
+    },
+    {
+      head: "owner/repo",
+      base: "owner/repo",
+      expected: false,
+      label: "same full_name",
+    },
+    { head: null, base: "owner/repo", expected: true, label: "null head repo" },
+    {
+      head: undefined,
+      base: "owner/repo",
+      expected: true,
+      label: "undefined head repo",
+    },
+    { head: "", base: "owner/repo", expected: true, label: "empty head repo" },
+  ])("$label → $expected", ({ head, base, expected }) => {
+    expect(detectFork(head, base)).toBe(expected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt Extraction
+// ---------------------------------------------------------------------------
 
 describe("Prompt Extraction", () => {
   it("extracts full prompt", () => {
@@ -61,9 +121,7 @@ describe("Prompt Extraction", () => {
     expect(prompt).toBe("@ask-bonk fix the type error");
   });
 
-  it("returns prompt as-is without special handling for bare mention", () => {
-    // Note: extractPrompt no longer has special handling for bare mentions
-    // The action handles mentions; this just extracts the prompt
+  it("returns prompt as-is for bare mention", () => {
     const prompt = extractPrompt("@ask-bonk");
     expect(prompt).toBe("@ask-bonk");
   });
@@ -83,6 +141,10 @@ describe("Prompt Extraction", () => {
     expect(prompt).toContain("line 5");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue Comment Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("Issue Comment Event Parsing", () => {
   it("parses valid issue comment event", () => {
@@ -108,7 +170,6 @@ describe("Issue Comment Event Parsing", () => {
   });
 
   it("parses comments without mention (filtering is done by action)", () => {
-    // Note: mention filtering is now done by the GitHub Action, not the event parser
     const payload = {
       ...issueCommentFixture,
       comment: {
@@ -119,11 +180,14 @@ describe("Issue Comment Event Parsing", () => {
     const result = parseIssueCommentEvent(
       payload as unknown as IssueCommentEvent,
     );
-    // Should parse - action will filter based on mentions
     expect(result).not.toBeNull();
     expect(result?.prompt).toBe("just a regular comment");
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR Review Comment Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("PR Review Comment Event Parsing", () => {
   it("parses valid PR review comment event", () => {
@@ -141,7 +205,7 @@ describe("PR Review Comment Event Parsing", () => {
     expect(result?.reviewContext.line).toBe(42);
   });
 
-  it("sets isFork true for fork PRs instead of dropping them", () => {
+  it("wires fork detection through to context", () => {
     const forkPayload = {
       ...prReviewCommentFixture,
       pull_request: {
@@ -155,20 +219,16 @@ describe("PR Review Comment Event Parsing", () => {
     const result = parsePRReviewCommentEvent(
       forkPayload as unknown as PullRequestReviewCommentEvent,
     );
-    expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
-    expect(result?.context.isPullRequest).toBe(true);
-  });
 
-  it("sets isFork false for same-repo PRs", () => {
-    const result = parsePRReviewCommentEvent(
+    // Same-repo should be false
+    const sameRepo = parsePRReviewCommentEvent(
       prReviewCommentFixture as unknown as PullRequestReviewCommentEvent,
     );
-    expect(result).not.toBeNull();
-    expect(result?.context.isFork).toBe(false);
+    expect(sameRepo?.context.isFork).toBe(false);
   });
 
-  it("treats null head.repo as fork (deleted fork repo)", () => {
+  it("preserves head metadata when head.repo is null", () => {
     const payload = {
       ...prReviewCommentFixture,
       pull_request: {
@@ -182,12 +242,15 @@ describe("PR Review Comment Event Parsing", () => {
     const result = parsePRReviewCommentEvent(
       payload as unknown as PullRequestReviewCommentEvent,
     );
-    expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
     expect(result?.context.headBranch).toBe("feature-branch");
     expect(result?.context.headSha).toBe("abc123");
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR Review Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("PR Review Event Parsing", () => {
   const basePRReviewPayload = {
@@ -217,7 +280,7 @@ describe("PR Review Event Parsing", () => {
     installation: { id: 12345 },
   };
 
-  it("sets isFork true for fork PRs", () => {
+  it("wires fork detection through to context", () => {
     const forkPayload = {
       ...basePRReviewPayload,
       pull_request: {
@@ -231,19 +294,15 @@ describe("PR Review Event Parsing", () => {
     const result = parsePRReviewEvent(
       forkPayload as unknown as PullRequestReviewEvent,
     );
-    expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
-  });
 
-  it("sets isFork false for same-repo PRs", () => {
-    const result = parsePRReviewEvent(
+    const sameRepo = parsePRReviewEvent(
       basePRReviewPayload as unknown as PullRequestReviewEvent,
     );
-    expect(result).not.toBeNull();
-    expect(result?.context.isFork).toBe(false);
+    expect(sameRepo?.context.isFork).toBe(false);
   });
 
-  it("treats null head.repo as fork (deleted fork repo)", () => {
+  it("preserves head metadata when head.repo is null", () => {
     const payload = {
       ...basePRReviewPayload,
       pull_request: {
@@ -257,27 +316,56 @@ describe("PR Review Event Parsing", () => {
     const result = parsePRReviewEvent(
       payload as unknown as PullRequestReviewEvent,
     );
-    expect(result).not.toBeNull();
     expect(result?.context.isFork).toBe(true);
     expect(result?.context.headBranch).toBe("feature-branch");
     expect(result?.context.headSha).toBe("abc123");
   });
 });
 
+// ---------------------------------------------------------------------------
+// Model Configuration (table-driven)
+// ---------------------------------------------------------------------------
+
 describe("Model Configuration", () => {
-  it("returns default model when DEFAULT_MODEL set", () => {
-    const model = getModel(mockEnv);
-    expect(model.providerID).toBe("anthropic");
-    expect(model.modelID).toBe("claude-opus-4-5");
+  it.each([
+    {
+      input: "anthropic/claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    },
+    {
+      input: "opencode/claude-3-5-sonnet-v2",
+      provider: "opencode",
+      model: "claude-3-5-sonnet-v2",
+    },
+    {
+      input: "google/gemini-2.5-pro",
+      provider: "google",
+      model: "gemini-2.5-pro",
+    },
+  ])("parses $input → $provider/$model", ({ input, provider, model }) => {
+    const env = createMockEnv({ DEFAULT_MODEL: input });
+    const result = getModel(env);
+    expect(result.providerID).toBe(provider);
+    expect(result.modelID).toBe(model);
   });
 
   it("returns hardcoded default when no DEFAULT_MODEL", () => {
-    const envWithoutDefault = { ...mockEnv, DEFAULT_MODEL: undefined };
-    const model = getModel(envWithoutDefault);
-    expect(model.providerID).toBe("opencode");
-    expect(model.modelID).toBe("claude-opus-4-5");
+    const env = createMockEnv({ DEFAULT_MODEL: undefined as unknown as string });
+    const result = getModel(env);
+    expect(result.providerID).toBe("opencode");
+    expect(result.modelID).toBe("claude-opus-4-5");
+  });
+
+  it("throws on invalid model format without slash", () => {
+    const env = createMockEnv({ DEFAULT_MODEL: "invalid-model" });
+    expect(() => getModel(env)).toThrow("Invalid model");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Response Formatting
+// ---------------------------------------------------------------------------
 
 describe("Response Formatting", () => {
   it("formats basic response", () => {
@@ -314,6 +402,10 @@ describe("Response Formatting", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Branch Name Generation
+// ---------------------------------------------------------------------------
+
 describe("Branch Name Generation", () => {
   it("generates issue branch name", () => {
     const branch = generateBranchName("issue", 42);
@@ -325,6 +417,10 @@ describe("Branch Name Generation", () => {
     expect(branch).toMatch(/^bonk\/pr99-\d{14}$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Schedule Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("Schedule Event Parsing", () => {
   const validSchedulePayload: ScheduleEventPayload = {
@@ -364,6 +460,10 @@ describe("Schedule Event Parsing", () => {
     expect(result?.workflow).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issues Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("Issues Event Parsing", () => {
   const baseIssuesPayload = {
@@ -411,7 +511,7 @@ describe("Issues Event Parsing", () => {
     const result = parseIssuesEvent(payload);
     expect(result).not.toBeNull();
     expect(result?.issueBody).toBe("Updated issue content");
-    expect(result?.context.actor).toBe("testuser"); // uses sender.login for edited
+    expect(result?.context.actor).toBe("testuser");
   });
 
   it("rejects unsupported issue actions", () => {
@@ -425,8 +525,11 @@ describe("Issues Event Parsing", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Pull Request Event Parsing
+// ---------------------------------------------------------------------------
+
 describe("Pull Request Event Parsing", () => {
-  // Plain object — cast to PullRequestEvent at the call boundary.
   const basePRData = {
     action: "opened",
     pull_request: {
@@ -473,8 +576,8 @@ describe("Pull Request Event Parsing", () => {
     expect(result.context.issueNumber).toBe(55);
   });
 
-  it("sets isFork true for fork PRs", () => {
-    const result = parse({
+  it("wires fork detection through to context", () => {
+    const fork = parse({
       ...basePRData,
       pull_request: {
         ...basePRData.pull_request,
@@ -484,15 +587,13 @@ describe("Pull Request Event Parsing", () => {
         },
       },
     });
-    expect(result.context.isFork).toBe(true);
+    expect(fork.context.isFork).toBe(true);
+
+    const sameRepo = parse(basePRData);
+    expect(sameRepo.context.isFork).toBe(false);
   });
 
-  it("sets isFork false for same-repo PRs", () => {
-    const result = parse(basePRData);
-    expect(result.context.isFork).toBe(false);
-  });
-
-  it("treats null head.repo as fork (deleted fork repo)", () => {
+  it("preserves head metadata when head.repo is null", () => {
     const result = parse({
       ...basePRData,
       pull_request: {
@@ -508,6 +609,10 @@ describe("Pull Request Event Parsing", () => {
     expect(result.context.headSha).toBe("abc123");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Workflow Dispatch Event Parsing
+// ---------------------------------------------------------------------------
 
 describe("Workflow Dispatch Event Parsing", () => {
   const validPayload: WorkflowDispatchPayload = {
@@ -543,22 +648,82 @@ describe("Workflow Dispatch Event Parsing", () => {
   });
 });
 
-describe("Model Parsing Edge Cases", () => {
-  it("handles model with nested slashes", () => {
-    const envWithNestedModel = {
-      ...mockEnv,
-      DEFAULT_MODEL: "opencode/claude-3-5-sonnet-v2",
-    };
-    const model = getModel(envWithNestedModel);
-    expect(model.providerID).toBe("opencode");
-    expect(model.modelID).toBe("claude-3-5-sonnet-v2");
+// ---------------------------------------------------------------------------
+// Workflow Run Event Parsing (table-driven conclusion filtering)
+// ---------------------------------------------------------------------------
+
+describe("Workflow Run Event Parsing", () => {
+  const validPayload: WorkflowRunPayload = {
+    action: "completed",
+    workflow_run: {
+      id: 12345,
+      name: "Bonk",
+      path: ".github/workflows/bonk.yml",
+      status: "completed",
+      conclusion: "failure",
+      html_url: "https://github.com/test-owner/test-repo/actions/runs/12345",
+      event: "issue_comment",
+      head_branch: "main",
+    },
+    repository: {
+      owner: { login: "test-owner" },
+      name: "test-repo",
+      full_name: "test-owner/test-repo",
+      private: false,
+    },
+    sender: { login: "testuser" },
+  };
+
+  it("parses valid failure event with all fields", () => {
+    const result = parseWorkflowRunEvent(validPayload);
+
+    expect(result).not.toBeNull();
+    expect(result?.owner).toBe("test-owner");
+    expect(result?.repo).toBe("test-repo");
+    expect(result?.runId).toBe(12345);
+    expect(result?.conclusion).toBe("failure");
+    expect(result?.workflowName).toBe("Bonk");
+    expect(result?.workflowPath).toBe(".github/workflows/bonk.yml");
+    expect(result?.triggerEvent).toBe("issue_comment");
   });
 
-  it("throws on invalid model format without slash", () => {
-    const envWithBadModel = { ...mockEnv, DEFAULT_MODEL: "invalid-model" };
-    expect(() => getModel(envWithBadModel)).toThrow("Invalid model");
+  it("returns null for non-completed action", () => {
+    const payload = { ...validPayload, action: "requested" };
+    expect(parseWorkflowRunEvent(payload)).toBeNull();
   });
+
+  // Conclusion allowlist: failure, cancelled, timed_out, action_required are parsed.
+  // Everything else returns null.
+  it.each([
+    { conclusion: "failure", parsed: true },
+    { conclusion: "cancelled", parsed: true },
+    { conclusion: "timed_out", parsed: true },
+    { conclusion: "action_required", parsed: true },
+    { conclusion: "success", parsed: false },
+    { conclusion: "skipped", parsed: false },
+    { conclusion: "neutral", parsed: false },
+    { conclusion: "stale", parsed: false },
+  ])(
+    "conclusion=$conclusion → parsed=$parsed",
+    ({ conclusion, parsed }) => {
+      const payload = {
+        ...validPayload,
+        workflow_run: { ...validPayload.workflow_run, conclusion },
+      };
+      const result = parseWorkflowRunEvent(payload);
+      if (parsed) {
+        expect(result).not.toBeNull();
+        expect(result?.conclusion).toBe(conclusion);
+      } else {
+        expect(result).toBeNull();
+      }
+    },
+  );
 });
+
+// ---------------------------------------------------------------------------
+// OIDC Claim Parsing
+// ---------------------------------------------------------------------------
 
 describe("OIDC Claim Parsing", () => {
   it("extracts owner and repo from claims", () => {
@@ -607,14 +772,15 @@ describe("OIDC Claim Parsing", () => {
   });
 });
 
-// Tests for handleExchangeTokenForRepo security controls.
-// These test the handler's validation logic by calling it with mock inputs.
-// The handler rejects requests early if validation fails, before any external API calls.
+// ---------------------------------------------------------------------------
+// Cross-Repo Token Exchange — auth header validation
+// These test early rejection before any OIDC or network calls.
+// ---------------------------------------------------------------------------
+
 describe("Cross-Repo Token Exchange Input Validation", () => {
   const testEnv = createMockEnv();
 
   it("rejects requests without Authorization header", async () => {
-    const { handleExchangeTokenForRepo } = await import("../src/oidc");
     const result = await handleExchangeTokenForRepo(testEnv, null, {
       owner: "test-org",
       repo: "test-repo",
@@ -627,61 +793,32 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
   });
 
   it("rejects requests with non-Bearer Authorization", async () => {
-    const { handleExchangeTokenForRepo } = await import("../src/oidc");
-    const result = await handleExchangeTokenForRepo(testEnv, "Basic abc123", {
-      owner: "test-org",
-      repo: "test-repo",
-    });
+    const result = await handleExchangeTokenForRepo(
+      testEnv,
+      "Basic abc123",
+      { owner: "test-org", repo: "test-repo" },
+    );
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error.message).toContain("Authorization");
     }
   });
-
-  it("rejects requests missing owner in body", async () => {
-    const { handleExchangeTokenForRepo } = await import("../src/oidc");
-    // Using a fake token - it will fail OIDC validation, but that's fine
-    // We're testing that the handler validates body params too
-    const result = await handleExchangeTokenForRepo(
-      testEnv,
-      "Bearer fake.jwt.token",
-      {
-        repo: "test-repo",
-      },
-    );
-
-    // Will fail either on OIDC validation or body validation - both are acceptable
-    expect(result.isErr()).toBe(true);
-  });
-
-  it("rejects requests missing repo in body", async () => {
-    const { handleExchangeTokenForRepo } = await import("../src/oidc");
-    const result = await handleExchangeTokenForRepo(
-      testEnv,
-      "Bearer fake.jwt.token",
-      {
-        owner: "test-org",
-      },
-    );
-
-    expect(result.isErr()).toBe(true);
-  });
 });
 
+// ---------------------------------------------------------------------------
+// PAT Exchange Security (table-driven prefix validation)
+// ---------------------------------------------------------------------------
+
 describe("PAT Exchange Security", () => {
-  const patEnvDisabled = createMockEnv(); // ENABLE_PAT_EXCHANGE not set - disabled by default
+  const patEnvDisabled = createMockEnv();
   const patEnvEnabled = createMockEnv({ ENABLE_PAT_EXCHANGE: "true" });
 
   it("rejects PAT exchange when disabled (default)", async () => {
-    const { handleExchangeTokenWithPAT } = await import("../src/oidc");
     const result = await handleExchangeTokenWithPAT(
       patEnvDisabled,
       "Bearer github_pat_test123",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
+      { owner: "test-org", repo: "test-repo" },
     );
 
     expect(result.isErr()).toBe(true);
@@ -690,184 +827,114 @@ describe("PAT Exchange Security", () => {
     }
   });
 
-  it("rejects non-PAT tokens even when enabled", async () => {
-    const { handleExchangeTokenWithPAT } = await import("../src/oidc");
+  // Token prefix validation: only github_pat_ and ghp_ are allowed.
+  // Other prefixes (ghs_, gho_, etc.) must be rejected.
+  it.each([
+    { prefix: "github_pat_", accepted: true },
+    { prefix: "ghp_", accepted: true },
+    { prefix: "ghs_", accepted: false },
+    { prefix: "gho_", accepted: false },
+    { prefix: "random_", accepted: false },
+  ])(
+    "prefix $prefix → accepted=$accepted",
+    async ({ prefix, accepted }) => {
+      const result = await handleExchangeTokenWithPAT(
+        patEnvEnabled,
+        `Bearer ${prefix}test_token_value`,
+        { owner: "test-org", repo: "test-repo" },
+      );
+
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        if (accepted) {
+          // Passed format check, failed on the GitHub API call
+          expect(result.error.message).not.toContain("expected a GitHub PAT");
+        } else {
+          expect(result.error.message).toContain("expected a GitHub PAT");
+        }
+      }
+    },
+  );
+
+  // Body validation in handleExchangeTokenWithPAT is reachable without network calls
+  // because it happens after format checks but before the GitHub API call.
+  it("rejects requests missing owner in body", async () => {
     const result = await handleExchangeTokenWithPAT(
       patEnvEnabled,
-      "Bearer ghs_servicetoken123",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
+      "Bearer github_pat_test123",
+      { repo: "test-repo" },
     );
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
-      expect(result.error.message).toContain("expected a GitHub PAT");
+      expect(result.error.message).toContain("Missing owner or repo");
     }
   });
 
-  it("accepts github_pat_ prefix when enabled", async () => {
-    const { handleExchangeTokenWithPAT } = await import("../src/oidc");
-    // This will fail at the GitHub API call, but should pass the PAT format check
+  it("rejects requests missing repo in body", async () => {
     const result = await handleExchangeTokenWithPAT(
       patEnvEnabled,
-      "Bearer github_pat_valid_format",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
+      "Bearer github_pat_test123",
+      { owner: "test-org" },
     );
 
-    // Should fail on API call, not on format validation
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
-      expect(result.error.message).not.toContain("expected a GitHub PAT");
-    }
-  });
-
-  it("accepts ghp_ prefix when enabled", async () => {
-    const { handleExchangeTokenWithPAT } = await import("../src/oidc");
-    // This will fail at the GitHub API call, but should pass the PAT format check
-    const result = await handleExchangeTokenWithPAT(
-      patEnvEnabled,
-      "Bearer ghp_valid_format",
-      {
-        owner: "test-org",
-        repo: "test-repo",
-      },
-    );
-
-    // Should fail on API call, not on format validation
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error.message).not.toContain("expected a GitHub PAT");
+      expect(result.error.message).toContain("Missing owner or repo");
     }
   });
 });
 
-describe("Workflow Run Event Parsing", () => {
-  const validPayload: WorkflowRunPayload = {
-    action: "completed",
-    workflow_run: {
-      id: 12345,
-      name: "Bonk",
-      path: ".github/workflows/bonk.yml",
-      status: "completed",
-      conclusion: "failure",
-      html_url: "https://github.com/test-owner/test-repo/actions/runs/12345",
-      event: "issue_comment",
-      head_branch: "main",
-    },
-    repository: {
-      owner: { login: "test-owner" },
-      name: "test-repo",
-      full_name: "test-owner/test-repo",
-      private: false,
-    },
-    sender: { login: "testuser" },
-  };
-
-  it("parses valid failure event", () => {
-    const result = parseWorkflowRunEvent(validPayload);
-
-    expect(result).not.toBeNull();
-    expect(result?.owner).toBe("test-owner");
-    expect(result?.repo).toBe("test-repo");
-    expect(result?.runId).toBe(12345);
-    expect(result?.conclusion).toBe("failure");
-    expect(result?.workflowName).toBe("Bonk");
-    expect(result?.workflowPath).toBe(".github/workflows/bonk.yml");
-    expect(result?.triggerEvent).toBe("issue_comment");
-  });
-
-  it("returns null for non-completed action", () => {
-    const payload = { ...validPayload, action: "requested" };
-    expect(parseWorkflowRunEvent(payload)).toBeNull();
-  });
-
-  it("returns null for successful conclusion", () => {
-    const payload = {
-      ...validPayload,
-      workflow_run: { ...validPayload.workflow_run, conclusion: "success" },
-    };
-    expect(parseWorkflowRunEvent(payload)).toBeNull();
-  });
-
-  it("returns null for skipped conclusion", () => {
-    const payload = {
-      ...validPayload,
-      workflow_run: { ...validPayload.workflow_run, conclusion: "skipped" },
-    };
-    expect(parseWorkflowRunEvent(payload)).toBeNull();
-  });
-
-  it("returns null for neutral conclusion (not in allowlist)", () => {
-    const payload = {
-      ...validPayload,
-      workflow_run: { ...validPayload.workflow_run, conclusion: "neutral" },
-    };
-    expect(parseWorkflowRunEvent(payload)).toBeNull();
-  });
-
-  it("parses cancelled conclusion", () => {
-    const payload = {
-      ...validPayload,
-      workflow_run: { ...validPayload.workflow_run, conclusion: "cancelled" },
-    };
-    const result = parseWorkflowRunEvent(payload);
-    expect(result).not.toBeNull();
-    expect(result?.conclusion).toBe("cancelled");
-  });
-
-  it("parses timed_out conclusion", () => {
-    const payload = {
-      ...validPayload,
-      workflow_run: { ...validPayload.workflow_run, conclusion: "timed_out" },
-    };
-    const result = parseWorkflowRunEvent(payload);
-    expect(result).not.toBeNull();
-    expect(result?.conclusion).toBe("timed_out");
-  });
-});
+// ---------------------------------------------------------------------------
+// Logging Security (table-driven)
+// ---------------------------------------------------------------------------
 
 describe("Logging Security", () => {
-  it("redacts tokens in HTTPS URLs", () => {
-    const url =
-      "https://x-access-token:ghp_secret123@github.com/owner/repo.git";
-    const sanitized = sanitizeSecrets(url);
-    expect(sanitized).toBe(
-      "https://x-access-token:[REDACTED]@github.com/owner/repo.git",
-    );
-    expect(sanitized).not.toContain("ghp_secret123");
-  });
-
-  it("redacts tokens in error messages containing URLs", () => {
-    const message =
-      "Failed to clone https://x-access-token:ghs_token456@github.com/org/repo.git: permission denied";
-    const sanitized = sanitizeSecrets(message);
-    expect(sanitized).toBe(
-      "Failed to clone https://x-access-token:[REDACTED]@github.com/org/repo.git: permission denied",
-    );
-    expect(sanitized).not.toContain("ghs_token456");
-  });
-
-  it("handles multiple URLs in the same string", () => {
-    const message =
-      "Tried https://user:pass1@example.com and https://other:pass2@example.org";
-    const sanitized = sanitizeSecrets(message);
-    expect(sanitized).not.toContain("pass1");
-    expect(sanitized).not.toContain("pass2");
-    expect(sanitized).toContain("[REDACTED]");
-  });
-
-  it("preserves strings without URLs", () => {
-    const message = "Normal error message without any URLs";
-    expect(sanitizeSecrets(message)).toBe(message);
-  });
-
-  it("preserves URLs without credentials", () => {
-    const message = "See https://github.com/owner/repo for details";
-    expect(sanitizeSecrets(message)).toBe(message);
+  it.each([
+    {
+      label: "redacts token in HTTPS URL",
+      input:
+        "https://x-access-token:ghp_secret123@github.com/owner/repo.git",
+      expected:
+        "https://x-access-token:[REDACTED]@github.com/owner/repo.git",
+      mustNotContain: ["ghp_secret123"],
+    },
+    {
+      label: "redacts token in error message with URL",
+      input:
+        "Failed to clone https://x-access-token:ghs_token456@github.com/org/repo.git: permission denied",
+      expected:
+        "Failed to clone https://x-access-token:[REDACTED]@github.com/org/repo.git: permission denied",
+      mustNotContain: ["ghs_token456"],
+    },
+    {
+      label: "redacts multiple URLs in same string",
+      input:
+        "Tried https://user:pass1@example.com and https://other:pass2@example.org",
+      expected: null, // just check mustNotContain
+      mustNotContain: ["pass1", "pass2"],
+    },
+    {
+      label: "preserves strings without URLs",
+      input: "Normal error message without any URLs",
+      expected: "Normal error message without any URLs",
+      mustNotContain: null,
+    },
+    {
+      label: "preserves URLs without credentials",
+      input: "See https://github.com/owner/repo for details",
+      expected: "See https://github.com/owner/repo for details",
+      mustNotContain: null,
+    },
+  ])("$label", ({ input, expected, mustNotContain }) => {
+    const sanitized = sanitizeSecrets(input);
+    if (expected !== null) {
+      expect(sanitized).toBe(expected);
+    }
+    if (mustNotContain !== null) {
+      for (const secret of mustNotContain) {
+        expect(sanitized).not.toContain(secret);
+      }
+    }
   });
 });

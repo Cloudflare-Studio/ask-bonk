@@ -2,6 +2,7 @@
 // Called by the GitHub Action before running OpenCode
 
 import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
+import { fetchWithRetry } from "./http";
 
 interface TrackPayload {
   owner: string;
@@ -36,7 +37,7 @@ async function main() {
   try {
     oidcToken = await getOidcToken();
   } catch (error) {
-    core.setFailed(`Failed to get OIDC token: ${error}`);
+    core.warning(`Failed to get OIDC token: ${error}`);
     return;
   }
 
@@ -79,25 +80,31 @@ async function main() {
       break;
   }
 
-  const response = await fetch(`${apiBase}/api/github/track`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${oidcToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetchWithRetry(`${apiBase}/api/github/track`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${oidcToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    core.warning(`Failed to track Bonk run: ${error}`);
+    return;
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    core.setFailed(`Failed to track Bonk run: ${text}`);
+    core.warning(`Failed to track Bonk run: ${text}`);
     return;
   }
 
   const data = (await response.json()) as TrackResponse;
 
   if (data.error) {
-    core.setFailed(`Track failed: ${data.error}`);
+    core.warning(`Track failed: ${data.error}`);
     return;
   }
 
@@ -105,5 +112,5 @@ async function main() {
 }
 
 main().catch((error) => {
-  core.setFailed(`Unexpected error: ${error}`);
+  core.warning(`Unexpected error in track: ${error}`);
 });

@@ -2,6 +2,7 @@
 // Called by the GitHub Action after OpenCode completes (with if: always())
 
 import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
+import { fetchWithRetry } from "./http";
 
 async function main() {
   const context = getContext();
@@ -20,7 +21,7 @@ async function main() {
   const apiBase = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${apiBase}/api/github/track`, {
+    const response = await fetchWithRetry(`${apiBase}/api/github/track`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${oidcToken}`,

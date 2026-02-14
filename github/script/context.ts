@@ -1,6 +1,8 @@
 // Context helper for GitHub Action scripts
 // Provides a similar interface to actions/github-script's context object
 
+import { fetchWithRetry } from "./http";
+
 export interface Repo {
   owner: string;
   repo: string;
@@ -114,7 +116,7 @@ export async function getOidcToken(audience: string = "opencode-github-action"):
     throw new Error("OIDC token request credentials not available");
   }
 
-  const response = await fetch(`${requestUrl}&audience=${audience}`, {
+  const response = await fetchWithRetry(`${requestUrl}&audience=${audience}`, {
     headers: { Authorization: `bearer ${requestToken}` },
   });
 
@@ -136,5 +138,44 @@ export function getApiBaseUrl(): string {
   if (!oidcBaseUrl) {
     throw new Error("OIDC_BASE_URL not set");
   }
-  return oidcBaseUrl.replace(/\/auth$/, "");
+  const normalized = oidcBaseUrl.replace(/\/+$/, "");
+  return normalized.replace(/\/auth$/, "");
+}
+
+// Shared fork detection from env vars and optional API fallback.
+// Returns { isFork, headSha? } or null if detection failed.
+export async function detectForkFromPR(
+  headRepo: string | undefined,
+  baseRepo: string | undefined,
+  prUrl: string | undefined,
+  ghToken: string | undefined,
+): Promise<{ isFork: boolean; headSha?: string } | null> {
+  // Deleted fork: base exists but head is missing
+  if (baseRepo && !headRepo) {
+    return { isFork: true };
+  }
+  // Both present: compare
+  if (headRepo && baseRepo) {
+    return { isFork: headRepo !== baseRepo };
+  }
+  // Fallback: fetch PR data from API
+  if (!prUrl || !ghToken) return null;
+  try {
+    const resp = await fetchWithRetry(prUrl, {
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!resp.ok) return null;
+    const pr = (await resp.json()) as {
+      head?: { repo?: { full_name?: string }; sha?: string };
+      base?: { repo?: { full_name?: string } };
+    };
+    const head = pr.head?.repo?.full_name;
+    const base = pr.base?.repo?.full_name;
+    return { isFork: !head || head !== base, headSha: pr.head?.sha };
+  } catch {
+    return null;
+  }
 }

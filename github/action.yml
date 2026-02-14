@@ -92,6 +92,8 @@ runs:
     - name: Check user permission
       if: inputs.permissions != 'any' && steps.mentions.outputs.skip != 'true'
       uses: actions/github-script@v7
+      env:
+        REQUIRED_PERMISSION: ${{ inputs.permissions }}
       with:
         script: |
           // Retry transient GitHub API errors (5xx) with exponential backoff
@@ -109,7 +111,7 @@ runs:
             }
           }
 
-          const requiredPermission = '${{ inputs.permissions }}';
+          const requiredPermission = process.env.REQUIRED_PERMISSION;
           const actor = context.actor;
 
           const { data: permissionLevel } = await withRetry(
@@ -213,11 +215,11 @@ runs:
           }
 
     - name: Setup bun
-      if: steps.mentions.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true'
       uses: oven-sh/setup-bun@v2
 
     - name: Ensure workflow exists
-      if: steps.mentions.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true'
       id: setup
       shell: bash
       env:
@@ -226,29 +228,25 @@ runs:
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
+        SETUP_GH_TOKEN: ${{ github.token }}
+        FORKS: ${{ inputs.forks }}
       run: bun run ${{ github.action_path }}/script/setup.ts
 
     - name: Get opencode version
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       id: version
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         OPENCODE_DEV: ${{ inputs.opencode_dev }}
-      run: |
-        if [ "$OPENCODE_DEV" = "true" ]; then
-          # Get latest commit SHA from dev branch
-          VERSION=$(gh api repos/sst/opencode/commits/dev --jq '.sha' 2>/dev/null | head -c 7 || echo "dev")
-          echo "version=dev-${VERSION}" >> $GITHUB_OUTPUT
-          echo "dev=true" >> $GITHUB_OUTPUT
-        else
-          VERSION=$(gh api repos/sst/opencode/releases/latest --jq '.tag_name' 2>/dev/null || echo "latest")
-          echo "version=${VERSION:-latest}" >> $GITHUB_OUTPUT
-          echo "dev=false" >> $GITHUB_OUTPUT
-        fi
+      run: bun run ${{ github.action_path }}/script/version.ts
 
     - name: Cache opencode
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.version.outputs.cacheable == 'true'
       id: cache
       uses: actions/cache@v4
       with:
@@ -256,70 +254,78 @@ runs:
         key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
 
     - name: Install opencode
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         OPENCODE_DEV: ${{ steps.version.outputs.dev }}
       run: |
+        set -euo pipefail
         if [ "$OPENCODE_DEV" = "true" ]; then
-          curl -fsSL https://opencode.ai/install | bash -s -- --dev
+          curl -fsSL --connect-timeout 5 --max-time 60 https://opencode.ai/install -o /tmp/opencode-install.sh
+          bash /tmp/opencode-install.sh --dev
         else
-          curl -fsSL https://opencode.ai/install | bash
+          curl -fsSL --connect-timeout 5 --max-time 60 https://opencode.ai/install -o /tmp/opencode-install.sh
+          bash /tmp/opencode-install.sh
         fi
 
     - name: Add opencode to PATH
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       shell: bash
       run: echo "$HOME/.opencode/bin" >> $GITHUB_PATH
 
     - name: Configure Git
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       shell: bash
       run: |
         git config --global user.name "ask-bonk[bot]"
         git config --global user.email "ask-bonk[bot]@users.noreply.github.com"
 
+    - name: Build prompt
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      id: prompt
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
+        GH_TOKEN: ${{ github.token }}
+        PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
+        USER_PROMPT: ${{ inputs.prompt }}
+        ACTION_PATH: ${{ github.action_path }}
+        FORKS: ${{ inputs.forks }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: bun run ${{ github.action_path }}/script/prompt.ts
+
     - name: Exchange OIDC token for GitHub App token
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
       id: oidc
       shell: bash
       env:
+        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
         FALLBACK_TOKEN: ${{ github.token }}
+      run: bun run ${{ github.action_path }}/script/oidc-exchange.ts
+
+    - name: Require OIDC for non-fork runs
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
+      shell: bash
       run: |
-        # Get GitHub Actions OIDC token
-        if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
-          echo "::warning::OIDC credentials not available (expected for fork PRs). Falling back to github.token."
-          echo "::add-mask::$FALLBACK_TOKEN"
-          echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
-          echo "oidc_failed=true" >> $GITHUB_OUTPUT
-          exit 0
+        # prompt.ts fails closed on fork detection failure, so if we're here,
+        # is_fork is a definitive true/false. If OIDC failed for a non-fork
+        # run, that's always a hard failure.
+        if [ "${OIDC_FAILED}" = "true" ] && [ "${IS_FORK}" != "true" ]; then
+          echo "::error::OIDC token exchange failed for non-fork run. Ensure id-token: write is configured."
+          exit 1
         fi
+      env:
+        OIDC_FAILED: ${{ steps.oidc.outputs.oidc_failed }}
+        IS_FORK: ${{ steps.prompt.outputs.is_fork }}
 
-        OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=opencode-github-action" | jq -r '.value')
-
-        # Exchange for GitHub App installation token via Bonk's OIDC endpoint
-        RESPONSE=$(curl -s -X POST "${{ inputs.oidc_base_url }}/exchange_github_app_token" \
-          -H "Authorization: Bearer $OIDC_TOKEN" \
-          -H "Content-Type: application/json")
-
-        APP_TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
-
-        if [ -z "$APP_TOKEN" ]; then
-          echo "::warning::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"'). Falling back to github.token."
-          echo "::add-mask::$FALLBACK_TOKEN"
-          echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
-          echo "oidc_failed=true" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-
-        # Mask the token in logs and export for subsequent steps
-        echo "::add-mask::$APP_TOKEN"
-        echo "GH_TOKEN=$APP_TOKEN" >> $GITHUB_ENV
-        echo "oidc_failed=false" >> $GITHUB_OUTPUT
 
     - name: Track Bonk run
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.oidc.outputs.oidc_failed != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true' && steps.oidc.outputs.oidc_failed != 'true'
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
@@ -336,31 +342,25 @@ runs:
         ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
       run: bun run ${{ github.action_path }}/script/track.ts
 
-    - name: Build prompt
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
-      id: prompt
-      shell: bash
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-        REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
-        GH_TOKEN: ${{ github.token }}
-        USER_PROMPT: ${{ inputs.prompt }}
-        ACTION_PATH: ${{ github.action_path }}
-        FORKS: ${{ inputs.forks }}
-        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      run: bun run ${{ github.action_path }}/script/prompt.ts
-
     - name: Run opencode
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
       id: opencode
       shell: bash
       run: |
         set +e
-        opencode github run
+        # Tell OpenCode to use the token directly instead of its own OIDC flow.
+        # For forks, use the runner token (read-only). For non-fork runs, the
+        # "Require OIDC" step guarantees OIDC succeeded, so GH_TOKEN is the app token.
+        # For non-fork runs, GH_TOKEN is the app token written to GITHUB_ENV by
+        # the OIDC exchange step (not declared in env: below — it's a side-channel).
+        export USE_GITHUB_TOKEN=true
+        if [ "${IS_FORK}" = "true" ]; then
+          export GITHUB_TOKEN="${RUNNER_GITHUB_TOKEN}"
+          export GH_TOKEN="${RUNNER_GITHUB_TOKEN}"
+        else
+          export GITHUB_TOKEN="${GH_TOKEN}"
+        fi
+        timeout 45m opencode github run
         EXIT_CODE=$?
         echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
         exit $EXIT_CODE
@@ -371,13 +371,11 @@ runs:
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        # When OIDC is unavailable (fork PRs), tell OpenCode to use the
-        # fallback GH_TOKEN directly instead of attempting its own OIDC flow.
-        USE_GITHUB_TOKEN: ${{ steps.oidc.outputs.oidc_failed == 'true' && 'true' || '' }}
-        GITHUB_TOKEN: ${{ steps.oidc.outputs.oidc_failed == 'true' && env.GH_TOKEN || '' }}
+        IS_FORK: ${{ steps.prompt.outputs.is_fork }}
+        RUNNER_GITHUB_TOKEN: ${{ github.token }}
 
     - name: Finalize Bonk run
-      if: always() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: always() && steps.setup.outcome == 'success' && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outcome == 'success' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

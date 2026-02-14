@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ask-bonk",
   "main": "src/index.ts",
-  "compatibility_date": "2025-12-11",
+  "compatibility_date": "2026-02-14",
   "rules": [
     {
       "type": "Text",

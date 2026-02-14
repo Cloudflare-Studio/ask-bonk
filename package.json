@@ -4,7 +4,7 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --define __VERSION__:\"\\\"$(git describe --tags --always)\\\"\" --define __COMMIT__:\"\\\"$(git rev-parse --short HEAD)\\\"\"",
     "dev": "wrangler dev",
     "test": "vitest",
     "cf-typegen": "wrangler types",

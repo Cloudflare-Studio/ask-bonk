@@ -11,6 +11,11 @@
     },
   ],
   "compatibility_flags": ["nodejs_compat"],
+  // Build-time constants replaced by esbuild. Deploy script overrides with real values.
+  "define": {
+    "__VERSION__": "\"dev\"",
+    "__COMMIT__": "\"unknown\"",
+  },
   "observability": {
     "enabled": true,
     "traces": {

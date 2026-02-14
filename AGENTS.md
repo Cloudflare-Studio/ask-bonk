@@ -32,7 +32,6 @@ GitHub code review bot built on Cloudflare Workers + Hono + TypeScript. Use `bun
 bun install              # Install dependencies
 bun run test             # Run all tests (vitest in Workers pool)
 bun run test -- src/events  # Run single test file by name
-bun run test:plugin      # Run plugin tests (Node.js, not Workers)
 bun run tsc --noEmit     # Type check
 bun run deploy           # Deploy to Cloudflare (wrangler)
 bun run dev              # Local development server
@@ -43,7 +42,6 @@ bun run format           # Format with oxfmt
 
 ### Test Notes
 - Main tests run in `@cloudflare/vitest-pool-workers` (Workers environment)
-- `test/tools/` tests use Node.js APIs (shescape, Bun.spawn) - run separately with `bun test test/tools/`
 - Config: `vitest.config.mts` (main), `test/tsconfig.json` (test-specific)
 
 ## Dependency Management

@@ -7,7 +7,6 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"test": "vitest",
-		"test:plugin": "bun test test/tools/",
 		"cf-typegen": "wrangler types",
 		"cli:build": "bun build cli/index.ts --compile --outfile cli/bonk",
 		"cli": "bun run cli/index.ts",

@@ -283,8 +283,17 @@ runs:
       if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       id: oidc
       shell: bash
+      env:
+        FALLBACK_TOKEN: ${{ github.token }}
       run: |
         # Get GitHub Actions OIDC token
+        if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          echo "::warning::OIDC credentials not available (expected for fork PRs). Falling back to github.token."
+          echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
+          echo "oidc_failed=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=opencode-github-action" | jq -r '.value')
 
@@ -296,16 +305,19 @@ runs:
         APP_TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
 
         if [ -z "$APP_TOKEN" ]; then
-          echo "::error::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"')"
-          exit 1
+          echo "::warning::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"'). Falling back to github.token."
+          echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
+          echo "oidc_failed=true" >> $GITHUB_OUTPUT
+          exit 0
         fi
 
         # Mask the token in logs and export for subsequent steps
         echo "::add-mask::$APP_TOKEN"
         echo "GH_TOKEN=$APP_TOKEN" >> $GITHUB_ENV
+        echo "oidc_failed=false" >> $GITHUB_OUTPUT
 
     - name: Track Bonk run
-      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.oidc.outputs.oidc_failed != 'true'
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

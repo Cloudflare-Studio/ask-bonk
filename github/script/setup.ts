@@ -25,8 +25,10 @@ async function main() {
   try {
     oidcToken = await getOidcToken();
   } catch (error) {
-    core.setFailed(`Failed to get OIDC token: ${error}`);
-    return; // setFailed exits, but explicit return for type safety
+    // OIDC unavailable (expected for fork PRs). Skip setup and let the action continue.
+    core.warning(`OIDC token not available, skipping setup check: ${error}`);
+    core.setOutput("skip", "false");
+    return;
   }
 
   const apiBase = getApiBaseUrl();

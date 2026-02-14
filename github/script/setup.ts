@@ -21,12 +21,20 @@ async function main() {
     return;
   }
 
+  // OIDC requires the `id-token: write` permission, which GitHub doesn't
+  // grant when a workflow needs maintainer approval (fork PRs, first-time
+  // contributors). When OIDC is unavailable, skip the setup check and let
+  // the action continue — the OIDC step in action.yml handles the fallback.
   let oidcToken: string;
   try {
     oidcToken = await getOidcToken();
   } catch (error) {
-    // OIDC unavailable (expected for fork PRs). Skip setup and let the action continue.
-    core.warning(`OIDC token not available, skipping setup check: ${error}`);
+    const oidcAvailable = !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    if (oidcAvailable) {
+      core.warning(`OIDC token exchange failed unexpectedly, skipping setup check: ${error}`);
+    } else {
+      core.warning(`OIDC not available (expected for fork PRs), skipping setup check`);
+    }
     core.setOutput("skip", "false");
     return;
   }

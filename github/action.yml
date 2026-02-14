@@ -289,6 +289,7 @@ runs:
         # Get GitHub Actions OIDC token
         if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
           echo "::warning::OIDC credentials not available (expected for fork PRs). Falling back to github.token."
+          echo "::add-mask::$FALLBACK_TOKEN"
           echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
           echo "oidc_failed=true" >> $GITHUB_OUTPUT
           exit 0
@@ -306,6 +307,7 @@ runs:
 
         if [ -z "$APP_TOKEN" ]; then
           echo "::warning::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"'). Falling back to github.token."
+          echo "::add-mask::$FALLBACK_TOKEN"
           echo "GH_TOKEN=$FALLBACK_TOKEN" >> $GITHUB_ENV
           echo "oidc_failed=true" >> $GITHUB_OUTPUT
           exit 0

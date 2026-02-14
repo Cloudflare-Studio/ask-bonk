@@ -29,6 +29,9 @@ async function main() {
     return;
   }
 
+  // This step is gated in action.yml by `steps.oidc.outputs.oidc_failed != 'true'`,
+  // so it only runs when the OIDC token was already successfully exchanged for an
+  // App token. If OIDC fails here despite that, something is genuinely wrong.
   let oidcToken: string;
   try {
     oidcToken = await getOidcToken();

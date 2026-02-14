@@ -1,6 +1,7 @@
 import { Agent } from "agents";
+import type { Octokit } from "@octokit/rest";
 import type { Env } from "./types";
-import { createComment, createReaction, getWorkflowRunStatus, type ReactionTarget } from "./github";
+import { createComment, updateComment, createReaction, getWorkflowRunStatus, type ReactionTarget } from "./github";
 import { createLogger, type Logger } from "./log";
 import { emitMetric } from "./metrics";
 import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
@@ -14,8 +15,10 @@ export interface CheckStatusPayload {
   // Reaction target for failure feedback on the original triggering comment
   reactionTargetId?: number;
   reactionTargetType?: ReactionTarget;
-  // Set to true after posting a "waiting for approval" comment to avoid duplicates
+  // Tracks the "waiting for approval" comment so we can edit it on completion
+  // instead of posting a duplicate. Also prevents retry loops on transient failures.
   waitingCommentPosted?: boolean;
+  waitingCommentId?: number;
 }
 
 // TTL for recently finalized runs (1 hour). Entries older than this are pruned
@@ -203,32 +206,33 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
         // On success, OpenCode posts the response - we stay silent
         if (status.conclusion !== "success") {
-          await this.postFailureComment(runId, runUrl, issueNumber, status.conclusion, payload);
+          await this.postFailureComment(runId, runUrl, issueNumber, status.conclusion, payload, octokit);
         } else {
           log.info("run_succeeded");
         }
       } else {
         // Detect "waiting" status (pending approval from a maintainer).
-        // Post a one-time comment so the user isn't left wondering.
+        // Post a one-time comment so the user isn't left wondering. If the run
+        // later completes, postFailureComment edits this comment in-place.
         if (status.status === "waiting" && !payload.waitingCommentPosted) {
           log.info("run_waiting_for_approval");
           try {
-            const octokit2 = await this.getOctokit();
-            await createComment(
-              octokit2,
+            const commentId = await createComment(
+              octokit,
               this.owner,
               this.repo,
               issueNumber,
               `Bonk workflow is waiting for approval from a maintainer before it can run.\n\n[Approve workflow run](${runUrl})`,
             );
-            payload = { ...payload, waitingCommentPosted: true };
-            // Update the stored payload so other finalization paths
-            // also know the comment was posted
-            const activeRuns = { ...this.state.activeRuns, [runId]: payload };
-            this.setState({ ...this.state, activeRuns });
+            payload = { ...payload, waitingCommentPosted: true, waitingCommentId: commentId };
           } catch (commentError) {
             log.errorWithException("run_waiting_comment_failed", commentError);
+            // Mark as posted even on failure to avoid a retry loop on
+            // transient API errors — the comment is best-effort.
+            payload = { ...payload, waitingCommentPosted: true };
           }
+          const activeRuns = { ...this.state.activeRuns, [runId]: payload };
+          this.setState({ ...this.state, activeRuns });
         }
 
         await this.schedule<CheckStatusPayload>(
@@ -285,18 +289,19 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
     // If we have an issue number (from pull_requests in the webhook payload),
     // post a failure comment so the user gets feedback.
+    // postFailureComment emits its own metric, so we only emit here for the
+    // no-issue-number path to avoid double-counting.
     if (issueNumber) {
       await this.postFailureComment(runId, runUrl, issueNumber, conclusion);
+    } else {
+      emitMetric(this.env, {
+        repo: `${this.owner}/${this.repo}`,
+        eventType: "finalize",
+        status: "failure",
+        errorCode: `untracked: ${conclusion ?? "unknown"}`,
+        runId,
+      });
     }
-
-    emitMetric(this.env, {
-      repo: `${this.owner}/${this.repo}`,
-      eventType: issueNumber ? "failure_comment" : "finalize",
-      status: "failure",
-      errorCode: `untracked: ${conclusion ?? "unknown"}`,
-      issueNumber,
-      runId,
-    });
   }
 
   private pruneRecentlyFinalized(): Record<number, number> {
@@ -320,7 +325,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       case "cancelled":
         return "Bonk workflow was cancelled.";
       case "action_required":
-        return "Bonk workflow requires approval from a maintainer before it can run. This typically happens for pull requests from forks or first-time contributors.";
+        return "Bonk workflow was not approved by a maintainer. This typically happens for pull requests from forks or first-time contributors.";
       default:
         return `Bonk workflow finished with status: ${conclusion ?? "unknown"}`;
     }
@@ -332,15 +337,24 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     issueNumber: number,
     conclusion: string | null,
     run?: CheckStatusPayload,
+    existingOctokit?: Octokit,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
 
     const body = `${this.getFailureMessage(conclusion)}\n\n[View workflow run](${runUrl})`;
 
     try {
-      const octokit = await this.getOctokit();
-      await createComment(octokit, this.owner, this.repo, issueNumber, body);
-      log.info("failure_comment_posted", { conclusion });
+      const octokit = existingOctokit ?? (await this.getOctokit());
+
+      // If a waiting comment was posted earlier, edit it in-place instead of
+      // creating a second near-identical comment.
+      if (run?.waitingCommentId) {
+        await updateComment(octokit, this.owner, this.repo, run.waitingCommentId, body);
+        log.info("failure_comment_updated", { conclusion, comment_id: run.waitingCommentId });
+      } else {
+        await createComment(octokit, this.owner, this.repo, issueNumber, body);
+        log.info("failure_comment_posted", { conclusion });
+      }
 
       // Add a confused reaction on the original triggering comment.
       // createReaction() silently catches errors, so this won't throw.

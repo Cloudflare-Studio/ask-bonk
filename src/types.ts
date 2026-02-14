@@ -275,7 +275,7 @@ export interface WorkflowRunContext {
   isPrivate: boolean;
   triggeringActor?: string;
   // PR numbers from the workflow_run payload (empty for fork PRs)
-  pullRequestNumbers?: number[];
+  pullRequestNumbers: number[];
 }
 
 // Request to start tracking a workflow run (POST /api/github/track)

@@ -980,6 +980,12 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
     run_url: parsed.runUrl,
   });
 
+  // Try to extract an issue/PR number from the workflow_run payload so we can
+  // post a failure comment even for runs that were never tracked (e.g., OIDC
+  // failure before the track step). The pull_requests array is populated for
+  // non-fork PRs; for fork PRs it's empty (GitHub limitation).
+  const issueNumber = parsed.pullRequestNumbers?.[0];
+
   try {
     const agent = await getAgentByName<Env, RepoAgent>(
       env.REPO_AGENT,

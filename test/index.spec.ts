@@ -644,6 +644,8 @@ describe("Workflow Run Event Parsing", () => {
       html_url: "https://github.com/test-owner/test-repo/actions/runs/12345",
       event: "issue_comment",
       head_branch: "main",
+      triggering_actor: { login: "contributor" },
+      pull_requests: [{ number: 42 }],
     },
     repository: {
       owner: { login: "test-owner" },
@@ -665,6 +667,41 @@ describe("Workflow Run Event Parsing", () => {
     expect(result?.workflowName).toBe("Bonk");
     expect(result?.workflowPath).toBe(".github/workflows/bonk.yml");
     expect(result?.triggerEvent).toBe("issue_comment");
+    expect(result?.triggeringActor).toBe("contributor");
+    expect(result?.pullRequestNumbers).toEqual([42]);
+  });
+
+  it("handles empty pull_requests for fork PRs", () => {
+    const forkPayload: WorkflowRunPayload = {
+      ...validPayload,
+      workflow_run: {
+        ...validPayload.workflow_run,
+        pull_requests: [],
+      },
+    };
+    const result = parseWorkflowRunEvent(forkPayload);
+    expect(result).not.toBeNull();
+    expect(result?.pullRequestNumbers).toEqual([]);
+  });
+
+  it("handles missing pull_requests and triggering_actor", () => {
+    const minimalPayload: WorkflowRunPayload = {
+      ...validPayload,
+      workflow_run: {
+        id: 12345,
+        name: "Bonk",
+        path: ".github/workflows/bonk.yml",
+        status: "completed",
+        conclusion: "failure",
+        html_url: "https://github.com/test-owner/test-repo/actions/runs/12345",
+        event: "issue_comment",
+        head_branch: "main",
+      },
+    };
+    const result = parseWorkflowRunEvent(minimalPayload);
+    expect(result).not.toBeNull();
+    expect(result?.triggeringActor).toBeUndefined();
+    expect(result?.pullRequestNumbers).toEqual([]);
   });
 
   it("returns null for non-completed action", () => {

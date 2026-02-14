@@ -248,6 +248,9 @@ export interface WorkflowRunPayload {
     html_url: string;
     event: string;
     head_branch: string;
+    triggering_actor?: { login: string };
+    // Associated PRs - populated for same-repo PRs, empty for fork PRs.
+    pull_requests?: Array<{ number: number }>;
   };
   repository: {
     owner: { login: string };
@@ -270,6 +273,9 @@ export interface WorkflowRunContext {
   runUrl: string;
   triggerEvent: string;
   isPrivate: boolean;
+  triggeringActor?: string;
+  // PR numbers from the workflow_run payload (empty for fork PRs)
+  pullRequestNumbers?: number[];
 }
 
 // Request to start tracking a workflow run (POST /api/github/track)

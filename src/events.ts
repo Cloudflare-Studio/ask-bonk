@@ -336,5 +336,7 @@ export function parseWorkflowRunEvent(payload: WorkflowRunPayload): WorkflowRunC
     runUrl: run.html_url,
     triggerEvent: run.event,
     isPrivate: payload.repository.private,
+    triggeringActor: run.triggering_actor?.login,
+    pullRequestNumbers: run.pull_requests?.map((pr) => pr.number) ?? [],
   };
 }

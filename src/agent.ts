@@ -1,22 +1,10 @@
 import { Agent } from "agents";
 import type { Env } from "./types";
-import {
-  createComment,
-  createReaction,
-  getWorkflowRunStatus,
-  type ReactionTarget,
-} from "./github";
+import { createComment, createReaction, getWorkflowRunStatus, type ReactionTarget } from "./github";
 import { createLogger, type Logger } from "./log";
 import { emitMetric } from "./metrics";
-import {
-  createOctokitForRepo,
-  type InstallationSource,
-  type InstallationLookup,
-} from "./oidc";
-import {
-  WORKFLOW_POLL_INTERVAL_SECS,
-  MAX_WORKFLOW_TRACKING_MS,
-} from "./constants";
+import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
+import { WORKFLOW_POLL_INTERVAL_SECS, MAX_WORKFLOW_TRACKING_MS } from "./constants";
 
 export interface CheckStatusPayload {
   runId: number;
@@ -26,6 +14,8 @@ export interface CheckStatusPayload {
   // Reaction target for failure feedback on the original triggering comment
   reactionTargetId?: number;
   reactionTargetType?: ReactionTarget;
+  // Set to true after posting a "waiting for approval" comment to avoid duplicates
+  waitingCommentPosted?: boolean;
 }
 
 // TTL for recently finalized runs (1 hour). Entries older than this are pruned
@@ -70,10 +60,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     });
   }
 
-  async setInstallationId(
-    id: number,
-    source: InstallationSource,
-  ): Promise<void> {
+  async setInstallationId(id: number, source: InstallationSource): Promise<void> {
     this.setState({ ...this.state, installationId: id, installationSource: source });
   }
 
@@ -204,12 +191,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
 
     try {
-      const status = await getWorkflowRunStatus(
-        octokit,
-        this.owner,
-        this.repo,
-        runId,
-      );
+      const status = await getWorkflowRunStatus(octokit, this.owner, this.repo, runId);
 
       log.info("run_status_fetched", {
         status: status.status,
@@ -221,17 +203,34 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
         // On success, OpenCode posts the response - we stay silent
         if (status.conclusion !== "success") {
-          await this.postFailureComment(
-            runId,
-            runUrl,
-            issueNumber,
-            status.conclusion,
-            payload,
-          );
+          await this.postFailureComment(runId, runUrl, issueNumber, status.conclusion, payload);
         } else {
           log.info("run_succeeded");
         }
       } else {
+        // Detect "waiting" status (pending approval from a maintainer).
+        // Post a one-time comment so the user isn't left wondering.
+        if (status.status === "waiting" && !payload.waitingCommentPosted) {
+          log.info("run_waiting_for_approval");
+          try {
+            const octokit2 = await this.getOctokit();
+            await createComment(
+              octokit2,
+              this.owner,
+              this.repo,
+              issueNumber,
+              `Bonk workflow is waiting for approval from a maintainer before it can run.\n\n[Approve workflow run](${runUrl})`,
+            );
+            payload = { ...payload, waitingCommentPosted: true };
+            // Update the stored payload so other finalization paths
+            // also know the comment was posted
+            const activeRuns = { ...this.state.activeRuns, [runId]: payload };
+            this.setState({ ...this.state, activeRuns });
+          } catch (commentError) {
+            log.errorWithException("run_waiting_comment_failed", commentError);
+          }
+        }
+
         await this.schedule<CheckStatusPayload>(
           WORKFLOW_POLL_INTERVAL_SECS,
           "checkWorkflowStatus",
@@ -251,12 +250,17 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
   // Handle a workflow_run.completed webhook. This is the safety net for runs
   // that were tracked but never finalized (network failure, etc.) and for runs
   // that were never tracked at all (OIDC failure before track step).
+  //
+  // issueNumber is optionally provided from the workflow_run payload's
+  // pull_requests array (populated for non-fork PRs) to enable failure
+  // comments even for runs that were never tracked.
   async handleWorkflowRunCompleted(
     runId: number,
     conclusion: string | null,
     runUrl: string,
+    issueNumber?: number,
   ): Promise<void> {
-    const log = this.logger(runId);
+    const log = this.logger(runId, issueNumber);
 
     // Run is still active -- finalize it now (the action's finalize call never arrived)
     if (this.state.activeRuns[runId]) {
@@ -271,15 +275,26 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       return;
     }
 
-    // Run was never tracked (e.g., OIDC failure before track step).
-    // We don't have the issue number, so we can only emit a metric.
-    // Uses "finalize" eventType (not "failure_comment") since no comment was posted.
-    log.warn("run_untracked_failure", { conclusion, run_url: runUrl });
+    // Run was never tracked (e.g., OIDC failure before track step, or
+    // workflow needed approval and timed out / was cancelled).
+    log.warn("run_untracked_failure", {
+      conclusion,
+      run_url: runUrl,
+      issue_number: issueNumber,
+    });
+
+    // If we have an issue number (from pull_requests in the webhook payload),
+    // post a failure comment so the user gets feedback.
+    if (issueNumber) {
+      await this.postFailureComment(runId, runUrl, issueNumber, conclusion);
+    }
+
     emitMetric(this.env, {
       repo: `${this.owner}/${this.repo}`,
-      eventType: "finalize",
+      eventType: issueNumber ? "failure_comment" : "finalize",
       status: "failure",
       errorCode: `untracked: ${conclusion ?? "unknown"}`,
+      issueNumber,
       runId,
     });
   }
@@ -304,6 +319,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         return "Bonk workflow failed. Check the logs for details.";
       case "cancelled":
         return "Bonk workflow was cancelled.";
+      case "action_required":
+        return "Bonk workflow requires approval from a maintainer before it can run. This typically happens for pull requests from forks or first-time contributors.";
       default:
         return `Bonk workflow finished with status: ${conclusion ?? "unknown"}`;
     }

@@ -371,6 +371,10 @@ runs:
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        # When OIDC is unavailable (fork PRs), tell OpenCode to use the
+        # fallback GH_TOKEN directly instead of attempting its own OIDC flow.
+        USE_GITHUB_TOKEN: ${{ steps.oidc.outputs.oidc_failed == 'true' && 'true' || '' }}
+        GITHUB_TOKEN: ${{ steps.oidc.outputs.oidc_failed == 'true' && env.GH_TOKEN || '' }}
 
     - name: Finalize Bonk run
       if: always() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'

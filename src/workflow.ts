@@ -40,12 +40,7 @@ export async function ensureWorkflowFile(
   defaultBranch: string,
 ): Promise<SetupResult> {
   const workflowLog = createLogger({ owner, repo, issue_number: issueNumber });
-  const hasWorkflow = await fileExists(
-    octokit,
-    owner,
-    repo,
-    WORKFLOW_FILE_PATH,
-  );
+  const hasWorkflow = await fileExists(octokit, owner, repo, WORKFLOW_FILE_PATH);
 
   if (hasWorkflow) {
     workflowLog.info("workflow_file_exists");
@@ -53,13 +48,7 @@ export async function ensureWorkflowFile(
   }
 
   workflowLog.info("workflow_file_missing_creating_pr");
-  return await createWorkflowPR(
-    octokit,
-    owner,
-    repo,
-    issueNumber,
-    defaultBranch,
-  );
+  return await createWorkflowPR(octokit, owner, repo, issueNumber, defaultBranch);
 }
 
 async function createWorkflowPR(
@@ -86,12 +75,7 @@ async function createWorkflowPR(
     };
   }
 
-  const baseSha = await getDefaultBranchSha(
-    octokit,
-    owner,
-    repo,
-    defaultBranch,
-  );
+  const baseSha = await getDefaultBranchSha(octokit, owner, repo, defaultBranch);
 
   try {
     await createBranch(octokit, owner, repo, WORKFLOW_BRANCH, baseSha);

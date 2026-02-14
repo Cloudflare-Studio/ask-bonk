@@ -53,8 +53,7 @@ export function getContext(): Context {
 
   const issueNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER;
   const commentId = process.env.COMMENT_ID;
-  const createdAt =
-    process.env.COMMENT_CREATED_AT || process.env.ISSUE_CREATED_AT;
+  const createdAt = process.env.COMMENT_CREATED_AT || process.env.ISSUE_CREATED_AT;
 
   return {
     repo: { owner, repo },

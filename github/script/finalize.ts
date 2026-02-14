@@ -35,15 +35,11 @@ async function main() {
     });
 
     if (!response.ok) {
-      core.warning(
-        `Failed to finalize Bonk run tracking: ${await response.text()}`,
-      );
+      core.warning(`Failed to finalize Bonk run tracking: ${await response.text()}`);
       return;
     }
 
-    core.info(
-      `Successfully finalized run ${context.runId} with status ${status}`,
-    );
+    core.info(`Successfully finalized run ${context.runId} with status ${status}`);
   } catch (error) {
     // Don't fail on finalize errors
     core.warning(`Failed to finalize Bonk run tracking: ${error}`);

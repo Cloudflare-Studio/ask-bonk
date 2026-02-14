@@ -19,10 +19,7 @@ import {
 } from "./types";
 import { log } from "./log";
 
-export function extractPrompt(
-  body: string,
-  reviewContext?: ReviewCommentContext,
-): string {
+export function extractPrompt(body: string, reviewContext?: ReviewCommentContext): string {
   const trimmed = body.trim();
 
   if (reviewContext) {
@@ -55,10 +52,7 @@ export function detectFork(
 }
 
 function isForkPR(
-  payload:
-    | IssueCommentEvent
-    | PullRequestReviewCommentEvent
-    | PullRequestReviewEvent,
+  payload: IssueCommentEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent,
 ): boolean {
   if ("pull_request" in payload && payload.pull_request) {
     const pr = payload.pull_request;
@@ -100,9 +94,7 @@ export function parseIssueCommentEvent(payload: IssueCommentEvent): {
 }
 
 // Parse PR review comment events - no mention filtering, that's handled by the action
-export function parsePRReviewCommentEvent(
-  payload: PullRequestReviewCommentEvent,
-): {
+export function parsePRReviewCommentEvent(payload: PullRequestReviewCommentEvent): {
   context: Omit<EventContext, "env">;
   prompt: string;
   triggerCommentId: number;
@@ -186,10 +178,7 @@ export function parseIssuesEvent(payload: IssuesEvent): {
         repo: payload.repository.name,
         issueNumber: payload.issue.number,
         commentId: 0,
-        actor:
-          payload.action === "opened"
-            ? payload.issue.user.login
-            : payload.sender.login,
+        actor: payload.action === "opened" ? payload.issue.user.login : payload.sender.login,
         isPullRequest: false,
         isPrivate: payload.repository.private,
         defaultBranch: payload.repository.default_branch,
@@ -239,9 +228,7 @@ export function getModel(env: Env): { providerID: string; modelID: string } {
   const modelID = rest.join("/");
 
   if (!providerID?.length || !modelID.length) {
-    throw new Error(
-      `Invalid model ${model}. Model must be in the format "provider/model".`,
-    );
+    throw new Error(`Invalid model ${model}. Model must be in the format "provider/model".`);
   }
 
   return { providerID, modelID };
@@ -281,10 +268,7 @@ export function formatResponse(
   return parts.join("\n");
 }
 
-export function generateBranchName(
-  type: "issue" | "pr",
-  issueNumber: number,
-): string {
+export function generateBranchName(type: "issue" | "pr", issueNumber: number): string {
   const timestamp = new Date()
     .toISOString()
     .replace(/[:-]/g, "")
@@ -294,9 +278,7 @@ export function generateBranchName(
   return `bonk/${type}${issueNumber}-${timestamp}`;
 }
 
-export function parseScheduleEvent(
-  payload: ScheduleEventPayload,
-): ScheduledEventContext | null {
+export function parseScheduleEvent(payload: ScheduleEventPayload): ScheduledEventContext | null {
   if (!payload.schedule || !payload.repository) {
     return null;
   }
@@ -332,18 +314,11 @@ export function parseWorkflowDispatchEvent(
 
 // Conclusions that warrant failure handling. We allowlist rather than denylist
 // to avoid false positives from conclusions like "neutral" or "stale".
-const FAILURE_CONCLUSIONS = new Set([
-  "failure",
-  "cancelled",
-  "timed_out",
-  "action_required",
-]);
+const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required"]);
 
 // Parse workflow_run.completed events for failed Bonk workflows.
 // Returns null for non-completed events, successful runs, or non-Bonk workflows.
-export function parseWorkflowRunEvent(
-  payload: WorkflowRunPayload,
-): WorkflowRunContext | null {
+export function parseWorkflowRunEvent(payload: WorkflowRunPayload): WorkflowRunContext | null {
   if (payload.action !== "completed") return null;
 
   const run = payload.workflow_run;

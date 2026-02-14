@@ -86,25 +86,25 @@ Mention `@ask-bonk` or `/bonk` in any issue or PR comment.
 [Any OpenCode provider](https://opencode.ai/docs/providers/) is supported. Update your `bonk.yml` workflow file to specify a different model and pass the appropriate API key:
 
 ```yaml
-      - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        with:
-          model: anthropic/claude-sonnet-4-20250514
+- name: Run Bonk
+  uses: ask-bonk/ask-bonk/github@main
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  with:
+    model: anthropic/claude-sonnet-4-20250514
 ```
 
 You can also configure Bonk to use [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/):
 
 ```yaml
-      - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_GATEWAY_ID: ${{ secrets.CLOUDFLARE_GATEWAY_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        with:
-          model: cloudflare-ai-gateway/anthropic/claude-opus-4-5
+- name: Run Bonk
+  uses: ask-bonk/ask-bonk/github@main
+  env:
+    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    CLOUDFLARE_GATEWAY_ID: ${{ secrets.CLOUDFLARE_GATEWAY_ID }}
+    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  with:
+    model: cloudflare-ai-gateway/anthropic/claude-opus-4-5
 ```
 
 ## GitHub Workflows
@@ -147,14 +147,14 @@ For more complex tasks, use a multi-line prompt:
 
 The default workflow triggers on `issue_comment` and `pull_request_review_comment` events. You can extend your workflow to support additional events:
 
-| Event | Trigger | How it works |
-|-------|---------|--------------|
-| `issue_comment` | `/bonk` or `@ask-bonk` in an issue or PR comment | Bonk responds to mentions in the comment thread. Works for both issues and pull requests. |
-| `pull_request_review_comment` | `/bonk` or `@ask-bonk` in a PR line comment | Bonk responds with full diff context from the specific line being commented on. Ideal for targeted code review questions. |
-| `pull_request_review` | `/bonk` or `@ask-bonk` in a PR review body | Triggered when a review is submitted with the mention in the review body. Add `pull_request_review: types: [submitted]` to your workflow triggers. |
-| `issues` | New issue opened | Automatically responds to newly created issues. Useful for triage or auto-labeling. Requires adding `issues: types: [opened]` to triggers and removing the mention check from the job condition. |
-| `schedule` | Cron expression | Runs automated tasks on a schedule. The prompt comes from the workflow file's `prompt` input. |
-| `workflow_dispatch` | Manual trigger in Actions UI | Runs tasks on-demand via the GitHub Actions interface. |
+| Event                         | Trigger                                          | How it works                                                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `issue_comment`               | `/bonk` or `@ask-bonk` in an issue or PR comment | Bonk responds to mentions in the comment thread. Works for both issues and pull requests.                                                                                                        |
+| `pull_request_review_comment` | `/bonk` or `@ask-bonk` in a PR line comment      | Bonk responds with full diff context from the specific line being commented on. Ideal for targeted code review questions.                                                                        |
+| `pull_request_review`         | `/bonk` or `@ask-bonk` in a PR review body       | Triggered when a review is submitted with the mention in the review body. Add `pull_request_review: types: [submitted]` to your workflow triggers.                                               |
+| `issues`                      | New issue opened                                 | Automatically responds to newly created issues. Useful for triage or auto-labeling. Requires adding `issues: types: [opened]` to triggers and removing the mention check from the job condition. |
+| `schedule`                    | Cron expression                                  | Runs automated tasks on a schedule. The prompt comes from the workflow file's `prompt` input.                                                                                                    |
+| `workflow_dispatch`           | Manual trigger in Actions UI                     | Runs tasks on-demand via the GitHub Actions interface.                                                                                                                                           |
 
 #### Adding a `/review` Command
 
@@ -177,7 +177,7 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
 ```yaml
 on:
   schedule:
-    - cron: "0 4 * * 5"  # Friday at 4AM UTC
+    - cron: "0 4 * * 5" # Friday at 4AM UTC
 
 jobs:
   update-deps:
@@ -215,6 +215,7 @@ curl https://ask-bonk.silverlock.workers.dev/stats?format=json
 ```
 
 **Example output:**
+
 ```
 Events per repo (last 30d)
 ──────────────────────────────────────────────────────────────
@@ -231,10 +232,12 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 For programmatic access, Bonk exposes an `/ask` endpoint that runs OpenCode directly in a Cloudflare Sandbox. This allows you to integrate Bonk into your own workflows, scripts, or applications without going through GitHub issues and PRs.
 
 **Requirements:**
+
 - The [ask-bonk GitHub App](https://github.com/apps/ask-bonk) must be installed on the target repository
 - Set a secret for bearer auth: `openssl rand -hex 32 | tee >(npx wrangler@latest secret put ASK_SECRET)`
 
 When you make a request to `/ask`:
+
 1. Bonk clones your repository into an isolated sandbox
 2. Runs OpenCode with your prompt against the codebase
 3. Returns the response as a Server-Sent Events (SSE) stream
@@ -251,6 +254,7 @@ curl -N https://ask-bonk.silverlock.workers.dev/ask \
 ```
 
 Optional fields:
+
 - `model` - Override the default model (e.g., `"anthropic/claude-sonnet-4-20250514"`)
 - `agent` - Use a specific OpenCode agent
 - `config` - Pass custom OpenCode configuration
@@ -261,13 +265,13 @@ Bonk is configured via your workflow file and OpenCode's config. There are no bu
 
 ### Workflow Inputs
 
-| Input | Description | Required |
-|-------|-------------|----------|
-| `model` | Model to use (e.g., `opencode/claude-opus-4-5`) | Yes |
-| `mentions` | Comma-separated triggers (e.g., `/bonk,@ask-bonk`) | No |
-| `permissions` | Required permission: `admin`, `write`, `any`, or `CODEOWNERS` | No |
-| `agent` | OpenCode agent to use | No |
-| `prompt` | Custom prompt (for scheduled/dispatch workflows) | No |
+| Input         | Description                                                   | Required |
+| ------------- | ------------------------------------------------------------- | -------- |
+| `model`       | Model to use (e.g., `opencode/claude-opus-4-5`)               | Yes      |
+| `mentions`    | Comma-separated triggers (e.g., `/bonk,@ask-bonk`)            | No       |
+| `permissions` | Required permission: `admin`, `write`, `any`, or `CODEOWNERS` | No       |
+| `agent`       | OpenCode agent to use                                         | No       |
+| `prompt`      | Custom prompt (for scheduled/dispatch workflows)              | No       |
 
 ### OpenCode Config
 
@@ -276,11 +280,11 @@ For advanced configuration (custom providers, system prompts, custom tools, etc.
 ```jsonc
 {
   "provider": {
-    "anthropic": {}
+    "anthropic": {},
   },
   "model": {
-    "default": "anthropic/claude-sonnet-4-20250514"
-  }
+    "default": "anthropic/claude-sonnet-4-20250514",
+  },
 }
 ```
 
@@ -291,6 +295,7 @@ Deploy your own Bonk instance to Cloudflare Workers:
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ask-bonk/ask-bonk)
 
 You'll need to [create a GitHub App](https://docs.github.com/en/apps/creating-github-apps) with the following permissions:
+
 - Contents: Read & Write
 - Issues: Read & Write
 - Metadata: Read
@@ -300,6 +305,7 @@ You'll need to [create a GitHub App](https://docs.github.com/en/apps/creating-gi
 Subscribe to webhook events: Issue comments, Pull request review comments, Pull request reviews.
 
 Required secrets (set via `wrangler secret put`):
+
 - `GITHUB_APP_ID` - Your GitHub App ID
 - `GITHUB_APP_PRIVATE_KEY` - Your GitHub App private key (PEM format)
 - `GITHUB_WEBHOOK_SECRET` - Webhook secret for verifying GitHub requests

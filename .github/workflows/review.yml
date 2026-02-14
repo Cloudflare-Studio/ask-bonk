@@ -67,7 +67,7 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/claude-opus-4-6
-          mentions: '/review'
+          mentions: "/review"
           permissions: write
           agent: reviewer
           prompt: |

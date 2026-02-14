@@ -87,11 +87,7 @@ export interface Logger {
   warn: (event: string, data?: Record<string, unknown>) => void;
   error: (event: string, data?: Record<string, unknown>) => void;
   /** Log an error with automatic error object formatting */
-  errorWithException: (
-    event: string,
-    err: unknown,
-    data?: Record<string, unknown>,
-  ) => void;
+  errorWithException: (event: string, err: unknown, data?: Record<string, unknown>) => void;
   /** Create a child logger with additional context */
   child: (additionalContext: LogContext) => Logger;
 }
@@ -106,8 +102,7 @@ export function createLogger(context: LogContext = {}): Logger {
     error: (event, data = {}) => emit("error", event, baseContext, data),
     errorWithException: (event, err, data = {}) =>
       emit("error", event, baseContext, { ...data, ...formatError(err) }),
-    child: (additionalContext) =>
-      createLogger({ ...baseContext, ...additionalContext }),
+    child: (additionalContext) => createLogger({ ...baseContext, ...additionalContext }),
   };
 }
 

@@ -14,18 +14,11 @@ import type {
 } from "./types";
 import { createLogger } from "./log";
 import { NotFoundError, GitHubAPIError } from "./errors";
-import {
-  RETRY_CONFIG,
-  PR_TITLE_MAX_LENGTH,
-  WORKFLOW_RUN_POLL_DELAYS_MS,
-} from "./constants";
+import { RETRY_CONFIG, PR_TITLE_MAX_LENGTH, WORKFLOW_RUN_POLL_DELAYS_MS } from "./constants";
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
-export async function createOctokit(
-  env: Env,
-  installationId: number,
-): Promise<Octokit> {
+export async function createOctokit(env: Env, installationId: number): Promise<Octokit> {
   const auth = createAppAuth({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
@@ -54,18 +47,13 @@ export async function createOctokit(
         }
       },
       onSecondaryRateLimit: (retryAfter, options, octokit) => {
-        octokit.log.warn(
-          `Secondary rate limit for ${options.method} ${options.url}`,
-        );
+        octokit.log.warn(`Secondary rate limit for ${options.method} ${options.url}`);
       },
     },
   });
 }
 
-export async function createGraphQL(
-  env: Env,
-  installationId: number,
-): Promise<typeof graphql> {
+export async function createGraphQL(env: Env, installationId: number): Promise<typeof graphql> {
   const auth = createAppAuth({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
@@ -83,10 +71,7 @@ export async function createGraphQL(
   });
 }
 
-export async function getInstallationToken(
-  env: Env,
-  installationId: number,
-): Promise<string> {
+export async function getInstallationToken(env: Env, installationId: number): Promise<string> {
   const auth = createAppAuth({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
@@ -273,9 +258,7 @@ export async function createPullRequest(
   body: string,
 ): Promise<number> {
   const truncatedTitle =
-    title.length > PR_TITLE_MAX_LENGTH
-      ? title.slice(0, PR_TITLE_MAX_LENGTH - 3) + "..."
-      : title;
+    title.length > PR_TITLE_MAX_LENGTH ? title.slice(0, PR_TITLE_MAX_LENGTH - 3) + "..." : title;
 
   const response = await octokit.pulls.create({
     owner,
@@ -289,11 +272,7 @@ export async function createPullRequest(
   return response.data.number;
 }
 
-export async function getRepository(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-) {
+export async function getRepository(octokit: Octokit, owner: string, repo: string) {
   const response = await octokit.repos.get({ owner, repo });
   return response.data;
 }
@@ -461,10 +440,7 @@ export async function fetchPullRequest(
   });
 }
 
-export function buildIssueContext(
-  issue: GitHubIssue,
-  excludeCommentIds: number[] = [],
-): string {
+export function buildIssueContext(issue: GitHubIssue, excludeCommentIds: number[] = []): string {
   const comments = (issue.comments?.nodes || [])
     .filter((c) => !excludeCommentIds.includes(parseInt(c.databaseId)))
     .map((c) => `  - ${c.author.login} at ${c.createdAt}: ${c.body}`);
@@ -477,9 +453,7 @@ export function buildIssueContext(
     `Author: ${issue.author.login}`,
     `Created At: ${issue.createdAt}`,
     `State: ${issue.state}`,
-    ...(comments.length > 0
-      ? ["<issue_comments>", ...comments, "</issue_comments>"]
-      : []),
+    ...(comments.length > 0 ? ["<issue_comments>", ...comments, "</issue_comments>"] : []),
     "</issue>",
   ].join("\n");
 }
@@ -573,10 +547,7 @@ export async function findOpenPR(
   return null;
 }
 
-export function buildPRContext(
-  pr: GitHubPullRequest,
-  excludeCommentIds: number[] = [],
-): string {
+export function buildPRContext(pr: GitHubPullRequest, excludeCommentIds: number[] = []): string {
   const comments = (pr.comments?.nodes || [])
     .filter((c) => !excludeCommentIds.includes(parseInt(c.databaseId)))
     .map((c) => `- ${c.author.login} at ${c.createdAt}: ${c.body}`);
@@ -592,9 +563,7 @@ export function buildPRContext(
     return [
       `- ${r.author.login} at ${r.submittedAt}:`,
       `  - Review body: ${r.body}`,
-      ...(reviewComments.length > 0
-        ? ["  - Comments:", ...reviewComments]
-        : []),
+      ...(reviewComments.length > 0 ? ["  - Comments:", ...reviewComments] : []),
     ];
   });
 
@@ -616,11 +585,7 @@ export function buildPRContext(
       ? ["<pull_request_comments>", ...comments, "</pull_request_comments>"]
       : []),
     ...(files.length > 0
-      ? [
-          "<pull_request_changed_files>",
-          ...files,
-          "</pull_request_changed_files>",
-        ]
+      ? ["<pull_request_changed_files>", ...files, "</pull_request_changed_files>"]
       : []),
     ...(reviewData.length > 0
       ? ["<pull_request_reviews>", ...reviewData, "</pull_request_reviews>"]
@@ -753,10 +718,7 @@ export async function getWorkflowRunStatus(
 
 // Delete a GitHub App installation. Used to reject installations from orgs not in ALLOWED_ORGS.
 // Requires app-level (JWT) authentication, not installation-level.
-export async function deleteInstallation(
-  env: Env,
-  installationId: number,
-): Promise<void> {
+export async function deleteInstallation(env: Env, installationId: number): Promise<void> {
   const auth = createAppAuth({
     appId: env.GITHUB_APP_ID,
     privateKey: env.GITHUB_APP_PRIVATE_KEY,

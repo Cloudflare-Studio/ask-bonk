@@ -63,10 +63,7 @@ interface WorkflowConfig {
 }
 
 // Provider configurations
-const PROVIDERS: Record<
-  ProviderChoice,
-  { name: string; keyName: string; defaultModel: string }
-> = {
+const PROVIDERS: Record<ProviderChoice, { name: string; keyName: string; defaultModel: string }> = {
   "opencode-zen": {
     name: "OpenCode Zen",
     keyName: "OPENCODE_API_KEY",
@@ -102,10 +99,7 @@ function writeWorkflowLocally(filename: string, content: string): string {
   return filePath;
 }
 
-function renderTemplate(
-  template: string,
-  vars: Record<string, string>,
-): string {
+function renderTemplate(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
     result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
@@ -208,8 +202,7 @@ async function runInstall() {
     message: "Repository (owner/repo)",
     initialValue: detectedRepo || "",
     validate: (v) => {
-      if (!v || !v.includes("/"))
-        return "Invalid repository format. Use owner/repo";
+      if (!v || !v.includes("/")) return "Invalid repository format. Use owner/repo";
       return undefined;
     },
   });
@@ -220,9 +213,7 @@ async function runInstall() {
   }
 
   if (!repoExists(targetRepo)) {
-    p.log.error(
-      `Cannot access repository ${targetRepo}. Check it exists and you have access.`,
-    );
+    p.log.error(`Cannot access repository ${targetRepo}. Check it exists and you have access.`);
     process.exit(1);
   }
 
@@ -242,9 +233,7 @@ async function runInstall() {
 
     openUrl(GITHUB_APP_URL);
 
-    spinner.start(
-      "Waiting for app installation (checking every 10s for up to 2 mins)...",
-    );
+    spinner.start("Waiting for app installation (checking every 10s for up to 2 mins)...");
     const installed = await waitForAppInstallation(targetRepo);
 
     if (!installed) {
@@ -271,15 +260,11 @@ async function runInstall() {
 
   if (setSecretConfirm) {
     spinner.start(`Setting ${providerConfig.keyName} secret...`);
-    if (
-      setSecret(targetRepo, providerConfig.keyName, providerConfig.keyValue)
-    ) {
+    if (setSecret(targetRepo, providerConfig.keyName, providerConfig.keyValue)) {
       spinner.stop(`${providerConfig.keyName} secret set successfully`);
     } else {
       spinner.stop("Failed to set secret");
-      p.log.warn(
-        `Set it manually at: https://github.com/${targetRepo}/settings/secrets/actions`,
-      );
+      p.log.warn(`Set it manually at: https://github.com/${targetRepo}/settings/secrets/actions`);
     }
   } else {
     p.log.info(
@@ -331,8 +316,7 @@ async function runWorkflow(
       message: "Repository (owner/repo)",
       initialValue: detectedRepo || "",
       validate: (v) => {
-        if (!v || !v.includes("/"))
-          return "Invalid repository format. Use owner/repo";
+        if (!v || !v.includes("/")) return "Invalid repository format. Use owner/repo";
         return undefined;
       },
     });
@@ -463,15 +447,7 @@ async function runWorkflow(
       }
 
       // Create file
-      if (
-        !createFile(
-          repo!,
-          workflowPath,
-          content,
-          `Add ${config.name} workflow`,
-          branchName,
-        )
-      ) {
+      if (!createFile(repo!, workflowPath, content, `Add ${config.name} workflow`, branchName)) {
         spinner.stop("Failed to create workflow file");
         continue;
       }
@@ -491,9 +467,7 @@ async function runWorkflow(
           spinner.stop(`Created PR: ${prUrl}`);
         } else {
           spinner.stop("Workflow file created, but PR creation failed");
-          p.log.info(
-            `Create PR manually: https://github.com/${repo}/compare/${branchName}`,
-          );
+          p.log.info(`Create PR manually: https://github.com/${repo}/compare/${branchName}`);
         }
       } else {
         spinner.stop("Updated existing PR");
@@ -570,8 +544,7 @@ async function buildPresetWorkflow(
   const filename = await p.text({
     message: "Filename",
     initialValue: presetDefaults.filename,
-    validate: (v) =>
-      !v.endsWith(".yml") ? "Filename must end with .yml" : undefined,
+    validate: (v) => (!v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
   });
 
   if (p.isCancel(filename)) {
@@ -614,9 +587,7 @@ async function buildPresetWorkflow(
   };
 }
 
-async function buildCustomWorkflow(
-  providerConfig?: ProviderConfig,
-): Promise<WorkflowConfig> {
+async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<WorkflowConfig> {
   const name = await p.text({
     message: "Workflow name",
     validate: (v) => (v.length === 0 ? "Name is required" : undefined),
@@ -630,8 +601,7 @@ async function buildCustomWorkflow(
   const filename = await p.text({
     message: "Filename",
     initialValue: `${name.toLowerCase().replace(/\s+/g, "-")}.yml`,
-    validate: (v) =>
-      !v.endsWith(".yml") ? "Filename must end with .yml" : undefined,
+    validate: (v) => (!v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
   });
 
   if (p.isCancel(filename)) {
@@ -671,8 +641,7 @@ async function buildCustomWorkflow(
 
   let mentions: string | undefined;
   const hasCommentTriggers =
-    events.includes("issue_comment") ||
-    events.includes("pull_request_review_comment");
+    events.includes("issue_comment") || events.includes("pull_request_review_comment");
 
   if (hasCommentTriggers) {
     const mentionsInput = await p.text({
@@ -778,10 +747,7 @@ async function buildCustomWorkflow(
   };
 }
 
-function getUsageDescription(
-  preset: WorkflowPreset,
-  config: WorkflowConfig,
-): string {
+function getUsageDescription(preset: WorkflowPreset, config: WorkflowConfig): string {
   switch (preset) {
     case "bonk":
       return `Mention the bot in any issue or PR:\n\n\`\`\`\n${BOT_COMMAND} fix the type error\n\`\`\``;

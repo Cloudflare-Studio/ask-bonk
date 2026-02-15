@@ -82,7 +82,7 @@ async function checkCodeowners(
   }
 
   if (!codeownersContent) {
-    core.setFailed("CODEOWNERS file not found in .github/, root, or docs/ directory");
+    return core.setFailed("CODEOWNERS file not found in .github/, root, or docs/ directory");
   }
 
   const { owners, teamPatterns } = parseCodeowners(codeownersContent);
@@ -117,14 +117,14 @@ async function checkCodeowners(
 async function main() {
   const requiredPermission = process.env.REQUIRED_PERMISSION;
   if (!requiredPermission) {
-    core.setFailed("REQUIRED_PERMISSION not set");
+    return core.setFailed("REQUIRED_PERMISSION not set");
   }
 
   if (requiredPermission === "any") return;
 
   const token = process.env.GH_TOKEN;
   if (!token) {
-    core.setFailed("GH_TOKEN not set");
+    return core.setFailed("GH_TOKEN not set");
   }
 
   const repository = process.env.GITHUB_REPOSITORY || "";
@@ -134,25 +134,25 @@ async function main() {
   const ref = process.env.GITHUB_REF || "HEAD";
 
   if (!owner || !repo || !actor) {
-    core.setFailed("Missing required context (owner, repo, or actor)");
+    return core.setFailed("Missing required context (owner, repo, or actor)");
   }
 
   if (requiredPermission === "CODEOWNERS") {
-    await checkCodeowners(owner, repo, ref, actor, token!);
+    await checkCodeowners(owner, repo, ref, actor, token);
     return;
   }
 
   // Check collaborator permission level
   const data = await githubApi<{ permission: string }>(
     `/repos/${owner}/${repo}/collaborators/${actor}/permission`,
-    token!,
+    token,
   );
 
   if (!data) {
-    core.setFailed(`Could not check permission for ${actor}`);
+    return core.setFailed(`Could not check permission for ${actor}`);
   }
 
-  const permission = data!.permission;
+  const permission = data.permission;
 
   if (requiredPermission === "admin") {
     if (permission !== "admin") {

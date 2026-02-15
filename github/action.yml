@@ -89,134 +89,22 @@ runs:
         echo "No matching mention found in comment"
         echo "skip=true" >> $GITHUB_OUTPUT
 
-    - name: Check user permission
-      if: inputs.permissions != 'any' && steps.mentions.outputs.skip != 'true'
-      uses: actions/github-script@v7
-      env:
-        REQUIRED_PERMISSION: ${{ inputs.permissions }}
-      with:
-        script: |
-          // Retry transient GitHub API errors (5xx) with exponential backoff
-          async function withRetry(fn, label, retries = 3, baseDelay = 2000) {
-            for (let attempt = 0; attempt <= retries; attempt++) {
-              try {
-                return await fn();
-              } catch (e) {
-                const isTransient = e.status >= 500;
-                if (attempt === retries || !isTransient) throw e;
-                const delay = baseDelay * Math.pow(2, attempt);
-                core.warning(`${label}: ${e.status} ${e.message} — retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
-                await new Promise(r => setTimeout(r, delay));
-              }
-            }
-          }
-
-          const requiredPermission = process.env.REQUIRED_PERMISSION;
-          const actor = context.actor;
-
-          const { data: permissionLevel } = await withRetry(
-            () => github.rest.repos.getCollaboratorPermissionLevel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              username: actor
-            }),
-            'Permission check'
-          );
-          const permission = permissionLevel.permission;
-
-          if (requiredPermission === 'CODEOWNERS') {
-            let codeownersContent = '';
-            const paths = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
-
-            for (const path of paths) {
-              try {
-                const { data } = await withRetry(
-                  () => github.rest.repos.getContent({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    path: path,
-                    ref: context.ref || 'HEAD'
-                  }),
-                  `CODEOWNERS fetch (${path})`
-                );
-                codeownersContent = Buffer.from(data.content, 'base64').toString('utf8');
-                core.info(`Found CODEOWNERS at ${path}`);
-                break;
-              } catch (e) {
-                if (e.status !== 404) throw e;
-              }
-            }
-
-            if (!codeownersContent) {
-              core.setFailed('CODEOWNERS file not found in .github/, root, or docs/ directory');
-              return;
-            }
-
-            // Parse CODEOWNERS: collect individual users and team patterns (@org/team)
-            const owners = new Set();
-            const teamPatterns = [];
-            for (const line of codeownersContent.split('\n')) {
-              const trimmed = line.trim();
-              if (!trimmed || trimmed.startsWith('#')) continue;
-              const mentions = trimmed.match(/@[\w-]+(?:\/[\w-]+)?/g) || [];
-              for (const mention of mentions) {
-                if (mention.includes('/')) {
-                  // Cross-org teams (@other-org/team) are allowed if repo admin put them in CODEOWNERS
-                  teamPatterns.push(mention.substring(1));
-                } else {
-                  // GitHub usernames are case-insensitive
-                  owners.add(mention.substring(1).toLowerCase());
-                }
-              }
-            }
-
-            const actorLower = actor.toLowerCase();
-
-            if (owners.has(actorLower)) {
-              core.info(`User ${actor} is a code owner`);
-              return;
-            }
-
-            // Check team membership. Stale/non-existent teams 404 and are skipped.
-            // GitHub API normalizes team_slug case, so no lowercase needed.
-            for (const teamPath of teamPatterns) {
-              const [org, team] = teamPath.split('/');
-              try {
-                await withRetry(
-                  () => github.rest.teams.getMembershipForUserInOrg({
-                    org: org,
-                    team_slug: team,
-                    username: actor
-                  }),
-                  `Team membership check (@${teamPath})`
-                );
-                core.info(`User ${actor} is a member of team @${teamPath}`);
-                return;
-              } catch (e) {
-                // 404 = not a member or team doesn't exist; continue checking other patterns
-                if (e.status !== 404) {
-                  core.warning(`Could not check team membership for @${teamPath}: ${e.message}`);
-                }
-              }
-            }
-
-            // Fail-closed: no matching user or team membership found
-            core.setFailed(`User ${actor} is not listed in CODEOWNERS`);
-          } else if (requiredPermission === 'admin') {
-            if (permission !== 'admin') {
-              core.setFailed(`User ${actor} does not have admin permission (has: ${permission})`);
-            }
-          } else if (requiredPermission === 'write') {
-            if (permission !== 'admin' && permission !== 'write') {
-              core.setFailed(`User ${actor} does not have write permission (has: ${permission})`);
-            }
-          } else {
-            core.setFailed(`Unknown permission level: ${requiredPermission}. Use 'admin', 'write', 'any', or 'CODEOWNERS'`);
-          }
-
     - name: Setup bun
       if: success() && steps.mentions.outputs.skip != 'true'
       uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.2"
+
+    - name: Check user permission
+      if: success() && inputs.permissions != 'any' && steps.mentions.outputs.skip != 'true'
+      shell: bash
+      env:
+        REQUIRED_PERMISSION: ${{ inputs.permissions }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        COMMENT_ACTOR: ${{ github.event.comment.user.login }}
+        REVIEW_ACTOR: ${{ github.event.review.user.login }}
+      run: bun run ${{ github.action_path }}/script/permissions.ts
 
     - name: Ensure workflow exists
       if: success() && steps.mentions.outputs.skip != 'true'

@@ -5,17 +5,17 @@
     "": {
       "name": "ask-bonk",
       "dependencies": {
-        "@clack/prompts": "^1.0.0",
-        "@cloudflare/sandbox": "^0.7.1",
+        "@clack/prompts": "^1.0.1",
+        "@cloudflare/sandbox": "^0.7.4",
         "@octokit/auth-app": "^8.2.0",
         "@octokit/plugin-retry": "^8.0.3",
         "@octokit/plugin-throttling": "^11.0.3",
         "@octokit/rest": "^22.0.1",
         "@octokit/webhooks": "^14.2.0",
-        "@opencode-ai/plugin": "^1.1.53",
-        "@opencode-ai/sdk": "^1.1.53",
-        "agents": "^0.4.0",
-        "ai": "^6.0.78",
+        "@opencode-ai/plugin": "^1.2.4",
+        "@opencode-ai/sdk": "^1.2.4",
+        "agents": "^0.4.1",
+        "ai": "^6.0.86",
         "better-result": "^2.7.0",
         "hono": "^4.11.9",
         "jose": "^6.1.3",
@@ -23,14 +23,14 @@
         "ulid": "^3.0.2",
       },
       "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "^0.12.11",
+        "@cloudflare/vitest-pool-workers": "^0.12.12",
         "@octokit/webhooks-types": "^7.6.1",
         "@types/node": "^25.2.3",
         "oxfmt": "^0.31.0",
-        "oxlint": "^1.46.0",
+        "oxlint": "^1.47.0",
         "typescript": "^5.9.3",
         "vitest": "~3.2.4",
-        "wrangler": "^4.64.0",
+        "wrangler": "^4.65.0",
       },
     },
   },
@@ -247,9 +247,9 @@
 
     "@octokit/webhooks-types": ["@octokit/webhooks-types@7.6.1", "", {}, "sha512-S8u2cJzklBC0FgTwWVLaM8tMrDuDMVE4xiTK4EYXM9GntyvrdbSoxqDQa+Fh57CCNApyIpyeqPhhFEmHPfrXgw=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.2.4", "", { "dependencies": { "@opencode-ai/sdk": "1.2.4", "zod": "4.1.8" } }, "sha512-FfRybm1Ujzkt8EQDtxZKVEA88EI8XaAu3ikViC8DYSP3lJaF++8isN3vmlSqCi+A+O2/5xd2yQ0yq3tmJ2WVhw=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.2.5", "", { "dependencies": { "@opencode-ai/sdk": "1.2.5", "zod": "4.1.8" } }, "sha512-mZACBKyMMhH87K6HtiigbauLKjK7ooZPVaZTnRs492ldAXhiSfqk28Z8hGYNzhpwpHjkU6Ws8LOJRwOemDVQYg=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.2.4", "", {}, "sha512-IPgtBpif46wTviC3HQxkjS4M/1tZSnRmD/6aEF3lL88MT+PAqKA30G+AhBlpvXBITq9EmjO4gjzM59ly2z7mYQ=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.2.5", "", {}, "sha512-oFw08QNupBWuszpLa4HMRf/T+fDVqu8lbYSiqevdFTSH8Zih2cw/vPqLhjHgE6rPOSXyhvg46WivfSO7eNIpPw=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 

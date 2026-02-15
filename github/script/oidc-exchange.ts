@@ -1,20 +1,29 @@
 // Exchange a GitHub Actions OIDC token for a GitHub App installation token
 // via Bonk's OIDC endpoint. Outputs the token (masked) to GH_TOKEN env var,
-// or falls back to github.token when OIDC credentials aren't available.
+// or falls back to github.token when OIDC is unavailable or fails.
+//
+// This step NEVER calls core.setFailed — it always succeeds and sets
+// oidc_failed=true/false. The "Require OIDC" step in action.yml enforces
+// that non-fork runs must have OIDC. For fork runs, oidc_failed=true is
+// expected and the fork handler decides what to do.
 
-import { getOidcToken, getApiBaseUrl, core } from "./context";
+import { getOidcToken, core } from "./context";
 import { fetchWithRetry } from "./http";
 
-async function main() {
+function failWithFallback(reason: string): void {
   const fallbackToken = process.env.FALLBACK_TOKEN || "";
-  const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  core.warning(`OIDC exchange failed: ${reason}`);
+  maskValue(fallbackToken);
+  appendToGithubEnv("GH_TOKEN", fallbackToken);
+  core.setOutput("oidc_failed", "true");
+}
 
-  if (!oidcUrl || !oidcToken) {
-    core.warning("OIDC credentials not available (expected for fork PRs). Falling back to github.token.");
-    maskValue(fallbackToken);
-    appendToGithubEnv("GH_TOKEN", fallbackToken);
-    core.setOutput("oidc_failed", "true");
+async function main() {
+  const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+
+  if (!oidcUrl || !oidcRequestToken) {
+    failWithFallback("OIDC credentials not available (expected for fork PRs)");
     return;
   }
 
@@ -23,14 +32,14 @@ async function main() {
   try {
     actionOidcToken = await getOidcToken();
   } catch (error) {
-    core.setFailed(`Failed to get OIDC token: ${error}`);
+    failWithFallback(`Failed to get OIDC token: ${error}`);
     return;
   }
 
   // Exchange for a GitHub App installation token via Bonk's endpoint
   const rawOidcBaseUrl = process.env.OIDC_BASE_URL;
   if (!rawOidcBaseUrl) {
-    core.setFailed("OIDC_BASE_URL not set");
+    failWithFallback("OIDC_BASE_URL not set");
     return;
   }
   const oidcBaseUrl = rawOidcBaseUrl.replace(/\/+$/, "");
@@ -59,18 +68,18 @@ async function main() {
       } catch {
         errorMessage = text || errorMessage;
       }
-      core.setFailed(`Failed to exchange OIDC token: ${errorMessage}`);
+      failWithFallback(`Token exchange returned ${resp.status}: ${errorMessage}`);
       return;
     }
 
     const data = (await resp.json()) as { token?: string };
     if (!data.token) {
-      core.setFailed("OIDC token exchange response missing token.");
+      failWithFallback("Token exchange response missing token");
       return;
     }
     appToken = data.token;
   } catch (error) {
-    core.setFailed(`OIDC token exchange failed: ${error}`);
+    failWithFallback(`Token exchange request failed: ${error}`);
     return;
   }
 
@@ -101,5 +110,6 @@ function appendToGithubEnv(name: string, value: string): void {
 }
 
 main().catch((error) => {
-  core.setFailed(`Unexpected error: ${error}`);
+  // Even unexpected errors should not kill the step — fall back gracefully.
+  failWithFallback(`Unexpected error: ${error}`);
 });

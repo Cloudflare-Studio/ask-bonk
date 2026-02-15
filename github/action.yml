@@ -33,7 +33,7 @@ inputs:
     default: "https://ask-bonk.silverlock.workers.dev/auth"
 
   forks:
-    description: "Handle PRs from forks (runs in comment-only mode). Set to 'false' to skip fork PRs entirely."
+    description: "Post a 'not supported' comment on fork PRs. Set to 'false' to silently skip fork PRs."
     required: false
     default: "true"
 
@@ -229,11 +229,6 @@ runs:
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         EVENT_NAME: ${{ github.event_name }}
-        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-        PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
-        SETUP_GH_TOKEN: ${{ github.token }}
-        FORKS: ${{ inputs.forks }}
       run: bun run ${{ github.action_path }}/script/setup.ts
 
     - name: Get opencode version
@@ -294,13 +289,12 @@ runs:
         PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
         USER_PROMPT: ${{ inputs.prompt }}
         ACTION_PATH: ${{ github.action_path }}
-        FORKS: ${{ inputs.forks }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: bun run ${{ github.action_path }}/script/prompt.ts
 
     - name: Exchange OIDC token for GitHub App token
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
       id: oidc
       shell: bash
       env:
@@ -308,24 +302,31 @@ runs:
         FALLBACK_TOKEN: ${{ github.token }}
       run: bun run ${{ github.action_path }}/script/oidc-exchange.ts
 
+    - name: Handle fork PR
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork == 'true'
+      id: fork
+      shell: bash
+      env:
+        OIDC_FAILED: ${{ steps.oidc.outputs.oidc_failed }}
+        REPOSITORY: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
+        FORKS: ${{ inputs.forks }}
+      run: bun run ${{ github.action_path }}/script/fork-comment.ts
+
     - name: Require OIDC for non-fork runs
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
       shell: bash
       run: |
-        # prompt.ts fails closed on fork detection failure, so if we're here,
-        # is_fork is a definitive true/false. If OIDC failed for a non-fork
-        # run, that's always a hard failure.
-        if [ "${OIDC_FAILED}" = "true" ] && [ "${IS_FORK}" != "true" ]; then
-          echo "::error::OIDC token exchange failed for non-fork run. Ensure id-token: write is configured."
+        if [ "${OIDC_FAILED}" = "true" ]; then
+          echo "::error::OIDC token exchange failed. Ensure id-token: write is configured."
           exit 1
         fi
       env:
         OIDC_FAILED: ${{ steps.oidc.outputs.oidc_failed }}
-        IS_FORK: ${{ steps.prompt.outputs.is_fork }}
-
 
     - name: Track Bonk run
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true' && steps.oidc.outputs.oidc_failed != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true' && steps.oidc.outputs.oidc_failed != 'true'
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
@@ -343,23 +344,16 @@ runs:
       run: bun run ${{ github.action_path }}/script/track.ts
 
     - name: Run opencode
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
+      if: |
+        success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+        && (steps.prompt.outputs.is_fork != 'true' || steps.fork.outputs.run_opencode == 'true')
       id: opencode
       shell: bash
       run: |
         set +e
-        # Tell OpenCode to use the token directly instead of its own OIDC flow.
-        # For forks, use the runner token (read-only). For non-fork runs, the
-        # "Require OIDC" step guarantees OIDC succeeded, so GH_TOKEN is the app token.
-        # For non-fork runs, GH_TOKEN is the app token written to GITHUB_ENV by
-        # the OIDC exchange step (not declared in env: below — it's a side-channel).
+        # GH_TOKEN is the App token written to GITHUB_ENV by the OIDC exchange step.
         export USE_GITHUB_TOKEN=true
-        if [ "${IS_FORK}" = "true" ]; then
-          export GITHUB_TOKEN="${RUNNER_GITHUB_TOKEN}"
-          export GH_TOKEN="${RUNNER_GITHUB_TOKEN}"
-        else
-          export GITHUB_TOKEN="${GH_TOKEN}"
-        fi
+        export GITHUB_TOKEN="${GH_TOKEN}"
         timeout 45m opencode github run
         EXIT_CODE=$?
         echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
@@ -371,11 +365,12 @@ runs:
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        IS_FORK: ${{ steps.prompt.outputs.is_fork }}
-        RUNNER_GITHUB_TOKEN: ${{ github.token }}
 
     - name: Finalize Bonk run
-      if: always() && steps.setup.outcome == 'success' && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outcome == 'success' && steps.prompt.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
+      if: |
+        always() && steps.setup.outcome == 'success' && steps.mentions.outputs.skip != 'true'
+        && steps.setup.outputs.skip != 'true' && steps.prompt.outcome == 'success'
+        && (steps.prompt.outputs.is_fork != 'true' || steps.fork.outputs.run_opencode == 'true')
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

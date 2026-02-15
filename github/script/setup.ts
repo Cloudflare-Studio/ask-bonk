@@ -1,23 +1,13 @@
 // Check if workflow file exists, create PR if not
 // Called by the GitHub Action before running OpenCode
 
-import { getContext, getOidcToken, getApiBaseUrl, detectForkFromPR, core } from "./context";
+import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
 import { fetchWithRetry } from "./http";
 
 interface SetupResponse {
   exists: boolean;
   prUrl?: string;
   error?: string;
-}
-
-async function detectForkInSetup(): Promise<boolean | null> {
-  const result = await detectForkFromPR(
-    process.env.PR_HEAD_REPO,
-    process.env.PR_BASE_REPO,
-    process.env.PR_URL,
-    process.env.SETUP_GH_TOKEN,
-  );
-  return result?.isFork ?? null;
 }
 
 async function main() {
@@ -35,7 +25,9 @@ async function main() {
       eventName === "issue_comment" ||
       eventName === "issues"
     ) {
-      core.setFailed("No issue number found for PR/issue event; cannot run setup check");
+      core.setFailed(
+        "No issue number found for PR/issue event; cannot run setup check",
+      );
       return;
     }
     core.info("No issue number found, skipping setup check");
@@ -43,32 +35,24 @@ async function main() {
     return;
   }
 
-  // OIDC requires the `id-token: write` permission, which GitHub doesn't
-  // grant when a workflow needs maintainer approval (fork PRs, first-time
-  // contributors). When OIDC is unavailable, skip the setup check and let
-  // the action continue — the OIDC step in action.yml handles the fallback.
+  // Get OIDC token for the setup check. If unavailable (e.g. fork PRs where
+  // GitHub strips id-token permissions), skip the check — fork handling and
+  // OIDC exchange happen in later steps.
   let oidcToken: string;
   try {
     oidcToken = await getOidcToken();
   } catch (error) {
     const oidcAvailable =
-      !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL && !!process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+      !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL &&
+      !!process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
     if (oidcAvailable) {
       core.setFailed(`OIDC token exchange failed unexpectedly: ${error}`);
       return;
     }
-    const isFork = await detectForkInSetup();
-    if (isFork === true) {
-      core.warning("OIDC not available for fork PR, skipping setup check");
-      core.setOutput("skip", "false");
-      return;
-    }
-    if (isFork === false) {
-      core.setFailed("OIDC not available for non-fork PR. Ensure id-token: write is configured.");
-      return;
-    }
-    // isFork === null: fork status unknown. Fail closed.
-    core.setFailed("OIDC not available and fork status could not be determined.");
+    // OIDC credentials not present — skip setup check and let the OIDC
+    // exchange step in action.yml handle success/failure.
+    core.warning("OIDC not available, skipping setup check");
+    core.setOutput("skip", "false");
     return;
   }
 

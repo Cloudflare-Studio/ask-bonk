@@ -1,7 +1,7 @@
 // Consolidated orchestrator for Bonk GitHub Action pre-flight steps.
 //
-// Replaces 7 separate bun invocations (permissions, setup, version, prompt,
-// oidc-exchange, fork-comment, require-oidc, track) with a single process.
+// Consolidated from 7 separate bun invocations (permissions, setup, version,
+// prompt, oidc-exchange, fork-comment, require-oidc, track) into a single process.
 // Eliminates ~6 bun cold starts and enables parallelism between independent
 // network calls (version, prompt, oidc-exchange run concurrently).
 //
@@ -14,7 +14,7 @@ import { getContext, getOidcToken, getApiBaseUrl, detectForkFromPR, core } from 
 import { fetchWithRetry } from "./http";
 
 // ---------------------------------------------------------------------------
-// Permissions (from permissions.ts)
+// Permissions
 // ---------------------------------------------------------------------------
 
 const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
@@ -171,7 +171,7 @@ async function checkPermissions(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Setup (from setup.ts) — returns true if we should skip remaining steps
+// Setup — returns true if we should skip remaining steps
 // ---------------------------------------------------------------------------
 
 interface SetupResponse {
@@ -267,7 +267,7 @@ async function checkSetup(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Version (from version.ts)
+// Version
 // ---------------------------------------------------------------------------
 
 const OPENCODE_REPO = "anomalyco/opencode";
@@ -324,7 +324,7 @@ async function resolveVersion(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt (from prompt.ts)
+// Prompt
 // ---------------------------------------------------------------------------
 
 interface ForkDetectionResult {
@@ -479,7 +479,7 @@ async function buildPrompt(): Promise<PromptResult> {
 }
 
 // ---------------------------------------------------------------------------
-// OIDC Exchange (from oidc-exchange.ts)
+// OIDC Exchange
 // ---------------------------------------------------------------------------
 
 interface OidcResult {
@@ -577,7 +577,7 @@ async function exchangeOidc(): Promise<OidcResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Fork Comment (from fork-comment.ts)
+// Fork Comment
 // ---------------------------------------------------------------------------
 
 const FORK_COMMENT_MARKER = "<!-- bonk-fork-unsupported -->";
@@ -661,7 +661,7 @@ async function handleFork(oidcFailed: boolean): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Track (from track.ts)
+// Track
 // ---------------------------------------------------------------------------
 
 interface TrackPayload {

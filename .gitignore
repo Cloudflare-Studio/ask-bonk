@@ -106,7 +106,6 @@ out
 
 .nuxt
 dist
-!github/dist/
 
 # Gatsby files
 

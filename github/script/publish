@@ -11,7 +11,8 @@ fi
 
 echo "Published tag: $current_tag"
 
-# Build bundled dist files (Fix 2+3: eliminates bun runtime dependency)
+# Build bundled dist files — eliminates bun runtime dependency.
+# These are gitignored; we commit them here so they exist at the published tag.
 echo "Building dist files..."
 mkdir -p dist
 bun build script/orchestrate.ts --target=node --outfile=dist/orchestrate.js
@@ -19,3 +20,10 @@ bun build script/finalize.ts --target=node --outfile=dist/finalize.js
 
 echo "Build complete:"
 ls -la dist/
+
+# Force-add dist (gitignored) and commit to the tag ref so consumers
+# checking out the action at this tag get the pre-bundled JS files.
+git add -f dist/
+git commit -m "build: bundle dist for ${current_tag}"
+git tag -f "$current_tag"
+git push origin "$current_tag" --force

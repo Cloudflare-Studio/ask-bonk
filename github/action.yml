@@ -95,9 +95,6 @@ runs:
       with:
         bun-version: "1.3"
 
-    # Single orchestrator replaces: permissions, setup, version, prompt,
-    # oidc-exchange, fork-comment, require-oidc, and track steps.
-    # Runs version/prompt/oidc-exchange in parallel via Promise.all.
     - name: Pre-flight orchestration
       if: success() && steps.mentions.outputs.skip != 'true'
       id: preflight

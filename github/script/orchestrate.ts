@@ -119,7 +119,10 @@ async function checkCodeowners(
 
 async function checkPermissions(): Promise<void> {
   const requiredPermission = process.env.REQUIRED_PERMISSION;
-  if (!requiredPermission || requiredPermission === "any") return;
+  if (!requiredPermission) {
+    return core.setFailed("REQUIRED_PERMISSION not set");
+  }
+  if (requiredPermission === "any") return;
 
   const token = process.env.GH_TOKEN;
   if (!token) {

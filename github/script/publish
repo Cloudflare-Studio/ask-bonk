@@ -10,3 +10,12 @@ if [[ ! "$current_tag" =~ ^github-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 echo "Published tag: $current_tag"
+
+# Build bundled dist files (Fix 2+3: eliminates bun runtime dependency)
+echo "Building dist files..."
+mkdir -p dist
+bun build script/orchestrate.ts --target=node --outfile=dist/orchestrate.js
+bun build script/finalize.ts --target=node --outfile=dist/finalize.js
+
+echo "Build complete:"
+ls -la dist/

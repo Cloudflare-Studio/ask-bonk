@@ -89,58 +89,64 @@ runs:
         echo "No matching mention found in comment"
         echo "skip=true" >> $GITHUB_OUTPUT
 
-    - name: Setup bun
+    # Single orchestrator replaces: permissions, setup, version, prompt,
+    # oidc-exchange, fork-comment, require-oidc, and track steps.
+    # Runs as pre-bundled JS — no bun runtime needed.
+    - name: Pre-flight orchestration
       if: success() && steps.mentions.outputs.skip != 'true'
-      uses: oven-sh/setup-bun@v2
-      with:
-        bun-version: "1.3"
-
-    - name: Check user permission
-      if: success() && inputs.permissions != 'any' && steps.mentions.outputs.skip != 'true'
+      id: preflight
       shell: bash
       env:
+        # Permissions
         REQUIRED_PERMISSION: ${{ inputs.permissions }}
         GH_TOKEN: ${{ github.token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         COMMENT_ACTOR: ${{ github.event.comment.user.login }}
         REVIEW_ACTOR: ${{ github.event.review.user.login }}
-      run: bun run ${{ github.action_path }}/script/permissions.ts
-
-    - name: Ensure workflow exists
-      if: success() && steps.mentions.outputs.skip != 'true'
-      id: setup
-      shell: bash
-      env:
+        # Setup
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         EVENT_NAME: ${{ github.event_name }}
-      run: bun run ${{ github.action_path }}/script/setup.ts
-
-    - name: Get opencode version
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
-      id: version
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
+        # Version
         OPENCODE_DEV: ${{ inputs.opencode_dev }}
-      run: bun run ${{ github.action_path }}/script/version.ts
+        # Prompt
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
+        PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
+        USER_PROMPT: ${{ inputs.prompt }}
+        ACTION_PATH: ${{ github.action_path }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # OIDC exchange
+        FALLBACK_TOKEN: ${{ github.token }}
+        # Fork handling
+        ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
+        FORKS: ${{ inputs.forks }}
+        # Track
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+        COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+        ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
+      run: node ${{ github.action_path }}/dist/orchestrate.js
 
     - name: Cache opencode
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.version.outputs.cacheable == 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true' && steps.preflight.outputs.cacheable == 'true'
       id: cache
       uses: actions/cache@v4
       with:
         path: ~/.opencode/bin
-        key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
+        key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.preflight.outputs.version }}
 
     - name: Install opencode
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
-        OPENCODE_DEV: ${{ steps.version.outputs.dev }}
+        OPENCODE_DEV: ${{ steps.preflight.outputs.dev }}
       run: |
         set -euo pipefail
         if [ "$OPENCODE_DEV" = "true" ]; then
@@ -152,89 +158,21 @@ runs:
         fi
 
     - name: Add opencode to PATH
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       run: echo "$HOME/.opencode/bin" >> $GITHUB_PATH
 
     - name: Configure Git
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       run: |
         git config --global user.name "ask-bonk[bot]"
         git config --global user.email "ask-bonk[bot]@users.noreply.github.com"
 
-    - name: Build prompt
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
-      id: prompt
-      shell: bash
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-        REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
-        GH_TOKEN: ${{ github.token }}
-        PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
-        USER_PROMPT: ${{ inputs.prompt }}
-        ACTION_PATH: ${{ github.action_path }}
-        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      run: bun run ${{ github.action_path }}/script/prompt.ts
-
-    - name: Exchange OIDC token for GitHub App token
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
-      id: oidc
-      shell: bash
-      env:
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        FALLBACK_TOKEN: ${{ github.token }}
-      run: bun run ${{ github.action_path }}/script/oidc-exchange.ts
-
-    - name: Handle fork PR
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork == 'true'
-      id: fork
-      shell: bash
-      env:
-        OIDC_FAILED: ${{ steps.oidc.outputs.oidc_failed }}
-        REPOSITORY: ${{ github.repository }}
-        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-        ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
-        FORKS: ${{ inputs.forks }}
-      run: bun run ${{ github.action_path }}/script/fork-comment.ts
-
-    - name: Require OIDC for non-fork runs
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true'
-      shell: bash
-      run: |
-        if [ "${OIDC_FAILED}" = "true" ]; then
-          echo "::error::OIDC token exchange failed. Ensure id-token: write is configured."
-          exit 1
-        fi
-      env:
-        OIDC_FAILED: ${{ steps.oidc.outputs.oidc_failed }}
-
-    - name: Track Bonk run
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.is_fork != 'true' && steps.oidc.outputs.oidc_failed != 'true'
-      shell: bash
-      env:
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
-        GITHUB_RUN_ID: ${{ github.run_id }}
-        GITHUB_SERVER_URL: ${{ github.server_url }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        COMMENT_ID: ${{ github.event.comment.id }}
-        COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
-        ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
-      run: bun run ${{ github.action_path }}/script/track.ts
-
     - name: Run opencode
       if: |
-        success() && steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
-        && (steps.prompt.outputs.is_fork != 'true' || steps.fork.outputs.run_opencode == 'true')
+        success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       id: opencode
       shell: bash
       run: |
@@ -249,16 +187,16 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
-        PROMPT: ${{ steps.prompt.outputs.value }}
+        PROMPT: ${{ steps.preflight.outputs.value }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
 
     - name: Finalize Bonk run
       if: |
-        always() && steps.setup.outcome == 'success' && steps.mentions.outputs.skip != 'true'
-        && steps.setup.outputs.skip != 'true' && steps.prompt.outcome == 'success'
-        && (steps.prompt.outputs.is_fork != 'true' || steps.fork.outputs.run_opencode == 'true')
+        always() && steps.preflight.outcome == 'success' && steps.mentions.outputs.skip != 'true'
+        && steps.preflight.outputs.skip != 'true'
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
@@ -268,4 +206,4 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
-      run: bun run ${{ github.action_path }}/script/finalize.ts
+      run: node ${{ github.action_path }}/dist/finalize.js

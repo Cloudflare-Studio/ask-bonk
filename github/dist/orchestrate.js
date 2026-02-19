@@ -177,7 +177,7 @@ async function detectForkFromPR(headRepo, baseRepo, prUrl, ghToken) {
 }
 
 // github/script/orchestrate.ts
-import { readFileSync } from "fs";
+import { readFileSync, appendFileSync } from "fs";
 import { join } from "path";
 var OPENCODE_REPO = "anomalyco/opencode";
 var FORK_COMMENT_MARKER = "<!-- bonk-fork-unsupported -->";
@@ -519,16 +519,15 @@ function appendToGithubEnv(name, value) {
     core.warning("GITHUB_ENV not set; cannot export environment variable");
     return;
   }
-  const fs = __require("fs");
   if (value.includes(`
 `)) {
     const delimiter = `BONK_${crypto.randomUUID().replace(/-/g, "")}`;
-    fs.appendFileSync(envFile, `${name}<<${delimiter}
+    appendFileSync(envFile, `${name}<<${delimiter}
 ${value}
 ${delimiter}
 `);
   } else {
-    fs.appendFileSync(envFile, `${name}=${value}
+    appendFileSync(envFile, `${name}=${value}
 `);
   }
 }

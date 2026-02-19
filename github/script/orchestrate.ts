@@ -20,7 +20,7 @@
 
 import { getContext, getOidcToken, getApiBaseUrl, core, detectForkFromPR } from "./context";
 import { fetchWithRetry } from "./http";
-import { readFileSync } from "fs";
+import { readFileSync, appendFileSync } from "fs";
 import { join } from "path";
 
 const OPENCODE_REPO = "anomalyco/opencode";
@@ -323,7 +323,7 @@ async function resolveVersion(): Promise<VersionResult> {
     return { version: `dev-${version}`, dev: true, cacheable: true };
   }
 
-  // Check for embedded version (set at publish time by Fix 6)
+  // Check for embedded version (set at publish time)
   const embeddedVersion = process.env.OPENCODE_EMBEDDED_VERSION;
   if (embeddedVersion && embeddedVersion !== "latest") {
     core.info(`Using embedded version: ${embeddedVersion}`);
@@ -533,12 +533,11 @@ function appendToGithubEnv(name: string, value: string): void {
     core.warning("GITHUB_ENV not set; cannot export environment variable");
     return;
   }
-  const fs = require("fs");
   if (value.includes("\n")) {
     const delimiter = `BONK_${crypto.randomUUID().replace(/-/g, "")}`;
-    fs.appendFileSync(envFile, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
+    appendFileSync(envFile, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
   } else {
-    fs.appendFileSync(envFile, `${name}=${value}\n`);
+    appendFileSync(envFile, `${name}=${value}\n`);
   }
 }
 
@@ -803,7 +802,7 @@ async function trackRun(): Promise<void> {
 // Main orchestration — mirrors the control flow from action.yml
 // ---------------------------------------------------------------------------
 
-async function main() {
+async function main(): Promise<void> {
   // Step 1: Check permissions (conditional on REQUIRED_PERMISSION != "any")
   // In action.yml: if: inputs.permissions != 'any'
   const requiredPermission = process.env.REQUIRED_PERMISSION;
@@ -819,9 +818,8 @@ async function main() {
     return;
   }
 
-  // Step 3 (parallelized — Fix 4): Run version resolution and prompt building
+  // Step 3: Run version resolution, prompt building, and OIDC exchange
   // concurrently. These are independent of each other.
-  // OIDC exchange also runs in parallel — it's independent of version + prompt.
   const [versionResult, promptResult, oidcResult] = await Promise.all([
     resolveVersion().catch((error): VersionResult => {
       core.warning(`Failed to get opencode version: ${error}`);

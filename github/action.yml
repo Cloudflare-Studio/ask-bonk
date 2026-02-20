@@ -136,33 +136,19 @@ runs:
         ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
-    - name: Cache opencode
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true' && steps.preflight.outputs.cacheable == 'true'
-      id: cache
-      uses: actions/cache@v4
-      with:
-        path: ~/.opencode/bin
-        key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.preflight.outputs.version }}
-
     - name: Install opencode
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       env:
         OPENCODE_DEV: ${{ steps.preflight.outputs.dev }}
       run: |
         set -euo pipefail
         if [ "$OPENCODE_DEV" = "true" ]; then
-          curl -fsSL --connect-timeout 5 --max-time 60 https://opencode.ai/install -o /tmp/opencode-install.sh
-          bash /tmp/opencode-install.sh --dev
+          bun install -g opencode-ai@dev
         else
-          curl -fsSL --connect-timeout 5 --max-time 60 https://opencode.ai/install -o /tmp/opencode-install.sh
-          bash /tmp/opencode-install.sh
+          bun install -g opencode-ai@latest
         fi
-
-    - name: Add opencode to PATH
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-      shell: bash
-      run: echo "$HOME/.opencode/bin" >> $GITHUB_PATH
+        echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
 
     - name: Configure Git
       if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'

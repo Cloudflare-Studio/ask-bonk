@@ -270,57 +270,9 @@ async function checkSetup(): Promise<boolean> {
 // Version
 // ---------------------------------------------------------------------------
 
-const OPENCODE_REPO = "anomalyco/opencode";
-
-async function resolveVersion(): Promise<void> {
+function resolveVersion(): void {
   const isDev = process.env.OPENCODE_DEV === "true";
-  const ghToken = process.env.GH_TOKEN || "";
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-  };
-  if (ghToken) {
-    headers.Authorization = `Bearer ${ghToken}`;
-  }
-
-  if (isDev) {
-    let version = "dev";
-    try {
-      const resp = await fetchWithRetry(
-        `https://api.github.com/repos/${OPENCODE_REPO}/commits/dev`,
-        { headers },
-      );
-      if (resp.ok) {
-        const data = (await resp.json()) as { sha?: string };
-        if (data.sha) {
-          version = data.sha.slice(0, 7);
-        }
-      }
-    } catch {
-      // Fall back to "dev" if the API is unavailable
-    }
-    core.setOutput("version", `dev-${version}`);
-    core.setOutput("dev", "true");
-    core.setOutput("cacheable", "true");
-  } else {
-    let version = "latest";
-    try {
-      const resp = await fetchWithRetry(
-        `https://api.github.com/repos/${OPENCODE_REPO}/releases/latest`,
-        { headers },
-      );
-      if (resp.ok) {
-        const data = (await resp.json()) as { tag_name?: string };
-        if (data.tag_name) {
-          version = data.tag_name;
-        }
-      }
-    } catch {
-      // Fall back to "latest" if the API is unavailable
-    }
-    core.setOutput("version", version);
-    core.setOutput("dev", "false");
-    core.setOutput("cacheable", version !== "latest" ? "true" : "false");
-  }
+  core.setOutput("dev", isDev ? "true" : "false");
 }
 
 // ---------------------------------------------------------------------------
@@ -774,18 +726,11 @@ async function main() {
   const shouldSkip = await checkSetup();
   if (shouldSkip) return;
 
-  // Step 3: Run version, prompt, and OIDC exchange in parallel
-  // These three are independent of each other.
-  const [, promptResult, oidcResult] = await Promise.all([
-    resolveVersion().catch((error) => {
-      core.warning(`Failed to get opencode version: ${error}`);
-      core.setOutput("version", process.env.OPENCODE_DEV === "true" ? "dev-dev" : "latest");
-      core.setOutput("dev", process.env.OPENCODE_DEV === "true" ? "true" : "false");
-      core.setOutput("cacheable", "false");
-    }),
-    buildPrompt(),
-    exchangeOidc(),
-  ]);
+  // Step 3: Resolve version (synchronous), then run prompt and OIDC exchange
+  // in parallel (they are independent of each other).
+  resolveVersion();
+
+  const [promptResult, oidcResult] = await Promise.all([buildPrompt(), exchangeOidc()]);
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));

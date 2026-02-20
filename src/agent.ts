@@ -455,9 +455,16 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       if (run?.waitingCommentId) {
         try {
           await updateComment(octokit, this.owner, this.repo, run.waitingCommentId, body);
-          this.storeFailureComment(key, run.waitingCommentId, "issue_comment");
-          log.info("failure_comment_updated_from_waiting", { conclusion, comment_id: run.waitingCommentId });
-          return;
+          const waitingKey = isReviewThread ? `i:${issueNumber}` : key;
+          this.storeFailureComment(waitingKey, run.waitingCommentId, "issue_comment");
+          log.info("failure_comment_updated_from_waiting", {
+            conclusion,
+            comment_id: run.waitingCommentId,
+            in_review_thread: !!isReviewThread,
+          });
+          if (!isReviewThread) {
+            return;
+          }
         } catch (error) {
           // Comment may have been deleted — fall through to create new
           log.errorWithException("failure_comment_waiting_edit_failed", error);

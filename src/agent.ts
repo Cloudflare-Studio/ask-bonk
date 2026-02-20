@@ -9,7 +9,7 @@ import {
   getWorkflowRunStatus,
   type ReactionTarget,
 } from "./github";
-import { createLogger, type Logger } from "./log";
+import { createLogger, sanitizeSecrets, type Logger } from "./log";
 import { emitMetric } from "./metrics";
 import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
 import { WORKFLOW_POLL_INTERVAL_SECS, MAX_WORKFLOW_TRACKING_MS } from "./constants";
@@ -515,7 +515,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         repo: `${this.owner}/${this.repo}`,
         eventType: "failure_comment_error",
         status: "error",
-        errorCode: error instanceof Error ? error.message.slice(0, 100) : "unknown",
+        errorCode: error instanceof Error ? sanitizeSecrets(error.message).slice(0, 100) : "unknown",
         issueNumber,
         runId,
       });

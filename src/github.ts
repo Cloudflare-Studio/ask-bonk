@@ -248,6 +248,41 @@ export async function createReaction(
   }
 }
 
+// Replies to a PR review comment thread. Returns the new reply's comment ID.
+export async function createReviewCommentReply(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  commentId: number,
+  body: string,
+): Promise<number> {
+  const response = await octokit.pulls.createReplyForReviewComment({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    comment_id: commentId,
+    body,
+  });
+
+  return response.data.id;
+}
+
+export async function updateReviewComment(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  commentId: number,
+  body: string,
+): Promise<void> {
+  await octokit.pulls.updateReviewComment({
+    owner,
+    repo,
+    comment_id: commentId,
+    body,
+  });
+}
+
 export async function createPullRequest(
   octokit: Octokit,
   owner: string,

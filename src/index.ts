@@ -512,6 +512,7 @@ apiGithub.post("/track", async (c) => {
       body.run_url,
       body.issue_number,
       reactionTarget ? { id: reactionTarget.targetId, type: reactionTarget.targetType } : undefined,
+      actor,
     );
 
     trackLog.info("track_completed", {
@@ -997,6 +998,7 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
       parsed.conclusion,
       parsed.runUrl,
       issueNumber,
+      parsed.triggeringActor,
     );
   } catch (error) {
     // Only emit a metric when the handler itself fails. The agent emits

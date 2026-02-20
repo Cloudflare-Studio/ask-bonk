@@ -4,7 +4,8 @@ import type { Env } from "./types";
 import {
   createComment,
   updateComment,
-  createReaction,
+  createReviewCommentReply,
+  updateReviewComment,
   getWorkflowRunStatus,
   type ReactionTarget,
 } from "./github";
@@ -18,6 +19,8 @@ export interface CheckStatusPayload {
   runUrl: string;
   issueNumber: number;
   createdAt: number;
+  // Who triggered Bonk — used for @-mention in failure comments
+  actor?: string;
   // Reaction target for failure feedback on the original triggering comment
   reactionTargetId?: number;
   reactionTargetType?: ReactionTarget;
@@ -31,6 +34,19 @@ export interface CheckStatusPayload {
 // when new runs are finalized or workflow_run webhooks arrive.
 const RECENTLY_FINALIZED_TTL_MS = 60 * 60 * 1000;
 
+// TTL for stored failure comment refs (7 days). Older entries are pruned
+// during state writes to avoid unbounded growth.
+const FAILURE_COMMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Tracks a failure comment posted by Bonk so it can be edited in-place on retries.
+interface FailureCommentRef {
+  commentId: number;
+  // "issue_comment" = top-level issue/PR comment (issues.updateComment)
+  // "review_comment" = PR review comment reply (pulls.updateReviewComment)
+  commentType: "issue_comment" | "review_comment";
+  createdAt: number;
+}
+
 interface RepoAgentState {
   installationId: number;
   installationSource?: InstallationSource;
@@ -39,6 +55,10 @@ interface RepoAgentState {
   // Recently finalized run IDs with timestamps, used to distinguish
   // "already handled" from "never tracked" in workflow_run webhooks
   recentlyFinalizedRuns?: Record<number, number>;
+  // Failure comments posted by Bonk, keyed by context string.
+  // Keys: "i:{issueNumber}" for top-level, "rc:{reviewCommentId}" for review threads.
+  // Used for edit-in-place when retries fail again.
+  failureComments?: Record<string, FailureCommentRef>;
 }
 
 // Tracks workflow runs per repo. ID format: "{owner}/{repo}"
@@ -114,15 +134,17 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     runUrl: string,
     issueNumber: number,
     reactionTarget?: { id: number; type: ReactionTarget },
+    actor?: string,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
-    log.info("run_tracking_started", { run_url: runUrl });
+    log.info("run_tracking_started", { run_url: runUrl, actor });
 
     const payload: CheckStatusPayload = {
       runId,
       runUrl,
       issueNumber,
       createdAt: Date.now(),
+      actor,
       reactionTargetId: reactionTarget?.id,
       reactionTargetType: reactionTarget?.type,
     };
@@ -281,6 +303,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     conclusion: string | null,
     runUrl: string,
     issueNumber?: number,
+    actor?: string,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
 
@@ -310,7 +333,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     // postFailureComment emits its own metric, so we only emit here for the
     // no-issue-number path to avoid double-counting.
     if (issueNumber) {
-      await this.postFailureComment(runId, runUrl, issueNumber, conclusion);
+      await this.postFailureComment(runId, runUrl, issueNumber, conclusion, undefined, undefined, actor);
     } else {
       emitMetric(this.env, {
         repo: `${this.owner}/${this.repo}`,
@@ -334,21 +357,71 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     return pruned;
   }
 
-  private getFailureMessage(conclusion: string | null): string {
-    switch (conclusion) {
-      case "timeout":
-        return "Bonk workflow timed out.";
-      case "failure":
-        return "Bonk workflow failed. Check the logs for details.";
-      case "cancelled":
-        return "Bonk workflow was cancelled.";
-      case "action_required":
-        return "Bonk workflow was not approved by a maintainer. This typically happens for pull requests from forks or first-time contributors.";
-      default:
-        return `Bonk workflow finished with status: ${conclusion ?? "unknown"}`;
+  private pruneFailureComments(): Record<string, FailureCommentRef> {
+    const now = Date.now();
+    const entries = this.state.failureComments ?? {};
+    const pruned: Record<string, FailureCommentRef> = {};
+    for (const [key, ref] of Object.entries(entries)) {
+      if (now - ref.createdAt < FAILURE_COMMENT_TTL_MS) {
+        pruned[key] = ref;
+      }
     }
+    return pruned;
   }
 
+  // Returns the state key for looking up / storing a failure comment.
+  // Review thread triggers get a per-thread key; everything else is per-issue.
+  private failureCommentKey(issueNumber: number, run?: CheckStatusPayload): string {
+    if (run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId) {
+      return `rc:${run.reactionTargetId}`;
+    }
+    return `i:${issueNumber}`;
+  }
+
+  private storeFailureComment(key: string, commentId: number, commentType: FailureCommentRef["commentType"]): void {
+    const failureComments = this.pruneFailureComments();
+    failureComments[key] = { commentId, commentType, createdAt: Date.now() };
+    this.setState({ ...this.state, failureComments });
+  }
+
+  private buildFailureBody(conclusion: string | null, runUrl: string, actor?: string): string {
+    let message: string;
+    switch (conclusion) {
+      case "timeout":
+        message = "Bonk workflow timed out.";
+        break;
+      case "failure":
+        message = "Bonk workflow failed. Check the logs for details.";
+        break;
+      case "cancelled":
+        message = "Bonk workflow was cancelled.";
+        break;
+      case "action_required":
+        message = "Bonk workflow was not approved by a maintainer. This typically happens for pull requests from forks or first-time contributors.";
+        break;
+      default:
+        message = `Bonk workflow finished with status: ${conclusion ?? "unknown"}.`;
+        break;
+    }
+
+    // @-mention human actors (skip bots and unknown)
+    const mention = actor && !actor.endsWith("[bot]") ? `@${actor} ` : "";
+
+    return `${mention}${message}\n\n[View workflow run](${runUrl}) · To retry, trigger Bonk again.`;
+  }
+
+  // Posts or edits a failure comment. Replaces the old confused-reaction approach
+  // with a visible, in-context comment that @-mentions the actor and edits
+  // itself in-place on retries.
+  //
+  // Reply strategy:
+  //   - pull_request_review_comment triggers -> reply in the review thread
+  //   - everything else -> top-level issue/PR comment
+  //
+  // Edit-in-place priority:
+  //   1. "waiting for approval" comment from an earlier poll -> edit that
+  //   2. Prior failure comment for the same context key -> edit that
+  //   3. Otherwise -> create new
   private async postFailureComment(
     runId: number,
     runUrl: string,
@@ -356,40 +429,75 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     conclusion: string | null,
     run?: CheckStatusPayload,
     existingOctokit?: Octokit,
+    actor?: string,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
-
-    const body = `${this.getFailureMessage(conclusion)}\n\n[View workflow run](${runUrl})`;
+    const effectiveActor = run?.actor ?? actor;
+    const body = this.buildFailureBody(conclusion, runUrl, effectiveActor);
+    const key = this.failureCommentKey(issueNumber, run);
+    const isReviewThread = run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId;
 
     try {
       const octokit = existingOctokit ?? (await this.getOctokit());
 
-      // If a waiting comment was posted earlier, edit it in-place instead of
-      // creating a second near-identical comment.
+      // 1. Try editing a "waiting for approval" comment first (top-level only)
       if (run?.waitingCommentId) {
-        await updateComment(octokit, this.owner, this.repo, run.waitingCommentId, body);
-        log.info("failure_comment_updated", { conclusion, comment_id: run.waitingCommentId });
-      } else {
-        await createComment(octokit, this.owner, this.repo, issueNumber, body);
-        log.info("failure_comment_posted", { conclusion });
+        try {
+          await updateComment(octokit, this.owner, this.repo, run.waitingCommentId, body);
+          this.storeFailureComment(key, run.waitingCommentId, "issue_comment");
+          log.info("failure_comment_updated_from_waiting", { conclusion, comment_id: run.waitingCommentId });
+          return;
+        } catch (error) {
+          // Comment may have been deleted — fall through to create new
+          log.errorWithException("failure_comment_waiting_edit_failed", error);
+        }
       }
 
-      // Add a confused reaction on the original triggering comment.
-      // createReaction() silently catches errors, so this won't throw.
-      if (run?.reactionTargetId && run?.reactionTargetType) {
-        await createReaction(
+      // 2. Try editing a prior failure comment for the same context
+      const existing = this.state.failureComments?.[key];
+      if (existing) {
+        try {
+          if (existing.commentType === "review_comment") {
+            await updateReviewComment(octokit, this.owner, this.repo, existing.commentId, body);
+          } else {
+            await updateComment(octokit, this.owner, this.repo, existing.commentId, body);
+          }
+          // Refresh the timestamp so TTL resets
+          this.storeFailureComment(key, existing.commentId, existing.commentType);
+          log.info("failure_comment_edited", { conclusion, comment_id: existing.commentId, comment_type: existing.commentType });
+          return;
+        } catch (error) {
+          // Comment may have been deleted — fall through to create new
+          log.errorWithException("failure_comment_edit_failed", error);
+        }
+      }
+
+      // 3. Create a new comment in the appropriate context
+      let commentId: number;
+      let commentType: FailureCommentRef["commentType"];
+
+      if (isReviewThread) {
+        commentId = await createReviewCommentReply(
           octokit,
           this.owner,
           this.repo,
-          run.reactionTargetId,
-          "confused",
-          run.reactionTargetType,
+          issueNumber,
+          run.reactionTargetId!,
+          body,
         );
-        log.info("failure_reaction_added", {
-          target_type: run.reactionTargetType,
-          target_id: run.reactionTargetId,
-        });
+        commentType = "review_comment";
+      } else {
+        commentId = await createComment(octokit, this.owner, this.repo, issueNumber, body);
+        commentType = "issue_comment";
       }
+
+      this.storeFailureComment(key, commentId, commentType);
+      log.info("failure_comment_created", {
+        conclusion,
+        comment_id: commentId,
+        comment_type: commentType,
+        in_review_thread: !!isReviewThread,
+      });
     } catch (error) {
       log.errorWithException("failure_comment_failed", error, { conclusion });
     }

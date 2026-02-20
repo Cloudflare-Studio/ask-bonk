@@ -22,12 +22,13 @@ export async function runAsk(
   installationId: number,
   request: AskRequest,
 ): Promise<Result<ReadableStream, SandboxError | ValidationError>> {
-  const { id: askId, owner, repo, prompt, agent, model, config } = request;
+  const { id: askId, owner, repo, prompt, agent, model, variant, config } = request;
   const log = createLogger({
     owner,
     repo,
     ask_id: askId,
     installation_id: installationId,
+    variant: variant ?? undefined,
   });
 
   const token = await getInstallationToken(env, installationId);
@@ -184,6 +185,9 @@ export async function runAsk(
             body: {
               model: { providerID, modelID },
               agent: agent ?? undefined,
+              // variant is supported by the OpenCode API but not yet in the v1 SDK types.
+              // Safe to pass -- the SDK sends all body fields in the HTTP request.
+              ...(variant ? { variant } : {}),
               parts: [{ type: "text", text: prompt }],
             },
           }),

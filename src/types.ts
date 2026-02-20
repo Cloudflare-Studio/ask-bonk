@@ -41,6 +41,9 @@ export interface AskRequest {
   prompt: string;
   agent?: string;
   model?: string;
+  // Provider-specific reasoning effort level (e.g., "high", "max", "minimal").
+  // Maps to OpenCode's variant parameter on session.prompt().
+  variant?: string;
   // Valid opencode.json/jsonc config to pass into the OpenCode session
   config?: Config;
 }

@@ -37,6 +37,10 @@ inputs:
     required: false
     default: "true"
 
+  variant:
+    description: "Model variant for provider-specific reasoning effort (e.g., high, max, minimal)"
+    required: false
+
   opencode_dev:
     description: "Install OpenCode from dev branch instead of latest release"
     required: false
@@ -175,6 +179,7 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
+        VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}

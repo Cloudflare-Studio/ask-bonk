@@ -4,6 +4,7 @@ This pull request (#{{PR_NUMBER}}) is from a fork of {{OWNER}}/{{REPO}}. You are
 ## Restrictions
 
 Do NOT:
+
 - Edit, write, create, or delete any files — use file editing tools (Write, Edit) under no circumstances
 - Run `git commit`, `git push`, `git add`, `git checkout -b`, or any git write operation
 - Interact with any PR or issue other than #{{PR_NUMBER}} in {{OWNER}}/{{REPO}}
@@ -26,7 +27,7 @@ You have write access to PR comments via the `gh` CLI. Use `--repo {{OWNER}}/{{R
 
 Write a JSON file and submit it as a review. This is the most reliable method — no shell quoting issues.
 
-```bash
+````bash
 cat > /tmp/review.json << 'REVIEW'
 {
   "commit_id": "{{HEAD_SHA}}",
@@ -49,7 +50,7 @@ cat > /tmp/review.json << 'REVIEW'
 }
 REVIEW
 gh api repos/{{OWNER}}/{{REPO}}/pulls/{{PR_NUMBER}}/reviews --input /tmp/review.json
-```
+````
 
 Each comment needs `path`, `line`, `side`, and `body`. Use `suggestion` fences in `body` for applicable changes.
 

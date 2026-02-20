@@ -1,7 +1,13 @@
 import { Agent } from "agents";
 import type { Octokit } from "@octokit/rest";
 import type { Env } from "./types";
-import { createComment, updateComment, createReaction, getWorkflowRunStatus, type ReactionTarget } from "./github";
+import {
+  createComment,
+  updateComment,
+  createReaction,
+  getWorkflowRunStatus,
+  type ReactionTarget,
+} from "./github";
 import { createLogger, type Logger } from "./log";
 import { emitMetric } from "./metrics";
 import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
@@ -149,8 +155,13 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
     this.removeAndRecordRun(runId);
 
-    // Post failure comment + reaction if needed
-    if (status !== "success" && status !== "skipped") {
+    // Post failure comment + reaction for any non-success status.
+    // The finalize step's conditions guarantee it only runs when the OpenCode
+    // step was expected to execute, so "skipped" means an infrastructure step
+    // failed and should be treated as a failure. The finalize script remaps
+    // "skipped" -> "failure" client-side, but we also handle it here as
+    // defense-in-depth.
+    if (status !== "success") {
       await this.postFailureComment(runId, run.runUrl, run.issueNumber, status, run);
     } else {
       log.info("run_completed_no_comment", { status });
@@ -206,7 +217,14 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
         // On success, OpenCode posts the response - we stay silent
         if (status.conclusion !== "success") {
-          await this.postFailureComment(runId, runUrl, issueNumber, status.conclusion, payload, octokit);
+          await this.postFailureComment(
+            runId,
+            runUrl,
+            issueNumber,
+            status.conclusion,
+            payload,
+            octokit,
+          );
         } else {
           log.info("run_succeeded");
         }

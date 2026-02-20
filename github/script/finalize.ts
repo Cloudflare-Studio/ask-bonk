@@ -7,7 +7,14 @@ import { fetchWithRetry } from "./http";
 async function main() {
   const context = getContext();
   const { owner, repo } = context.repo;
-  const status = process.env.OPENCODE_STATUS || "unknown";
+  const rawStatus = process.env.OPENCODE_STATUS || "unknown";
+
+  // When the OpenCode step is "skipped", it means an earlier step (cache,
+  // install, etc.) failed — GitHub Actions skips subsequent steps on failure.
+  // The finalize step only runs when preflight succeeded and the OpenCode step
+  // was *expected* to run, so "skipped" here always indicates an infrastructure
+  // failure rather than an intentional skip.
+  const status = rawStatus === "skipped" ? "failure" : rawStatus;
 
   let oidcToken: string;
   try {
@@ -40,7 +47,8 @@ async function main() {
       return;
     }
 
-    core.info(`Successfully finalized run ${context.runId} with status ${status}`);
+    const statusInfo = rawStatus !== status ? `${status} (was ${rawStatus})` : status;
+    core.info(`Successfully finalized run ${context.runId} with status ${statusInfo}`);
   } catch (error) {
     // Don't fail on finalize errors
     core.warning(`Failed to finalize Bonk run tracking: ${error}`);

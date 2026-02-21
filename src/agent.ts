@@ -1,4 +1,4 @@
-import { Agent } from "agents";
+import { Agent, type Connection } from "agents";
 import type { Octokit } from "@octokit/rest";
 import type { Env } from "./types";
 import {
@@ -50,6 +50,11 @@ interface FailureCommentRef {
 interface RepoAgentState {
   installationId: number;
   installationSource?: InstallationSource;
+  // Persisted owner/repo so alarm-woken DOs can identify themselves without
+  // relying on this.name (which requires setName() via a fetch request).
+  // See: https://github.com/cloudflare/workerd/issues/2240
+  owner?: string;
+  repo?: string;
   // Active workflow runs being tracked, keyed by run ID
   activeRuns: Record<number, CheckStatusPayload>;
   // Recently finalized run IDs with timestamps, used to distinguish
@@ -70,12 +75,39 @@ interface RepoAgentState {
 export class RepoAgent extends Agent<Env, RepoAgentState> {
   initialState: RepoAgentState = { installationId: 0, activeRuns: {} };
 
+  // Read owner/repo from persisted state first (always available, including
+  // alarm wakeups), falling back to this.name for the initial RPC call before
+  // state has been populated. this.name throws when the DO wakes from an alarm
+  // because setName() is only called via fetch, not via alarm dispatch.
+  // See: https://github.com/cloudflare/workerd/issues/2240
   private get owner(): string {
-    return this.name.split("/")[0] ?? "";
+    if (this.state.owner) return this.state.owner;
+    try {
+      return this.name.split("/")[0] ?? "";
+    } catch {
+      return "";
+    }
   }
 
   private get repo(): string {
-    return this.name.split("/")[1] ?? "";
+    if (this.state.repo) return this.state.repo;
+    try {
+      return this.name.split("/")[1] ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  // Structured error handler — replaces the default Agent.onError which logs
+  // an unhelpful "Override onError(error) to handle server errors" message
+  // and then rethrows.
+  onError(connectionOrError: Connection | unknown, error?: unknown): void {
+    const theError = error ?? connectionOrError;
+    createLogger({
+      owner: this.state.owner,
+      repo: this.state.repo,
+      installation_id: this.state.installationId || undefined,
+    }).errorWithException("agent_error", theError);
   }
 
   private logger(runId?: number, issueNumber?: number): Logger {
@@ -89,8 +121,26 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     });
   }
 
+  // Returns owner/repo parsed from this.name if not yet persisted in state.
+  // Used by setInstallationId to persist identity in a single setState call.
+  private identityPatch(): { owner?: string; repo?: string } {
+    if (this.state.owner && this.state.repo) return {};
+    try {
+      const parts = this.name.split("/");
+      if (parts[0] && parts[1]) return { owner: parts[0], repo: parts[1] };
+    } catch {
+      // this.name unavailable (alarm wakeup) — state should already have it
+    }
+    return {};
+  }
+
   async setInstallationId(id: number, source: InstallationSource): Promise<void> {
-    this.setState({ ...this.state, installationId: id, installationSource: source });
+    this.setState({
+      ...this.state,
+      ...this.identityPatch(),
+      installationId: id,
+      installationSource: source,
+    });
   }
 
   // Wraps createOctokitForRepo with state updates on cache refresh.

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // Cloudflare Workers Observability MCP server
+    // Provides tools for querying worker logs, metrics, and analytics
+    // Requires CLOUDFLARE_API_TOKEN set as env var (GitHub secret)
+    "workers-observability": {
+      "type": "remote",
+      "url": "https://observability.mcp.cloudflare.com/mcp",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}"
+      }
+    }
+  }
+}

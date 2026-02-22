@@ -9,8 +9,8 @@
       "url": "https://observability.mcp.cloudflare.com/mcp",
       "oauth": false,
       "headers": {
-        "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}"
-      }
-    }
-  }
+        "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}",
+      },
+    },
+  },
 }

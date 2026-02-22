@@ -137,18 +137,20 @@ export async function getInstallationId(
     installLog.warn("installation_cache_invalid", { cached_value: cached });
   }
 
-  // Look up via GitHub API using the app's JWT
-  const auth = createAppAuth({
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
-  });
-
-  const { token } = await auth({ type: "app" });
-  const octokit = new Octokit({ auth: token });
-
+  // Look up via GitHub API using the app's JWT.
+  // Both createAppAuth and auth() can throw (e.g., malformed private key),
+  // so the entire flow is wrapped in Result.tryPromise.
   return Result.tryPromise(
     {
       try: async () => {
+        const auth = createAppAuth({
+          appId: env.GITHUB_APP_ID,
+          privateKey: env.GITHUB_APP_PRIVATE_KEY,
+        });
+
+        const { token } = await auth({ type: "app" });
+        const octokit = new Octokit({ auth: token });
+
         const response = await octokit.apps.getRepoInstallation({
           owner,
           repo,
@@ -166,7 +168,7 @@ export async function getInstallationId(
         if (err instanceof RequestError && err.status === 404) {
           return new InstallationNotFoundError({ owner, repo });
         }
-        // Other errors (network, rate limit, 5xx)
+        // Other errors (network, rate limit, 5xx, auth failures)
         return new GitHubAPIError({
           operation: "getRepoInstallation",
           cause: err,
@@ -249,9 +251,13 @@ async function generateInstallationToken(
     authOptions.permissions = options.permissions;
   }
 
-  const result = await Result.tryPromise(() => auth(authOptions), {
-    retry: RETRY_CONFIG,
-  });
+  const result = await Result.tryPromise(
+    {
+      try: () => auth(authOptions),
+      catch: (e) => new GitHubAPIError({ operation: "generateInstallationToken", cause: e }),
+    },
+    { retry: RETRY_CONFIG },
+  );
   if (result.isErr()) throw result.error;
   return result.value.token;
 }
@@ -578,8 +584,8 @@ export async function handleExchangeTokenWithPAT(
         }),
       );
     }
-  } catch {
-    patLog.warn("pat_exchange_denied_no_access");
+  } catch (error) {
+    patLog.errorWithException("pat_exchange_denied_no_access", error);
     return Result.err(
       new AuthorizationError({
         message: `PAT does not have access to ${body.owner}/${body.repo}`,

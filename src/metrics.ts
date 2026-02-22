@@ -34,37 +34,43 @@ export interface MetricEvent {
   isPullRequest?: boolean; // double5
 }
 
-// Emit a metric event to Analytics Engine
-// Uses optional chaining to gracefully handle missing binding (e.g., in tests)
+// Emit a metric event to Analytics Engine.
+// Best-effort: never throws. Uses optional chaining for missing binding (tests)
+// and try/catch to guard against writeDataPoint failures.
 export function emitMetric(env: Env, event: MetricEvent): void {
-  env.BONK_EVENTS?.writeDataPoint({
-    indexes: [event.repo],
-    blobs: [
-      event.eventType,
-      event.eventSubtype ?? "",
-      event.status,
-      event.actor ?? "",
-      event.errorCode ?? "",
-    ],
-    doubles: [
-      event.issueNumber ?? 0,
-      event.runId ?? 0,
-      event.durationMs ?? 0,
-      event.isPrivate ? 1 : 0,
-      event.isPullRequest ? 1 : 0,
-    ],
-  });
+  try {
+    env.BONK_EVENTS?.writeDataPoint({
+      indexes: [event.repo],
+      blobs: [
+        event.eventType,
+        event.eventSubtype ?? "",
+        event.status,
+        event.actor ?? "",
+        event.errorCode ?? "",
+      ],
+      doubles: [
+        event.issueNumber ?? 0,
+        event.runId ?? 0,
+        event.durationMs ?? 0,
+        event.isPrivate ? 1 : 0,
+        event.isPullRequest ? 1 : 0,
+      ],
+    });
+  } catch {
+    // Metrics are best-effort — never let them crash a request
+  }
 }
 
 // Query Analytics Engine SQL API
 // https://developers.cloudflare.com/analytics/analytics-engine/worker-querying/
+// Throws on failure -- callers in stats routes catch and return 500.
 export async function queryAnalyticsEngine(
   env: Env,
   query: string,
 ): Promise<Record<string, unknown>[]> {
   const { CLOUDFLARE_ACCOUNT_ID, ANALYTICS_TOKEN } = env;
   if (!CLOUDFLARE_ACCOUNT_ID || !ANALYTICS_TOKEN) {
-    throw new Error("Missing CLOUDFLARE_ACCOUNT_ID or ANALYTICS_TOKEN");
+    throw new Error("Stats endpoint is not configured");
   }
 
   const response = await fetch(
@@ -81,7 +87,9 @@ export async function queryAnalyticsEngine(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Analytics Engine query failed: ${response.status} ${text}`);
+    throw new Error(
+      `Analytics Engine query failed (HTTP ${response.status}): ${text.slice(0, 200)}`,
+    );
   }
 
   const result = (await response.json()) as {

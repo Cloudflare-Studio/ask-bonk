@@ -58,15 +58,23 @@ async function createWorkflowPR(
   issueNumber: number,
   defaultBranch: string,
 ): Promise<SetupResult> {
+  const workflowLog = createLogger({ owner, repo, issue_number: issueNumber });
   const existingPR = await findOpenPR(octokit, owner, repo, WORKFLOW_BRANCH);
   if (existingPR) {
-    await createComment(
-      octokit,
-      owner,
-      repo,
-      issueNumber,
-      `Please merge PR #${existingPR.number} first for Bonk to run workflows.\n\n${existingPR.url}`,
-    );
+    // Comment is informational -- don't let it crash the setup response
+    try {
+      await createComment(
+        octokit,
+        owner,
+        repo,
+        issueNumber,
+        `Please merge PR #${existingPR.number} first for Bonk to run workflows.\n\n${existingPR.url}`,
+      );
+    } catch (error) {
+      workflowLog.errorWithException("workflow_setup_comment_failed", error, {
+        pr_number: existingPR.number,
+      });
+    }
 
     return {
       exists: false,
@@ -138,13 +146,21 @@ Or use the slash command:
 
   const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
 
-  await createComment(
-    octokit,
-    owner,
-    repo,
-    issueNumber,
-    `I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`,
-  );
+  // Comment is informational -- don't let it crash the setup response
+  // (the PR was already created successfully)
+  try {
+    await createComment(
+      octokit,
+      owner,
+      repo,
+      issueNumber,
+      `I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`,
+    );
+  } catch (error) {
+    workflowLog.errorWithException("workflow_setup_comment_failed", error, {
+      pr_number: prNumber,
+    });
+  }
 
   return {
     exists: false,

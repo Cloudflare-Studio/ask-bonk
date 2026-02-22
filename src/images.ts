@@ -9,6 +9,10 @@ const RETRY_CONFIG = {
   backoff: "exponential" as const,
 };
 
+// Maximum attachment size (20 MB). Prevents unbounded memory usage from
+// very large files that would be base64-encoded into the prompt.
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
 // Extracts GitHub user-attachments (images/files) from comment markdown
 // and converts them to base64 for the AI prompt
 export async function extractImages(
@@ -89,8 +93,23 @@ async function downloadFile(
         throw new Error(`HTTP ${response.status}`);
       }
 
+      // Check Content-Length before downloading the body to reject oversized files early
+      const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
+      if (contentLength > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Attachment too large: ${contentLength} bytes exceeds ${MAX_ATTACHMENT_BYTES} byte limit`,
+        );
+      }
+
       const contentType = response.headers.get("content-type") || "application/octet-stream";
       const arrayBuffer = await response.arrayBuffer();
+
+      // Also check actual size (Content-Length can be missing or inaccurate)
+      if (arrayBuffer.byteLength > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Attachment too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_ATTACHMENT_BYTES} byte limit`,
+        );
+      }
       const base64 = arrayBufferToBase64(arrayBuffer);
       const mime = contentType.startsWith("image/") ? contentType : "text/plain";
 

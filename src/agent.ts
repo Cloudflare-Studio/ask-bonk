@@ -203,15 +203,20 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     const activeRuns = { ...this.state.activeRuns, [runId]: payload };
     this.setState({ ...this.state, activeRuns });
 
-    // Schedule polling as safety net
-    await this.schedule<CheckStatusPayload>(
-      WORKFLOW_POLL_INTERVAL_SECS,
-      "checkWorkflowStatus",
-      payload,
-    );
-    log.info("run_poll_scheduled", {
-      poll_interval_seconds: WORKFLOW_POLL_INTERVAL_SECS,
-    });
+    // Schedule polling as safety net. Failure to schedule is non-fatal:
+    // the workflow_run webhook acts as a secondary safety net.
+    try {
+      await this.schedule<CheckStatusPayload>(
+        WORKFLOW_POLL_INTERVAL_SECS,
+        "checkWorkflowStatus",
+        payload,
+      );
+      log.info("run_poll_scheduled", {
+        poll_interval_seconds: WORKFLOW_POLL_INTERVAL_SECS,
+      });
+    } catch (error) {
+      log.errorWithException("run_poll_schedule_failed", error);
+    }
   }
 
   async finalizeRun(runId: number, status: string): Promise<void> {
@@ -268,11 +273,15 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       octokit = await this.getOctokit();
     } catch (error) {
       log.errorWithException("run_octokit_failed", error);
-      await this.schedule<CheckStatusPayload>(
-        WORKFLOW_POLL_INTERVAL_SECS,
-        "checkWorkflowStatus",
-        payload,
-      );
+      try {
+        await this.schedule<CheckStatusPayload>(
+          WORKFLOW_POLL_INTERVAL_SECS,
+          "checkWorkflowStatus",
+          payload,
+        );
+      } catch (scheduleError) {
+        log.errorWithException("run_reschedule_failed", scheduleError);
+      }
       return;
     }
 
@@ -325,19 +334,27 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
           this.setState({ ...this.state, activeRuns });
         }
 
+        try {
+          await this.schedule<CheckStatusPayload>(
+            WORKFLOW_POLL_INTERVAL_SECS,
+            "checkWorkflowStatus",
+            payload,
+          );
+        } catch (scheduleError) {
+          log.errorWithException("run_reschedule_failed", scheduleError);
+        }
+      }
+    } catch (error) {
+      log.errorWithException("run_status_check_failed", error);
+      try {
         await this.schedule<CheckStatusPayload>(
           WORKFLOW_POLL_INTERVAL_SECS,
           "checkWorkflowStatus",
           payload,
         );
+      } catch (scheduleError) {
+        log.errorWithException("run_reschedule_failed", scheduleError);
       }
-    } catch (error) {
-      log.errorWithException("run_status_check_failed", error);
-      await this.schedule<CheckStatusPayload>(
-        WORKFLOW_POLL_INTERVAL_SECS,
-        "checkWorkflowStatus",
-        payload,
-      );
     }
   }
 
@@ -383,7 +400,15 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     // postFailureComment emits its own metric, so we only emit here for the
     // no-issue-number path to avoid double-counting.
     if (issueNumber) {
-      await this.postFailureComment(runId, runUrl, issueNumber, conclusion, undefined, undefined, actor);
+      await this.postFailureComment(
+        runId,
+        runUrl,
+        issueNumber,
+        conclusion,
+        undefined,
+        undefined,
+        actor,
+      );
     } else {
       emitMetric(this.env, {
         repo: `${this.owner}/${this.repo}`,
@@ -428,7 +453,11 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     return `i:${issueNumber}`;
   }
 
-  private storeFailureComment(key: string, commentId: number, commentType: FailureCommentRef["commentType"]): void {
+  private storeFailureComment(
+    key: string,
+    commentId: number,
+    commentType: FailureCommentRef["commentType"],
+  ): void {
     const failureComments = this.pruneFailureComments();
     failureComments[key] = { commentId, commentType, createdAt: Date.now() };
     this.setState({ ...this.state, failureComments });
@@ -447,7 +476,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         message = "Bonk workflow was cancelled.";
         break;
       case "action_required":
-        message = "Bonk workflow was not approved by a maintainer. This typically happens for pull requests from forks or first-time contributors.";
+        message =
+          "Bonk workflow was not approved by a maintainer. This typically happens for pull requests from forks or first-time contributors.";
         break;
       default:
         message = `Bonk workflow finished with status: ${conclusion ?? "unknown"}.`;
@@ -485,7 +515,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     const effectiveActor = run?.actor ?? actor;
     const body = this.buildFailureBody(conclusion, runUrl, effectiveActor);
     const key = this.failureCommentKey(issueNumber, run);
-    const isReviewThread = run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId;
+    const isReviewThread =
+      run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId;
 
     // Emit workflow-failure metric unconditionally — callers in
     // handleWorkflowRunCompleted rely on this firing for every failure.
@@ -532,7 +563,11 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
           }
           // Refresh the timestamp so TTL resets
           this.storeFailureComment(key, existing.commentId, existing.commentType);
-          log.info("failure_comment_edited", { conclusion, comment_id: existing.commentId, comment_type: existing.commentType });
+          log.info("failure_comment_edited", {
+            conclusion,
+            comment_id: existing.commentId,
+            comment_type: existing.commentType,
+          });
           return;
         } catch (error) {
           // Comment may have been deleted — fall through to create new
@@ -572,7 +607,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         repo: `${this.owner}/${this.repo}`,
         eventType: "failure_comment_error",
         status: "error",
-        errorCode: error instanceof Error ? sanitizeSecrets(error.message).slice(0, 100) : "unknown",
+        errorCode:
+          error instanceof Error ? sanitizeSecrets(error.message).slice(0, 100) : "unknown",
         issueNumber,
         runId,
       });

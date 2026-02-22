@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/rest";
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { createAppAuth } from "@octokit/auth-app";
+import { RequestError } from "@octokit/request-error";
 import { Webhooks } from "@octokit/webhooks";
 import { graphql } from "@octokit/graphql";
 import { Result } from "better-result";
@@ -25,9 +26,13 @@ export async function createOctokit(env: Env, installationId: number): Promise<O
     installationId,
   });
 
-  const result = await Result.tryPromise(() => auth({ type: "installation" }), {
-    retry: RETRY_CONFIG,
-  });
+  const result = await Result.tryPromise(
+    {
+      try: () => auth({ type: "installation" }),
+      catch: (e) => new GitHubAPIError({ operation: "createOctokit", cause: e }),
+    },
+    { retry: RETRY_CONFIG },
+  );
   if (result.isErr()) throw result.error;
   const { token } = result.value;
 
@@ -60,9 +65,13 @@ export async function createGraphQL(env: Env, installationId: number): Promise<t
     installationId,
   });
 
-  const result = await Result.tryPromise(() => auth({ type: "installation" }), {
-    retry: RETRY_CONFIG,
-  });
+  const result = await Result.tryPromise(
+    {
+      try: () => auth({ type: "installation" }),
+      catch: (e) => new GitHubAPIError({ operation: "createGraphQL", cause: e }),
+    },
+    { retry: RETRY_CONFIG },
+  );
   if (result.isErr()) throw result.error;
   const { token } = result.value;
 
@@ -78,9 +87,13 @@ export async function getInstallationToken(env: Env, installationId: number): Pr
     installationId,
   });
 
-  const result = await Result.tryPromise(() => auth({ type: "installation" }), {
-    retry: RETRY_CONFIG,
-  });
+  const result = await Result.tryPromise(
+    {
+      try: () => auth({ type: "installation" }),
+      catch: (e) => new GitHubAPIError({ operation: "getInstallationToken", cause: e }),
+    },
+    { retry: RETRY_CONFIG },
+  );
   if (result.isErr()) throw result.error;
   return result.value.token;
 }
@@ -127,7 +140,7 @@ export async function verifyWebhook(
 }
 
 // Checks if a user has write access to a repository.
-// Returns false on any error (conservative).
+// Returns false on any error (conservative). Logs non-404 errors for observability.
 export async function hasWriteAccess(
   octokit: Octokit,
   owner: string,
@@ -142,7 +155,13 @@ export async function hasWriteAccess(
     });
 
     return ["admin", "write"].includes(response.data.permission);
-  } catch {
+  } catch (error) {
+    // 404 is expected (user not a collaborator) — only log unexpected errors
+    if (!(error instanceof RequestError && error.status === 404)) {
+      createLogger({ owner, repo }).errorWithException("write_access_check_failed", error, {
+        username,
+      });
+    }
     return false;
   }
 }
@@ -494,7 +513,9 @@ export function buildIssueContext(issue: GitHubIssue, excludeCommentIds: number[
 }
 
 // Checks if a file exists in a repository.
-// Returns boolean for simplicity (caller rarely needs error details).
+// Returns false for 404 (file not found). Logs and returns false for other
+// errors (network, rate limit, 5xx) since the caller treats absence as
+// "needs setup" — a false negative is safer than crashing.
 export async function fileExists(
   octokit: Octokit,
   owner: string,
@@ -505,7 +526,15 @@ export async function fileExists(
   try {
     await octokit.repos.getContent({ owner, repo, path, ref });
     return true;
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      return false;
+    }
+    // Log non-404 errors so transient failures are visible in observability
+    createLogger({ owner, repo }).errorWithException("file_exists_check_failed", error, {
+      path,
+      ref,
+    });
     return false;
   }
 }
@@ -759,9 +788,13 @@ export async function deleteInstallation(env: Env, installationId: number): Prom
     privateKey: env.GITHUB_APP_PRIVATE_KEY,
   });
 
-  const result = await Result.tryPromise(() => auth({ type: "app" }), {
-    retry: RETRY_CONFIG,
-  });
+  const result = await Result.tryPromise(
+    {
+      try: () => auth({ type: "app" }),
+      catch: (e) => new GitHubAPIError({ operation: "deleteInstallation", cause: e }),
+    },
+    { retry: RETRY_CONFIG },
+  );
   if (result.isErr()) throw result.error;
   const octokit = new ResilientOctokit({ auth: result.value.token });
   await octokit.apps.deleteInstallation({ installation_id: installationId });

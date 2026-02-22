@@ -64,7 +64,19 @@ function emit(
 
   // Use the appropriate console method for log level.
   // Cloudflare Workers logs capture these as structured data when output as JSON.
-  const json = JSON.stringify(entry);
+  // Guard against circular references or other serialization failures.
+  let json: string;
+  try {
+    json = JSON.stringify(entry);
+  } catch {
+    // Fallback: serialize with safe subset of fields
+    json = JSON.stringify({
+      timestamp: entry.timestamp,
+      level: entry.level,
+      event: entry.event,
+      error_message: "log_serialization_failed",
+    });
+  }
   switch (level) {
     case "debug":
       console.debug(json);

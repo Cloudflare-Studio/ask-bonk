@@ -31,7 +31,14 @@ export async function runAsk(
     variant: variant ?? undefined,
   });
 
-  const token = await getInstallationToken(env, installationId);
+  let token: string;
+  try {
+    token = await getInstallationToken(env, installationId);
+  } catch (error) {
+    log.errorWithException("sandbox_token_failed", error);
+    return Result.err(new SandboxError({ operation: "getInstallationToken", cause: error }));
+  }
+
   const sandboxId = `${owner}-${repo}-${Date.now()}`;
   const sandbox = getSandbox(env.Sandbox, sandboxId);
   const repoUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
@@ -178,19 +185,22 @@ export async function runAsk(
       await sendEvent("session", { id: sessionId, askId });
 
       const promptResultWrapped = await Result.tryPromise(
-        () =>
-          client.session.prompt({
-            path: { id: sessionId },
-            query: { directory: workDir },
-            body: {
-              model: { providerID, modelID },
-              agent: agent ?? undefined,
-              // variant is supported by the OpenCode API but not yet in the v1 SDK types.
-              // Safe to pass -- the SDK sends all body fields in the HTTP request.
-              ...(variant ? { variant } : {}),
-              parts: [{ type: "text", text: prompt }],
-            },
-          }),
+        {
+          try: () =>
+            client.session.prompt({
+              path: { id: sessionId },
+              query: { directory: workDir },
+              body: {
+                model: { providerID, modelID },
+                agent: agent ?? undefined,
+                // variant is supported by the OpenCode API but not yet in the v1 SDK types.
+                // Safe to pass -- the SDK sends all body fields in the HTTP request.
+                ...(variant ? { variant } : {}),
+                parts: [{ type: "text", text: prompt }],
+              },
+            }),
+          catch: (e) => new SandboxError({ operation: "session.prompt", cause: e }),
+        },
         { retry: RETRY_CONFIG },
       );
       if (promptResultWrapped.isErr()) throw promptResultWrapped.error;

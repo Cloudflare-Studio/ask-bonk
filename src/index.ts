@@ -211,24 +211,34 @@ ask.post("/", async (c) => {
   }
   const { id: installationId, source: installationSource } = installationResult.value;
 
-  const streamResult = await runAsk(c.env, installationId, body);
-  if (streamResult.isErr()) {
-    askLog.errorWithException("ask_failed", streamResult.error, {
+  try {
+    const streamResult = await runAsk(c.env, installationId, body);
+    if (streamResult.isErr()) {
+      askLog.errorWithException("ask_failed", streamResult.error, {
+        installation_id: installationId,
+        installation_source: installationSource,
+        duration_ms: Date.now() - startTime,
+      });
+      return c.json({ error: streamResult.error.message }, 500);
+    }
+
+    // duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
+    return new Response(streamResult.value, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
+  } catch (error) {
+    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
+    askLog.errorWithException("ask_unhandled_error", error, {
       installation_id: installationId,
       installation_source: installationSource,
       duration_ms: Date.now() - startTime,
     });
-    return c.json({ error: streamResult.error.message }, 500);
+    return c.json({ error: message }, 500);
   }
-
-  // duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
-  return new Response(streamResult.value, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
 });
 
 app.route("/ask", ask);

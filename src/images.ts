@@ -3,10 +3,20 @@ import { Result } from "better-result";
 import { log } from "./log";
 
 // Retry config for file downloads: 3 attempts with exponential backoff starting at 5s.
+// Only retry transient errors (network, 5xx). Deterministic failures like
+// size-limit violations and 4xx client errors are not retried.
 const RETRY_CONFIG = {
   times: 3,
   delayMs: 5000,
   backoff: "exponential" as const,
+  shouldRetry: (err: unknown) => {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Attachment too large")) return false;
+    // "HTTP 4xx" errors are client errors that won't change on retry
+    const httpMatch = message.match(/^HTTP (\d+)$/);
+    if (httpMatch && Number(httpMatch[1]) >= 400 && Number(httpMatch[1]) < 500) return false;
+    return true;
+  },
 };
 
 // Maximum attachment size (20 MB). Prevents unbounded memory usage from

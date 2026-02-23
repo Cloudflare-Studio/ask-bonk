@@ -22,7 +22,7 @@ export const WORKFLOW_POLL_INTERVAL_SECS = 300;
 // tracking is cheap, we default to the platform ceiling so the tracking window
 // never expires before the workflow itself does.
 //
-// Override with the BONK_MAX_TRACK_TIME env var (value in minutes).
+// Override with the BONK_MAX_TRACK_SECS env var (value in seconds).
 // You're unlikely to need to reduce this; set it higher only if you run
 // workflows with custom timeouts exceeding 6 hours (self-hosted runners).
 export const DEFAULT_MAX_WORKFLOW_TRACKING_MS = 6 * 60 * 60 * 1000;

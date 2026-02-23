@@ -29,10 +29,10 @@ export interface Env {
   // Enable PAT-to-installation-token exchange (for local development/testing)
   // Set to "true" to enable - disabled by default in production
   ENABLE_PAT_EXCHANGE?: string;
-  // Maximum workflow tracking time in minutes. Defaults to 360 (6 hours,
+  // Maximum workflow tracking time in seconds. Defaults to 21600 (6 hours,
   // the GitHub Actions workflow-level maximum). You're unlikely to need to
   // reduce this; set it higher only for self-hosted runners with custom limits.
-  BONK_MAX_TRACK_TIME?: string;
+  BONK_MAX_TRACK_SECS?: string;
 }
 
 // Request body for /ask endpoint

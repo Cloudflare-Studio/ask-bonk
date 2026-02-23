@@ -290,8 +290,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     log.info("run_status_checking");
 
     const elapsed = Date.now() - createdAt;
-    const override = Number(this.env.BONK_MAX_TRACK_TIME);
-    const maxTrackingMs = override > 0 ? override * 60 * 1000 : DEFAULT_MAX_WORKFLOW_TRACKING_MS;
+    const override = Number(this.env.BONK_MAX_TRACK_SECS);
+    const maxTrackingMs = override > 0 ? override * 1000 : DEFAULT_MAX_WORKFLOW_TRACKING_MS;
     if (elapsed > maxTrackingMs) {
       log.warn("run_timed_out", {
         elapsed_ms: elapsed,

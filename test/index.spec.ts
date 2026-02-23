@@ -70,7 +70,8 @@ function createMockEnv(overrides: Partial<Env> = {}): Env {
         prop === "ASK_SECRET" ||
         prop === "CLOUDFLARE_ACCOUNT_ID" ||
         prop === "ANALYTICS_TOKEN" ||
-        prop === "ENABLE_PAT_EXCHANGE"
+        prop === "ENABLE_PAT_EXCHANGE" ||
+        prop === "BONK_MAX_TRACK_SECS"
       ) {
         return undefined;
       }

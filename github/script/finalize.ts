@@ -39,6 +39,10 @@ async function main() {
         repo,
         run_id: context.runId,
         status,
+        // Include context so the server can post failure comments even if the
+        // run was never tracked or was already removed from activeRuns.
+        issue_number: context.issue?.number,
+        run_url: context.runUrl,
       }),
     });
 

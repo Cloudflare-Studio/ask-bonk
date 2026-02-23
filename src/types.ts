@@ -301,6 +301,11 @@ export interface FinalizeWorkflowRequest {
   repo: string;
   run_id: number;
   status: "success" | "failure" | "cancelled" | "skipped";
+  // Optional context for posting failure comments when the run was never
+  // tracked or was already removed from activeRuns (e.g., polling timeout
+  // removed it before the action's finalize step ran).
+  issue_number?: number;
+  run_url?: string;
 }
 
 // Request to check/create workflow file (POST /api/github/setup)

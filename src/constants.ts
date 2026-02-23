@@ -17,8 +17,10 @@ export const APP_INSTALLATION_CACHE_TTL_SECS = 1800;
 // Durable Object polling interval for workflow status (5 minutes)
 export const WORKFLOW_POLL_INTERVAL_SECS = 300;
 
-// Maximum time to track a workflow run before timing out (30 minutes)
-export const MAX_WORKFLOW_TRACKING_MS = 30 * 60 * 1000;
+// Maximum time to track a workflow run before timing out (50 minutes).
+// Must exceed the action's `timeout 45m` so the action-driven finalize path
+// fires before the polling safety net declares a timeout.
+export const MAX_WORKFLOW_TRACKING_MS = 50 * 60 * 1000;
 
 // GitHub PR title max length
 export const PR_TITLE_MAX_LENGTH = 256;

@@ -199,4 +199,7 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
+        # Pass issue/PR context so the server can post failure comments even
+        # when the run was never tracked or was already removed from activeRuns.
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
       run: bun run ${{ github.action_path }}/script/finalize.ts

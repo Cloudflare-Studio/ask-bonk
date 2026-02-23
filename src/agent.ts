@@ -219,14 +219,45 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
   }
 
-  async finalizeRun(runId: number, status: string): Promise<void> {
+  async finalizeRun(
+    runId: number,
+    status: string,
+    fallbackIssueNumber?: number,
+    fallbackRunUrl?: string,
+    actor?: string,
+  ): Promise<void> {
     const run = this.state.activeRuns[runId];
-    const log = this.logger(runId, run?.issueNumber);
+    const issueNumber = run?.issueNumber ?? fallbackIssueNumber;
+    const log = this.logger(runId, issueNumber);
 
-    log.info("run_finalizing", { status });
+    log.info("run_finalizing", { status, has_active_run: !!run });
 
     if (!run) {
-      log.info("run_already_finalized");
+      // Run was never tracked or was already removed (e.g., polling timeout
+      // removed it before the action's finalize step arrived). For non-success
+      // statuses, attempt to post a failure comment using fallback context from
+      // the finalize request. Previously this returned silently, causing the
+      // bug where failed runs produced no user-visible feedback.
+      if (status !== "success" && issueNumber && fallbackRunUrl) {
+        const wasRecentlyFinalized = !!this.state.recentlyFinalizedRuns?.[runId];
+        log.warn("run_not_active_posting_failure", {
+          recently_finalized: wasRecentlyFinalized,
+        });
+        await this.postFailureComment(
+          runId,
+          fallbackRunUrl,
+          issueNumber,
+          status,
+          undefined,
+          undefined,
+          actor,
+        );
+      } else {
+        log.info("run_already_finalized", {
+          has_issue_number: !!issueNumber,
+          has_run_url: !!fallbackRunUrl,
+        });
+      }
       return;
     }
 
@@ -377,7 +408,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     // Run is still active -- finalize it now (the action's finalize call never arrived)
     if (this.state.activeRuns[runId]) {
       log.warn("run_finalized_by_workflow_webhook", { conclusion });
-      await this.finalizeRun(runId, conclusion ?? "failure");
+      await this.finalizeRun(runId, conclusion ?? "failure", issueNumber, runUrl, actor);
       return;
     }
 

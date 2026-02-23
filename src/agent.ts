@@ -12,7 +12,7 @@ import {
 import { createLogger, sanitizeSecrets, type Logger } from "./log";
 import { emitMetric } from "./metrics";
 import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
-import { WORKFLOW_POLL_INTERVAL_SECS, MAX_WORKFLOW_TRACKING_MS } from "./constants";
+import { WORKFLOW_POLL_INTERVAL_SECS, getMaxWorkflowTrackingMs } from "./constants";
 
 export interface CheckStatusPayload {
   runId: number;
@@ -289,10 +289,11 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     log.info("run_status_checking");
 
     const elapsed = Date.now() - createdAt;
-    if (elapsed > MAX_WORKFLOW_TRACKING_MS) {
+    const maxTrackingMs = getMaxWorkflowTrackingMs(this.env);
+    if (elapsed > maxTrackingMs) {
       log.warn("run_timed_out", {
         elapsed_ms: elapsed,
-        max_tracking_ms: MAX_WORKFLOW_TRACKING_MS,
+        max_tracking_ms: maxTrackingMs,
       });
       this.removeAndRecordRun(runId);
       await this.postFailureComment(runId, runUrl, issueNumber, "timeout", payload);

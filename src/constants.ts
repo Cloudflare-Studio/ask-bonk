@@ -17,10 +17,26 @@ export const APP_INSTALLATION_CACHE_TTL_SECS = 1800;
 // Durable Object polling interval for workflow status (5 minutes)
 export const WORKFLOW_POLL_INTERVAL_SECS = 300;
 
-// Maximum time to track a workflow run before timing out (50 minutes).
-// Must exceed the action's `timeout 45m` so the action-driven finalize path
-// fires before the polling safety net declares a timeout.
-export const MAX_WORKFLOW_TRACKING_MS = 50 * 60 * 1000;
+// Default maximum time to track a workflow run before the polling safety net
+// declares a timeout (6 hours — the GitHub Actions workflow-level maximum).
+// Since job tracking is cheap, we default to the platform ceiling so the
+// tracking window never expires before the workflow itself does.
+//
+// Override with the BONK_MAX_TRACK_TIME env var (value in minutes).
+// You're unlikely to need to reduce this; set it higher only if you run
+// workflows with custom timeouts exceeding 6 hours (self-hosted runners).
+const DEFAULT_MAX_WORKFLOW_TRACKING_MS = 6 * 60 * 60 * 1000;
+
+export function getMaxWorkflowTrackingMs(env?: { BONK_MAX_TRACK_TIME?: string }): number {
+  const override = env?.BONK_MAX_TRACK_TIME;
+  if (override) {
+    const minutes = Number(override);
+    if (!Number.isNaN(minutes) && minutes > 0) {
+      return minutes * 60 * 1000;
+    }
+  }
+  return DEFAULT_MAX_WORKFLOW_TRACKING_MS;
+}
 
 // GitHub PR title max length
 export const PR_TITLE_MAX_LENGTH = 256;

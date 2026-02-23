@@ -12,7 +12,7 @@ import {
 import { createLogger, sanitizeSecrets, type Logger } from "./log";
 import { emitMetric } from "./metrics";
 import { createOctokitForRepo, type InstallationSource, type InstallationLookup } from "./oidc";
-import { WORKFLOW_POLL_INTERVAL_SECS, getMaxWorkflowTrackingMs } from "./constants";
+import { WORKFLOW_POLL_INTERVAL_SECS, DEFAULT_MAX_WORKFLOW_TRACKING_MS } from "./constants";
 
 export interface CheckStatusPayload {
   runId: number;
@@ -121,23 +121,24 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     });
   }
 
-  // Returns owner/repo parsed from this.name if not yet persisted in state.
-  // Used by setInstallationId to persist identity in a single setState call.
-  private identityPatch(): { owner?: string; repo?: string } {
-    if (this.state.owner && this.state.repo) return {};
-    try {
-      const parts = this.name.split("/");
-      if (parts[0] && parts[1]) return { owner: parts[0], repo: parts[1] };
-    } catch {
-      // this.name unavailable (alarm wakeup) — state should already have it
-    }
-    return {};
-  }
-
   async setInstallationId(id: number, source: InstallationSource): Promise<void> {
+    // Persist owner/repo from this.name if not yet in state, so alarm wakeups
+    // can identify the repo without relying on setName().
+    let owner: string | undefined;
+    let repo: string | undefined;
+    if (!this.state.owner || !this.state.repo) {
+      try {
+        const parts = this.name.split("/");
+        owner = parts[0] || undefined;
+        repo = parts[1] || undefined;
+      } catch {
+        // this.name unavailable (alarm wakeup) — state should already have it
+      }
+    }
     this.setState({
       ...this.state,
-      ...this.identityPatch(),
+      ...(owner && { owner }),
+      ...(repo && { repo }),
       installationId: id,
       installationSource: source,
     });
@@ -289,7 +290,8 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     log.info("run_status_checking");
 
     const elapsed = Date.now() - createdAt;
-    const maxTrackingMs = getMaxWorkflowTrackingMs(this.env);
+    const override = Number(this.env.BONK_MAX_TRACK_TIME);
+    const maxTrackingMs = override > 0 ? override * 60 * 1000 : DEFAULT_MAX_WORKFLOW_TRACKING_MS;
     if (elapsed > maxTrackingMs) {
       log.warn("run_timed_out", {
         elapsed_ms: elapsed,
@@ -476,15 +478,6 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     return pruned;
   }
 
-  // Returns the state key for looking up / storing a failure comment.
-  // Review thread triggers get a per-thread key; everything else is per-issue.
-  private failureCommentKey(issueNumber: number, run?: CheckStatusPayload): string {
-    if (run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId) {
-      return `rc:${run.reactionTargetId}`;
-    }
-    return `i:${issueNumber}`;
-  }
-
   private storeFailureComment(
     key: string,
     commentId: number,
@@ -546,9 +539,10 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     const log = this.logger(runId, issueNumber);
     const effectiveActor = run?.actor ?? actor;
     const body = this.buildFailureBody(conclusion, runUrl, effectiveActor);
-    const key = this.failureCommentKey(issueNumber, run);
     const isReviewThread =
       run?.reactionTargetType === "pull_request_review_comment" && run.reactionTargetId;
+    // Review thread triggers get a per-thread key; everything else is per-issue.
+    const key = isReviewThread ? `rc:${run.reactionTargetId}` : `i:${issueNumber}`;
 
     // Emit workflow-failure metric unconditionally — callers in
     // handleWorkflowRunCompleted rely on this firing for every failure.

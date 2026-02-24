@@ -137,6 +137,7 @@ export interface GitHubReview {
 }
 
 export interface GitHubPullRequest {
+  number: number;
   title: string;
   body: string;
   author: GitHubAuthor;

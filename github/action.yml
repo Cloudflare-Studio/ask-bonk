@@ -195,6 +195,13 @@ runs:
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        # Expose the PR/issue number so OpenCode (and any shell commands the
+        # model runs, e.g. `gh api .../pulls/$PR_NUMBER/reviews`) can
+        # reference the correct PR without having to infer it from git or
+        # the GitHub API. This prevents the model from accidentally
+        # discovering and acting on a different PR.
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || '' }}
 
     - name: Finalize Bonk run
       if: |

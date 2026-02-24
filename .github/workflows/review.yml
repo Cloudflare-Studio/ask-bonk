@@ -6,7 +6,8 @@ on:
 
 jobs:
   review:
-    if: github.event.sender.type != 'Bot'
+    # mentions in this check must match the `mentions` input below
+    if: github.event.sender.type != 'Bot' && contains(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
     permissions:
       id-token: write

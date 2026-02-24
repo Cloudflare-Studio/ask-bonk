@@ -12,7 +12,8 @@ concurrency:
 
 jobs:
   bonk:
-    if: github.event.sender.type != 'Bot'
+    # mentions in this check must match the `mentions` input below
+    if: github.event.sender.type != 'Bot' && (contains(github.event.comment.body, '/bonk') || contains(github.event.comment.body, '@ask-bonk'))
     runs-on: ubuntu-latest
     permissions:
       id-token: write

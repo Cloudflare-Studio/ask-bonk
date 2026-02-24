@@ -960,13 +960,13 @@ async function handleWorkflowDispatchEvent(payload: WorkflowDispatchPayload): Pr
   }).info("workflow_dispatch_received");
 }
 
-// Safety net for failed Bonk workflow runs. Catches two cases:
-// 1. Runs that were tracked but never finalized (network failure in finalize step)
-// 2. Runs that were never tracked at all (OIDC failure before track step)
+// Safety net for failed Bonk workflow runs. Tracked runs that were never
+// finalized (network failure in finalize step) get a failure comment.
+// Untracked runs (workflow variants, self-triggered, pre-track failures) are
+// logged and metricked for observability but do not receive comments.
 //
 // NOTE: Requires "workflow_run" to be enabled in the GitHub App webhook event
 // subscriptions (github.com > Developer Settings > GitHub Apps > Permissions & events).
-// Without it, this handler never executes and Scenario B (pre-track failures) stays invisible.
 async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Promise<void> {
   const parsed = parseWorkflowRunEvent(payload);
   if (!parsed) return;
@@ -992,10 +992,9 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
     run_url: parsed.runUrl,
   });
 
-  // Try to extract an issue/PR number from the workflow_run payload so we can
-  // post a failure comment even for runs that were never tracked (e.g., OIDC
-  // failure before the track step). The pull_requests array is populated for
-  // non-fork PRs; for fork PRs it's empty (GitHub limitation).
+  // Extract an issue/PR number for the tracked-but-not-finalized path and
+  // for observability logging on untracked runs. The pull_requests array is
+  // populated for non-fork PRs; empty for fork PRs.
   const issueNumber = parsed.pullRequestNumbers[0];
 
   try {

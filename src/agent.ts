@@ -424,6 +424,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       conclusion,
       run_url: runUrl,
       issue_number: issueNumber,
+      actor,
     });
     emitMetric(this.env, {
       repo: `${this.owner}/${this.repo}`,

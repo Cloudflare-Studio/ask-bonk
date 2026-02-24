@@ -383,13 +383,10 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     this.reschedule(log, payload);
   }
 
-  // Handle a workflow_run.completed webhook. This is the safety net for runs
-  // that were tracked but never finalized (network failure, etc.) and for runs
-  // that were never tracked at all (OIDC failure before track step).
-  //
-  // issueNumber is optionally provided from the workflow_run payload's
-  // pull_requests array (populated for non-fork PRs) to enable failure
-  // comments even for runs that were never tracked.
+  // Handle a workflow_run.completed webhook. Safety net for tracked runs whose
+  // finalize call never arrived (network failure, etc.). Untracked runs
+  // (workflow variants, self-triggered, concurrency-cancelled) are logged and
+  // metricked but do NOT receive failure comments.
   async handleWorkflowRunCompleted(
     runId: number,
     conclusion: string | null,
@@ -412,20 +409,17 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       return;
     }
 
-    // Run was never tracked (e.g., OIDC failure before track step, or
-    // workflow needed approval and timed out / was cancelled, or a
-    // different bonk-* workflow variant in the same repo).
+    // Run was never tracked via /api/github/track. Common causes:
+    //   - bonk-* workflow variant (bonk-review.yml, bonk-scheduled.yml)
+    //   - Self-triggered runs (Bonk's own review comments re-trigger bonk.yml)
+    //   - Auto-cancelled superseded runs from concurrency groups
+    //   - OIDC failure before the track step (rare)
     //
-    // Do NOT post a failure comment for untracked runs. The most common
-    // causes of an untracked run reaching this point are:
-    //   - A bonk-* workflow variant (bonk-scheduled.yml, bonk-review.yml)
-    //     that is unrelated to the tracked issue_comment-triggered run.
-    //   - Auto-cancelled superseded runs (concurrency groups).
-    //   - OIDC failure before the track step (rare).
-    //
-    // Posting a comment here would spam PRs with confusing failure messages
-    // for workflows that succeeded or were intentionally cancelled. Emit a
-    // metric for observability instead.
+    // Do NOT post a comment -- there's no verified link between this run
+    // and a user's /bonk invocation. The issue number is inferred from
+    // workflow_run.pull_requests (branch-based matching), which can be
+    // wrong for workflow variants or multi-PR branches. Emit a metric
+    // for observability instead.
     log.warn("run_untracked_failure", {
       conclusion,
       run_url: runUrl,

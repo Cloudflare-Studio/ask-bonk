@@ -413,38 +413,31 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
 
     // Run was never tracked (e.g., OIDC failure before track step, or
-    // workflow needed approval and timed out / was cancelled).
+    // workflow needed approval and timed out / was cancelled, or a
+    // different bonk-* workflow variant in the same repo).
+    //
+    // Do NOT post a failure comment for untracked runs. The most common
+    // causes of an untracked run reaching this point are:
+    //   - A bonk-* workflow variant (bonk-scheduled.yml, bonk-review.yml)
+    //     that is unrelated to the tracked issue_comment-triggered run.
+    //   - Auto-cancelled superseded runs (concurrency groups).
+    //   - OIDC failure before the track step (rare).
+    //
+    // Posting a comment here would spam PRs with confusing failure messages
+    // for workflows that succeeded or were intentionally cancelled. Emit a
+    // metric for observability instead.
     log.warn("run_untracked_failure", {
       conclusion,
       run_url: runUrl,
       issue_number: issueNumber,
     });
-
-    // Without an issue number (fork PRs, workflow_dispatch), we can't post a
-    // comment — emit a metric so the failure is still observable.
-    if (!issueNumber) {
-      emitMetric(this.env, {
-        repo: `${this.owner}/${this.repo}`,
-        eventType: "finalize",
-        status: "failure",
-        errorCode: `untracked: ${conclusion ?? "unknown"}`,
-        runId,
-      });
-      return;
-    }
-
-    // Post a failure comment so the user gets feedback.
-    // postFailureComment emits its own metric, so we skip here to avoid
-    // double-counting.
-    await this.postFailureComment(
+    emitMetric(this.env, {
+      repo: `${this.owner}/${this.repo}`,
+      eventType: "finalize",
+      status: "failure",
+      errorCode: `untracked: ${conclusion ?? "unknown"}`,
       runId,
-      runUrl,
-      issueNumber,
-      conclusion,
-      undefined,
-      undefined,
-      actor,
-    );
+    });
   }
 
   private pruneRecentlyFinalized(): Record<number, number> {

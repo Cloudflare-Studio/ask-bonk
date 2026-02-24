@@ -314,7 +314,13 @@ export function parseWorkflowDispatchEvent(
 
 // Conclusions that warrant failure handling. We allowlist rather than denylist
 // to avoid false positives from conclusions like "neutral" or "stale".
-const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required"]);
+//
+// "cancelled" is deliberately excluded: GitHub Actions auto-cancels superseded
+// runs when concurrency groups are configured, which is benign noise. Genuine
+// infrastructure failures have conclusion "failure", and stuck workflows will
+// hit "timed_out" or "action_required". If a user manually cancels a run,
+// it's intentional and doesn't need a failure comment.
+const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "action_required"]);
 
 // Parse workflow_run.completed events for failed Bonk workflows.
 // Returns null for non-completed events, successful runs, or non-Bonk workflows.

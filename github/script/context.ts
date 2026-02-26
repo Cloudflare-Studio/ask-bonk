@@ -198,7 +198,11 @@ export async function detectForkFromPR(
     };
     const head = pr.head?.repo?.full_name;
     const base = pr.base?.repo?.full_name;
-    if (!base) return null;
+    if (!base) {
+      // Fail closed: if base metadata is missing, default to fork mode so the
+      // workflow can continue safely in comment-only behavior.
+      return { isFork: true, headSha: pr.head?.sha };
+    }
     return { isFork: !head || head !== base, headSha: pr.head?.sha };
   } catch {
     return null;

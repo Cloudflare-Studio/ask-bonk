@@ -21,7 +21,7 @@ describe("GitHub Action script context", () => {
     ).resolves.toEqual({ isFork: false });
   });
 
-  it("falls back to PR API and returns null when base repo is missing", async () => {
+  it("falls back to fork mode when base repo is missing", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ head: { repo: { full_name: "fork/repo" }, sha: "abc" } }), {
         status: 200,
@@ -30,7 +30,7 @@ describe("GitHub Action script context", () => {
     );
 
     const result = await detectForkFromPR(undefined, undefined, "https://api.github.com/pr", "token");
-    expect(result).toBeNull();
+    expect(result).toEqual({ isFork: true, headSha: "abc" });
   });
 });
 

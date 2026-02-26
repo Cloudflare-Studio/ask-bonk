@@ -90,7 +90,8 @@ export function extractRepoFromClaims(
 // Returns null if header is missing or malformed.
 export function extractBearerToken(authHeader: string | null | undefined): string | null {
   if (!authHeader?.startsWith("Bearer ")) return null;
-  return authHeader.slice(7);
+  const token = authHeader.slice(7).trim();
+  return token ? token : null;
 }
 
 // Validates OIDC token and extracts repo info in one call.

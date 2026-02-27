@@ -7,6 +7,23 @@ interface RetryOptions {
   timeoutMs?: number;
   retries?: number;
   baseDelayMs?: number;
+  onAttempt?: (context: RetryAttemptContext) => void;
+  onRetry?: (context: RetryDelayContext) => void;
+}
+
+export interface RetryAttemptContext {
+  attempt: number;
+  maxAttempts: number;
+}
+
+export interface RetryDelayContext {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  reason: "transient_status" | "request_error";
+  statusCode?: number;
+  errorName?: string;
+  errorMessage?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -54,21 +71,42 @@ export async function fetchWithRetry(
   const timeoutMs = retryOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retries = retryOptions.retries ?? DEFAULT_RETRIES;
   const baseDelayMs = retryOptions.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxAttempts = retries + 1;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const attemptNumber = attempt + 1;
+    retryOptions.onAttempt?.({ attempt: attemptNumber, maxAttempts });
     try {
       const response = await fetchWithTimeout(url, options, timeoutMs);
       if (isTransientStatus(response) && attempt < retries) {
         const retryAfterMs = parseRetryAfterMs(response);
-        await sleep(Math.max(retryAfterMs, baseDelayMs * (attempt + 1)));
+        const delayMs = Math.max(retryAfterMs, baseDelayMs * (attempt + 1));
+        retryOptions.onRetry?.({
+          attempt: attemptNumber,
+          maxAttempts,
+          delayMs,
+          reason: "transient_status",
+          statusCode: response.status,
+        });
+        await sleep(delayMs);
         continue;
       }
       return response;
     } catch (error) {
       lastError = error;
       if (attempt < retries) {
-        await sleep(baseDelayMs * (attempt + 1));
+        const delayMs = baseDelayMs * (attempt + 1);
+        const err = error instanceof Error ? error : undefined;
+        retryOptions.onRetry?.({
+          attempt: attemptNumber,
+          maxAttempts,
+          delayMs,
+          reason: "request_error",
+          errorName: err?.name,
+          errorMessage: err?.message ?? String(error),
+        });
+        await sleep(delayMs);
         continue;
       }
     }

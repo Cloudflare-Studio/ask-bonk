@@ -163,6 +163,9 @@ export function getApiBaseUrl(): string {
     throw new Error("OIDC_BASE_URL not set");
   }
   const normalized = oidcBaseUrl.replace(/\/+$/, "");
+  if (!normalized.startsWith("https://")) {
+    throw new Error("OIDC_BASE_URL must use https");
+  }
   return normalized.replace(/\/auth$/, "");
 }
 

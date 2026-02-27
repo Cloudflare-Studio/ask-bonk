@@ -49,9 +49,13 @@ function parseCodeowners(content: string): {
   const teamPatterns: string[] = [];
 
   for (const line of content.split("\n")) {
-    const trimmed = line.trim();
+    const trimmed = (line.split("#", 1)[0] || "").trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const mentions = trimmed.match(/@[\w-]+(?:\/[\w-]+)?/g) || [];
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 2) continue;
+
+    const mentions = fields.slice(1).filter((field) => /^@[\w-]+(?:\/[\w-]+)?$/.test(field));
     for (const mention of mentions) {
       if (mention.includes("/")) {
         teamPatterns.push(mention.substring(1));
@@ -104,7 +108,7 @@ async function checkCodeowners(
         `/orgs/${org}/teams/${team}/memberships/${actor}`,
         token,
       );
-      if (membership) {
+      if (membership?.state === "active") {
         core.info(`User ${actor} is a member of team @${teamPath}`);
         return;
       }
@@ -133,7 +137,7 @@ async function checkPermissions(): Promise<void> {
   const [owner = "", repo = ""] = repository.split("/");
   const actor =
     process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR || "";
-  const ref = process.env.GITHUB_REF || "HEAD";
+  const ref = process.env.DEFAULT_BRANCH || "main";
 
   if (!owner || !repo || !actor) {
     return core.setFailed("Missing required context (owner, repo, or actor)");
@@ -459,11 +463,8 @@ function appendToGithubEnv(name: string, value: string): void {
   }
 }
 
-function oidcFailWithFallback(reason: string): OidcResult {
-  const fallbackToken = process.env.FALLBACK_TOKEN || "";
+function oidcFailClosed(reason: string): OidcResult {
   core.warning(`OIDC exchange failed: ${reason}`);
-  maskValue(fallbackToken);
-  appendToGithubEnv("GH_TOKEN", fallbackToken);
   return { failed: true };
 }
 
@@ -472,21 +473,22 @@ async function exchangeOidc(): Promise<OidcResult> {
   const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
   if (!oidcUrl || !oidcRequestToken) {
-    return oidcFailWithFallback("OIDC credentials not available (expected for fork PRs)");
+    return oidcFailClosed("OIDC credentials not available");
   }
 
   let actionOidcToken: string;
   try {
     actionOidcToken = await getOidcToken();
   } catch (error) {
-    return oidcFailWithFallback(`Failed to get OIDC token: ${error}`);
+    return oidcFailClosed(`Failed to get OIDC token: ${error}`);
   }
 
-  const rawOidcBaseUrl = process.env.OIDC_BASE_URL;
-  if (!rawOidcBaseUrl) {
-    return oidcFailWithFallback("OIDC_BASE_URL not set");
+  let oidcBaseUrl: string;
+  try {
+    oidcBaseUrl = `${getApiBaseUrl()}/auth`;
+  } catch (error) {
+    return oidcFailClosed(`Invalid OIDC_BASE_URL: ${error}`);
   }
-  const oidcBaseUrl = rawOidcBaseUrl.replace(/\/+$/, "");
 
   let appToken: string;
   try {
@@ -511,16 +513,16 @@ async function exchangeOidc(): Promise<OidcResult> {
       } catch {
         errorMessage = text || errorMessage;
       }
-      return oidcFailWithFallback(`Token exchange returned ${resp.status}: ${errorMessage}`);
+      return oidcFailClosed(`Token exchange returned ${resp.status}: ${errorMessage}`);
     }
 
     const data = (await resp.json()) as { token?: string };
     if (!data.token) {
-      return oidcFailWithFallback("Token exchange response missing token");
+      return oidcFailClosed("Token exchange response missing token");
     }
     appToken = data.token;
   } catch (error) {
-    return oidcFailWithFallback(`Token exchange request failed: ${error}`);
+    return oidcFailClosed(`Token exchange request failed: ${error}`);
   }
 
   maskValue(appToken);
@@ -534,30 +536,23 @@ async function exchangeOidc(): Promise<OidcResult> {
 
 const FORK_COMMENT_MARKER = "<!-- bonk-fork-unsupported -->";
 
-async function handleFork(oidcFailed: boolean): Promise<void> {
+async function handleFork(): Promise<void> {
   const forksEnabled = process.env.FORKS !== "false";
   if (!forksEnabled) {
     core.info("Fork PR detected but forks input is disabled. Skipping silently.");
     return;
   }
 
-  if (!oidcFailed) {
-    core.info("Fork PR with OIDC token available. OpenCode will run in comment-only mode.");
-    core.setOutput("run_opencode", "true");
-    return;
-  }
+  core.info("Fork PR detected. Privileged execution is disabled for this run.");
 
-  // OIDC failed — post a "not supported" comment if we can.
+  // Post a "not supported" comment if we can.
   const repository = process.env.REPOSITORY;
   const issueNumber = process.env.ISSUE_NUMBER;
   const actor = process.env.ACTOR;
   const ghToken = process.env.GH_TOKEN;
 
   if (!repository || !issueNumber || !ghToken) {
-    core.warning(
-      "OIDC unavailable for fork PR and missing context to post comment. " +
-        "This is expected when GitHub restricts id-token permissions for fork workflow runs.",
-    );
+    core.warning("Fork PR detected and missing context to post comment.");
     return;
   }
 
@@ -726,16 +721,14 @@ async function main() {
   const shouldSkip = await checkSetup();
   if (shouldSkip) return;
 
-  // Step 3: Resolve version (synchronous), then run prompt and OIDC exchange
-  // in parallel (they are independent of each other).
+  // Step 3: Resolve version and prompt.
   resolveVersion();
 
-  const [promptResult, oidcResult] = await Promise.all([buildPrompt(), exchangeOidc()]);
+  const promptResult = await buildPrompt();
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("value", promptResult.value);
-  core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
 
   if (promptResult.detectionFailed) {
     core.setFailed("Fork status could not be verified; refusing to proceed.");
@@ -744,11 +737,15 @@ async function main() {
 
   // Step 4: Handle fork PRs
   if (promptResult.isFork) {
-    await handleFork(oidcResult.failed);
+    core.setOutput("oidc_failed", "true");
+    await handleFork();
     return;
   }
 
   // Step 5: Require OIDC for non-fork runs
+  const oidcResult = await exchangeOidc();
+  core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
+
   if (oidcResult.failed) {
     core.setFailed("OIDC token exchange failed. Ensure id-token: write is configured.");
     return;

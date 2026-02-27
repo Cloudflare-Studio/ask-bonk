@@ -127,6 +127,8 @@ runs:
         USER_PROMPT: ${{ inputs.prompt }}
         ACTION_PATH: ${{ github.action_path }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # oidc-exchange
+        FALLBACK_TOKEN: ${{ github.token }}
         # fork-comment
         FORKS: ${{ inputs.forks }}
         ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}

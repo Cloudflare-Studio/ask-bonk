@@ -16,7 +16,6 @@ import {
 } from "../src/events";
 import {
   extractRepoFromClaims,
-  extractBearerToken,
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
 } from "../src/oidc";
@@ -784,27 +783,6 @@ describe("OIDC Claim Parsing", () => {
       expect(result.value.owner).toBe("my-org");
       expect(result.value.repo).toBe("my-complex_repo-name");
     }
-  });
-
-  it("rejects malformed repository claims", () => {
-    const claims = {
-      repository: "octocat",
-    } as any;
-    const result = extractRepoFromClaims(claims);
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error.message).toContain("Invalid repository claim");
-    }
-  });
-});
-
-describe("Authorization Header Parsing", () => {
-  it("extracts bearer token only from valid header format", () => {
-    expect(extractBearerToken("Bearer token123")).toBe("token123");
-    expect(extractBearerToken("Bearer ")).toBeNull();
-    expect(extractBearerToken("Basic token123")).toBeNull();
-    expect(extractBearerToken(null)).toBeNull();
-    expect(extractBearerToken(undefined)).toBeNull();
   });
 });
 

@@ -41,58 +41,34 @@ export interface Core {
   setOutput: (name: string, value: string) => void;
 }
 
-function parseRequiredInt(name: string, value: string | undefined): number {
-  if (!value) {
-    throw new Error(`Missing required ${name}`);
-  }
-  const parsed = parseInt(value, 10);
-  if (Number.isNaN(parsed)) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
-  return parsed;
-}
-
-function parseOptionalInt(name: string, value: string | undefined): number | null {
-  if (!value) return null;
-  const parsed = parseInt(value, 10);
-  if (Number.isNaN(parsed)) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
-  return parsed;
-}
-
 // Build context from environment variables
 export function getContext(): Context {
   const owner = process.env.GITHUB_REPOSITORY_OWNER;
   const repo = process.env.GITHUB_REPOSITORY_NAME;
-  const runIdValue = process.env.GITHUB_RUN_ID;
+  const runId = process.env.GITHUB_RUN_ID;
   const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
   const repository = process.env.GITHUB_REPOSITORY;
 
-  if (!owner || !repo || !runIdValue || !repository) {
+  if (!owner || !repo || !runId || !repository) {
     throw new Error("Missing required GitHub environment variables");
   }
-
-  const runId = parseRequiredInt("GITHUB_RUN_ID", runIdValue);
 
   const issueNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER;
   const commentId = process.env.COMMENT_ID;
   const createdAt = process.env.COMMENT_CREATED_AT || process.env.ISSUE_CREATED_AT;
-  const parsedIssueNumber = parseOptionalInt("ISSUE_NUMBER/PR_NUMBER", issueNumber);
-  const parsedCommentId = parseOptionalInt("COMMENT_ID", commentId);
 
   return {
     repo: { owner, repo },
-    issue: parsedIssueNumber !== null ? { number: parsedIssueNumber } : null,
-    comment: parsedCommentId !== null
+    issue: issueNumber ? { number: parseInt(issueNumber, 10) } : null,
+    comment: commentId
       ? {
-          id: parsedCommentId,
+          id: parseInt(commentId, 10),
           createdAt: createdAt || new Date().toISOString(),
         }
       : null,
     createdAt: createdAt || new Date().toISOString(),
     eventName: process.env.EVENT_NAME || process.env.GITHUB_EVENT_NAME || "",
-    runId,
+    runId: parseInt(runId, 10),
     runUrl: `${serverUrl}/${repository}/actions/runs/${runId}`,
     serverUrl,
     actor: process.env.GITHUB_ACTOR || "",
@@ -163,9 +139,6 @@ export function getApiBaseUrl(): string {
     throw new Error("OIDC_BASE_URL not set");
   }
   const normalized = oidcBaseUrl.replace(/\/+$/, "");
-  if (!normalized.startsWith("https://")) {
-    throw new Error("OIDC_BASE_URL must use https");
-  }
   return normalized.replace(/\/auth$/, "");
 }
 
@@ -201,11 +174,6 @@ export async function detectForkFromPR(
     };
     const head = pr.head?.repo?.full_name;
     const base = pr.base?.repo?.full_name;
-    if (!base) {
-      // Fail closed: if base metadata is missing, default to fork mode so the
-      // workflow can continue safely in comment-only behavior.
-      return { isFork: true, headSha: pr.head?.sha };
-    }
     return { isFork: !head || head !== base, headSha: pr.head?.sha };
   } catch {
     return null;

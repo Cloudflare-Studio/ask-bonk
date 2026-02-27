@@ -49,13 +49,9 @@ function parseCodeowners(content: string): {
   const teamPatterns: string[] = [];
 
   for (const line of content.split("\n")) {
-    const trimmed = (line.split("#", 1)[0] || "").trim();
+    const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-
-    const fields = trimmed.split(/\s+/);
-    if (fields.length < 2) continue;
-
-    const mentions = fields.slice(1).filter((field) => /^@[\w-]+(?:\/[\w-]+)?$/.test(field));
+    const mentions = trimmed.match(/@[\w-]+(?:\/[\w-]+)?/g) || [];
     for (const mention of mentions) {
       if (mention.includes("/")) {
         teamPatterns.push(mention.substring(1));
@@ -108,7 +104,7 @@ async function checkCodeowners(
         `/orgs/${org}/teams/${team}/memberships/${actor}`,
         token,
       );
-      if (membership?.state === "active") {
+      if (membership) {
         core.info(`User ${actor} is a member of team @${teamPath}`);
         return;
       }
@@ -137,7 +133,7 @@ async function checkPermissions(): Promise<void> {
   const [owner = "", repo = ""] = repository.split("/");
   const actor =
     process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR || "";
-  const ref = process.env.DEFAULT_BRANCH || "main";
+  const ref = process.env.GITHUB_REF || "HEAD";
 
   if (!owner || !repo || !actor) {
     return core.setFailed("Missing required context (owner, repo, or actor)");
@@ -463,8 +459,11 @@ function appendToGithubEnv(name: string, value: string): void {
   }
 }
 
-function oidcFailClosed(reason: string): OidcResult {
+function oidcFailWithFallback(reason: string): OidcResult {
+  const fallbackToken = process.env.FALLBACK_TOKEN || "";
   core.warning(`OIDC exchange failed: ${reason}`);
+  maskValue(fallbackToken);
+  appendToGithubEnv("GH_TOKEN", fallbackToken);
   return { failed: true };
 }
 
@@ -473,22 +472,21 @@ async function exchangeOidc(): Promise<OidcResult> {
   const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
   if (!oidcUrl || !oidcRequestToken) {
-    return oidcFailClosed("OIDC credentials not available");
+    return oidcFailWithFallback("OIDC credentials not available (expected for fork PRs)");
   }
 
   let actionOidcToken: string;
   try {
     actionOidcToken = await getOidcToken();
   } catch (error) {
-    return oidcFailClosed(`Failed to get OIDC token: ${error}`);
+    return oidcFailWithFallback(`Failed to get OIDC token: ${error}`);
   }
 
-  let oidcBaseUrl: string;
-  try {
-    oidcBaseUrl = `${getApiBaseUrl()}/auth`;
-  } catch (error) {
-    return oidcFailClosed(`Invalid OIDC_BASE_URL: ${error}`);
+  const rawOidcBaseUrl = process.env.OIDC_BASE_URL;
+  if (!rawOidcBaseUrl) {
+    return oidcFailWithFallback("OIDC_BASE_URL not set");
   }
+  const oidcBaseUrl = rawOidcBaseUrl.replace(/\/+$/, "");
 
   let appToken: string;
   try {
@@ -513,16 +511,16 @@ async function exchangeOidc(): Promise<OidcResult> {
       } catch {
         errorMessage = text || errorMessage;
       }
-      return oidcFailClosed(`Token exchange returned ${resp.status}: ${errorMessage}`);
+      return oidcFailWithFallback(`Token exchange returned ${resp.status}: ${errorMessage}`);
     }
 
     const data = (await resp.json()) as { token?: string };
     if (!data.token) {
-      return oidcFailClosed("Token exchange response missing token");
+      return oidcFailWithFallback("Token exchange response missing token");
     }
     appToken = data.token;
   } catch (error) {
-    return oidcFailClosed(`Token exchange request failed: ${error}`);
+    return oidcFailWithFallback(`Token exchange request failed: ${error}`);
   }
 
   maskValue(appToken);

@@ -7,23 +7,13 @@ interface RetryOptions {
   timeoutMs?: number;
   retries?: number;
   baseDelayMs?: number;
-  onAttempt?: (context: RetryAttemptContext) => void;
-  onRetry?: (context: RetryDelayContext) => void;
-}
-
-export interface RetryAttemptContext {
-  attempt: number;
-  maxAttempts: number;
-}
-
-export interface RetryDelayContext {
-  attempt: number;
-  maxAttempts: number;
-  delayMs: number;
-  reason: "transient_status" | "request_error";
-  statusCode?: number;
-  errorName?: string;
-  errorMessage?: string;
+  onRetry?: (context: {
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    statusCode?: number;
+    error?: string;
+  }) => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -76,7 +66,6 @@ export async function fetchWithRetry(
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const attemptNumber = attempt + 1;
-    retryOptions.onAttempt?.({ attempt: attemptNumber, maxAttempts });
     try {
       const response = await fetchWithTimeout(url, options, timeoutMs);
       if (isTransientStatus(response) && attempt < retries) {
@@ -86,7 +75,6 @@ export async function fetchWithRetry(
           attempt: attemptNumber,
           maxAttempts,
           delayMs,
-          reason: "transient_status",
           statusCode: response.status,
         });
         await sleep(delayMs);
@@ -102,9 +90,7 @@ export async function fetchWithRetry(
           attempt: attemptNumber,
           maxAttempts,
           delayMs,
-          reason: "request_error",
-          errorName: err?.name,
-          errorMessage: err?.message ?? String(error),
+          error: err?.message ?? String(error),
         });
         await sleep(delayMs);
         continue;

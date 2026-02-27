@@ -12,7 +12,6 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { getContext, getOidcToken, getApiBaseUrl, detectForkFromPR, core } from "./context";
 import { fetchWithRetry } from "./http";
-import type { RetryAttemptContext, RetryDelayContext } from "./http";
 
 // ---------------------------------------------------------------------------
 // Permissions
@@ -187,24 +186,6 @@ async function checkSetup(): Promise<boolean> {
   const issueNumber = context.issue?.number;
   const defaultBranch = context.defaultBranch;
   const eventName = process.env.EVENT_NAME || "";
-  const logSetupEvent = (
-    level: "info" | "warning",
-    event: string,
-    fields: Record<string, unknown> = {},
-  ): void => {
-    const payload = JSON.stringify({
-      event,
-      owner,
-      repo,
-      issue_number: issueNumber,
-      ...fields,
-    });
-    if (level === "warning") {
-      core.warning(payload);
-      return;
-    }
-    core.info(payload);
-  };
 
   if (!issueNumber) {
     if (
@@ -240,44 +221,11 @@ async function checkSetup(): Promise<boolean> {
 
   const apiBase = getApiBaseUrl();
   const setupUrl = `${apiBase}/api/github/setup`;
-  const setupRetryOptions = {
-    timeoutMs: 4000,
-    retries: 2,
-    baseDelayMs: 1000,
-    onAttempt: ({ attempt, maxAttempts }: RetryAttemptContext) => {
-      logSetupEvent("info", "setup_request_attempt_started", {
-        attempt,
-        max_attempts: maxAttempts,
-      });
-    },
-    onRetry: ({
-      attempt,
-      maxAttempts,
-      delayMs,
-      reason,
-      statusCode,
-      errorName,
-      errorMessage,
-    }: RetryDelayContext) => {
-      logSetupEvent("warning", "setup_request_retry_scheduled", {
-        attempt,
-        next_attempt: attempt + 1,
-        max_attempts: maxAttempts,
-        delay_ms: delayMs,
-        reason,
-        status_code: statusCode,
-        error_name: errorName,
-        error_message: errorMessage,
-      });
-    },
-  };
+  const setupTimeoutMs = 4000;
+  const setupRetries = 2;
+  const setupBaseDelayMs = 1000;
 
-  logSetupEvent("info", "setup_request_started", {
-    url: setupUrl,
-    timeout_ms: setupRetryOptions.timeoutMs,
-    retries: setupRetryOptions.retries,
-    base_delay_ms: setupRetryOptions.baseDelayMs,
-  });
+  core.info(`Checking setup for ${owner}/${repo}#${issueNumber}`);
 
   let response: Response;
   try {
@@ -296,21 +244,24 @@ async function checkSetup(): Promise<boolean> {
           default_branch: defaultBranch,
         }),
       },
-      setupRetryOptions,
+      {
+        timeoutMs: setupTimeoutMs,
+        retries: setupRetries,
+        baseDelayMs: setupBaseDelayMs,
+        onRetry: ({ attempt, maxAttempts, delayMs, statusCode, error }) => {
+          const reason = statusCode !== undefined ? `status ${statusCode}` : error;
+          core.warning(
+            `Setup check retry ${attempt}/${maxAttempts} in ${delayMs}ms (${reason || "unknown error"})`,
+          );
+        },
+      },
     );
   } catch (error) {
-    logSetupEvent("warning", "setup_request_failed_after_retries", {
-      error_message: error instanceof Error ? error.message : String(error),
-      error_name: error instanceof Error ? error.name : undefined,
-    });
-    core.setFailed(`Setup request failed: ${error}`);
+    core.setFailed(`Setup request failed after ${setupRetries + 1} attempts: ${error}`);
     return true;
   }
 
-  logSetupEvent("info", "setup_request_completed", {
-    status_code: response.status,
-    ok: response.ok,
-  });
+  core.info(`Setup check completed with status ${response.status}`);
 
   if (!response.ok) {
     const text = await response.text();

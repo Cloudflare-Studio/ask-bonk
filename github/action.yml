@@ -153,7 +153,7 @@ runs:
         echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
 
     - name: Configure Git
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true' && steps.preflight.outputs.is_fork != 'true'
+      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       run: |
         git config --global user.name "ask-bonk[bot]"
@@ -173,7 +173,7 @@ runs:
     - name: Run opencode
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-        && steps.preflight.outputs.is_fork != 'true'
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       id: opencode
       shell: bash
       run: |
@@ -205,7 +205,7 @@ runs:
       if: |
         always() && steps.preflight.outcome == 'success' && steps.mentions.outputs.skip != 'true'
         && steps.preflight.outputs.skip != 'true'
-        && steps.preflight.outputs.is_fork != 'true'
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}

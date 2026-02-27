@@ -536,23 +536,30 @@ async function exchangeOidc(): Promise<OidcResult> {
 
 const FORK_COMMENT_MARKER = "<!-- bonk-fork-unsupported -->";
 
-async function handleFork(): Promise<void> {
+async function handleFork(oidcFailed: boolean): Promise<void> {
   const forksEnabled = process.env.FORKS !== "false";
   if (!forksEnabled) {
     core.info("Fork PR detected but forks input is disabled. Skipping silently.");
     return;
   }
 
-  core.info("Fork PR detected. Privileged execution is disabled for this run.");
+  if (!oidcFailed) {
+    core.info("Fork PR with OIDC token available. OpenCode will run in comment-only mode.");
+    core.setOutput("run_opencode", "true");
+    return;
+  }
 
-  // Post a "not supported" comment if we can.
+  // OIDC failed — post a "not supported" comment if we can.
   const repository = process.env.REPOSITORY;
   const issueNumber = process.env.ISSUE_NUMBER;
   const actor = process.env.ACTOR;
   const ghToken = process.env.GH_TOKEN;
 
   if (!repository || !issueNumber || !ghToken) {
-    core.warning("Fork PR detected and missing context to post comment.");
+    core.warning(
+      "OIDC unavailable for fork PR and missing context to post comment. " +
+        "This is expected when GitHub restricts id-token permissions for fork workflow runs.",
+    );
     return;
   }
 
@@ -721,14 +728,16 @@ async function main() {
   const shouldSkip = await checkSetup();
   if (shouldSkip) return;
 
-  // Step 3: Resolve version and prompt.
+  // Step 3: Resolve version (synchronous), then run prompt and OIDC exchange
+  // in parallel (they are independent of each other).
   resolveVersion();
 
-  const promptResult = await buildPrompt();
+  const [promptResult, oidcResult] = await Promise.all([buildPrompt(), exchangeOidc()]);
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("value", promptResult.value);
+  core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
 
   if (promptResult.detectionFailed) {
     core.setFailed("Fork status could not be verified; refusing to proceed.");
@@ -737,15 +746,11 @@ async function main() {
 
   // Step 4: Handle fork PRs
   if (promptResult.isFork) {
-    core.setOutput("oidc_failed", "true");
-    await handleFork();
+    await handleFork(oidcResult.failed);
     return;
   }
 
   // Step 5: Require OIDC for non-fork runs
-  const oidcResult = await exchangeOidc();
-  core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
-
   if (oidcResult.failed) {
     core.setFailed("OIDC token exchange failed. Ensure id-token: write is configured.");
     return;

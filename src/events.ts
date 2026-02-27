@@ -54,13 +54,20 @@ export function detectFork(
 function isForkPR(
   payload: IssueCommentEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent,
 ): boolean {
-  if ("pull_request" in payload && payload.pull_request) {
+  // IssueCommentEvent.pull_request is a minimal object without head/base.
+  // PullRequestReviewCommentEvent and PullRequestReviewEvent have the full PR
+  // payload including head.repo and base.repo. Narrow via "path" which is
+  // unique to review comment payloads, or check for "review" which is on both
+  // review event types.
+  if ("pull_request" in payload && "comment" in payload && "path" in payload.comment) {
+    // PullRequestReviewCommentEvent
     const pr = payload.pull_request;
-    if ("head" in pr && "base" in pr) {
-      const head = pr.head as { repo?: { full_name?: string } | null };
-      const base = pr.base as { repo?: { full_name?: string } | null };
-      return detectFork(head.repo?.full_name, base.repo?.full_name);
-    }
+    return detectFork(pr.head.repo?.full_name, pr.base.repo?.full_name);
+  }
+  if ("review" in payload) {
+    // PullRequestReviewEvent
+    const pr = payload.pull_request;
+    return detectFork(pr.head.repo?.full_name, pr.base.repo?.full_name);
   }
   return false;
 }

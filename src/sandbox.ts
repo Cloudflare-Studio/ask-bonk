@@ -136,7 +136,8 @@ export async function runAsk(
     return Result.err(sessionResult.error);
   }
 
-  if (!sessionResult.value.data) {
+  const sessionData = sessionResult.value.data;
+  if (!sessionData) {
     return Result.err(
       new SandboxError({
         operation: "session.create",
@@ -144,6 +145,8 @@ export async function runAsk(
       }),
     );
   }
+
+  const sessionId = sessionData.id;
 
   // Build model config from request or use default
   const modelString = model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL;
@@ -175,7 +178,6 @@ export async function runAsk(
   };
 
   // Run the prompt in the background and stream events
-  const sessionId = sessionResult.value.data!.id;
   const sessionLog = log.child({ session_id: sessionId });
   const promptStartTime = Date.now();
 
@@ -207,10 +209,8 @@ export async function runAsk(
       const promptResult = promptResultWrapped.value;
 
       const parts = promptResult.data?.parts ?? [];
-      const textPart = parts.find((p: { type: string }) => p.type === "text") as
-        | { text?: string }
-        | undefined;
-      const response = textPart?.text ?? "No response";
+      const textPart = parts.find((p) => p.type === "text");
+      const response = textPart?.type === "text" ? textPart.text : "No response";
 
       // Check for changes
       const statusResult = await sandbox.exec("git status --porcelain", {

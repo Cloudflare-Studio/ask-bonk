@@ -636,7 +636,7 @@ apiGithub.put("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "finalize",
       status: body.status,
-      actor: actor,
+      actor,
       runId: body.run_id,
     });
     return c.json({ ok: true });
@@ -651,7 +651,7 @@ apiGithub.put("/track", async (c) => {
       repo: `${body.owner}/${body.repo}`,
       eventType: "finalize",
       status: "error",
-      actor: actor,
+      actor,
       errorCode: message.slice(0, 100),
       runId: body.run_id,
     });

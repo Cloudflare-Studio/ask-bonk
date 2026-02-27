@@ -113,8 +113,8 @@ async function checkCodeowners(
         return;
       }
     } catch (e) {
-      const error = e as Error & { message?: string };
-      core.warning(`Could not check team membership for @${teamPath}: ${error.message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      core.warning(`Could not check team membership for @${teamPath}: ${message}`);
     }
   }
 
@@ -284,12 +284,12 @@ async function checkSetup(): Promise<boolean> {
     core.info("Workflow file exists");
     core.setOutput("skip", "false");
     return false;
-  } else {
-    core.info(`Workflow file missing - PR created: ${data.prUrl}`);
-    core.setOutput("skip", "true");
-    core.setOutput("pr_url", data.prUrl || "");
-    return true;
   }
+
+  core.info(`Workflow file missing - PR created: ${data.prUrl}`);
+  core.setOutput("skip", "true");
+  core.setOutput("pr_url", data.prUrl || "");
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,10 +354,6 @@ async function detectFork(): Promise<ForkDetectionResult> {
   }
 }
 
-function resolvePRNumber(): string {
-  return process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
-}
-
 async function resolveHeadSha(
   prNumber: string,
   repository: string,
@@ -384,6 +380,9 @@ async function resolveHeadSha(
     const pr = (await resp.json()) as { head?: { sha?: string } };
     return pr.head?.sha || "";
   } catch {
+    // Best-effort: HEAD SHA is used for fork guidance context only.
+    // Missing SHA means inline review comments may not anchor correctly,
+    // but the workflow can still proceed.
     return "";
   }
 }
@@ -427,7 +426,7 @@ async function buildPrompt(): Promise<PromptResult> {
   const parts: string[] = [];
 
   if (detection.isFork) {
-    const prNumber = resolvePRNumber();
+    const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
     const repository = process.env.REPOSITORY || "";
     const [owner = "", repo = ""] = repository.split("/");
     const headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
@@ -604,7 +603,8 @@ async function handleFork(oidcFailed: boolean): Promise<void> {
       }
     }
   } catch {
-    // If dedup check fails, proceed to post
+    // Dedup check is best-effort — if the API call fails (e.g., transient
+    // network error), proceed to post. Worst case is a duplicate comment.
   }
 
   const mention = actor ? `@${actor} ` : "";

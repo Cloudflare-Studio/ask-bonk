@@ -60,6 +60,9 @@ export async function validateGitHubOIDCToken(
         issuer: GITHUB_ACTIONS_ISSUER,
         audience: expectedAudience,
       });
+      // jose's jwtVerify returns JWTPayload (generic Record-like type) with no
+      // way to parameterize it. The cast is unavoidable; the shape is validated
+      // by the JWKS verification and GitHub's OIDC token contract.
       return payload as unknown as GitHubActionsJWTClaims;
     },
     catch: (e) =>
@@ -397,6 +400,10 @@ export async function handleExchangeTokenForRepo(
     );
   }
 
+  // Bind after guard so TypeScript narrows the type for closures below
+  const targetOwner = body.owner;
+  const targetRepoName = body.repo;
+
   // Extract source repo info
   const repoResult = extractRepoFromClaims(claims);
   if (repoResult.isErr()) {
@@ -404,7 +411,7 @@ export async function handleExchangeTokenForRepo(
   }
   const { owner: sourceOwner, repo: sourceRepoName } = repoResult.value;
   const sourceRepo = claims.repository;
-  const targetRepo = `${body.owner}/${body.repo}`;
+  const targetRepo = `${targetOwner}/${targetRepoName}`;
   const actor = claims.actor;
   const crossRepoLog = createLogger({
     actor,
@@ -413,14 +420,14 @@ export async function handleExchangeTokenForRepo(
   });
 
   // Security check 1: Same-org restriction
-  if (sourceOwner !== body.owner) {
+  if (sourceOwner !== targetOwner) {
     crossRepoLog.warn("cross_repo_denied_cross_org", {
       source_owner: sourceOwner,
-      target_owner: body.owner,
+      target_owner: targetOwner,
     });
     return Result.err(
       new AuthorizationError({
-        message: `Cross-org access denied: workflow in ${sourceOwner} cannot access repos in ${body.owner}`,
+        message: `Cross-org access denied: workflow in ${sourceOwner} cannot access repos in ${targetOwner}`,
         reason: "cross_org",
       }),
     );
@@ -434,7 +441,7 @@ export async function handleExchangeTokenForRepo(
   const { id: sourceInstallationId, source: sourceInstallationSource } =
     sourceInstallationResult.value;
 
-  const targetInstallationResult = await getInstallationId(env, body.owner, body.repo);
+  const targetInstallationResult = await getInstallationId(env, targetOwner, targetRepoName);
   if (targetInstallationResult.isErr()) {
     return Result.err(targetInstallationResult.error);
   }
@@ -446,7 +453,7 @@ export async function handleExchangeTokenForRepo(
     try: async () => {
       const sourceToken = await generateInstallationToken(env, sourceInstallationId);
       const targetToken = await generateInstallationToken(env, targetInstallationId, {
-        repositoryNames: [body.repo!],
+        repositoryNames: [targetRepoName],
         permissions: {
           contents: "write",
           pull_requests: "write",
@@ -459,15 +466,16 @@ export async function handleExchangeTokenForRepo(
       const targetOctokit = new Octokit({ auth: targetToken });
 
       // Security check 2: Visibility restriction
+      // Octokit types `visibility` as `string`; the GitHub API only returns
+      // "public" | "private" | "internal" but the generated types don't
+      // narrow it. We compare against the string literal directly.
       const sourceData = await getRepository(sourceOctokit, sourceOwner, sourceRepoName);
-      const targetData = await getRepository(targetOctokit, body.owner!, body.repo!);
-      const sourceVisibility = sourceData.visibility as "public" | "private" | "internal";
-      const targetVisibility = targetData.visibility as "public" | "private" | "internal";
+      const targetData = await getRepository(targetOctokit, targetOwner, targetRepoName);
 
-      if (sourceVisibility === "public" && targetVisibility !== "public") {
+      if (sourceData.visibility === "public" && targetData.visibility !== "public") {
         crossRepoLog.warn("cross_repo_denied_visibility", {
-          source_visibility: sourceVisibility,
-          target_visibility: targetVisibility,
+          source_visibility: sourceData.visibility,
+          target_visibility: targetData.visibility,
         });
         throw new AuthorizationError({
           message: "Cross-repo access denied: public repos cannot access private/internal repos",
@@ -476,7 +484,7 @@ export async function handleExchangeTokenForRepo(
       }
 
       // Security check 3: Actor write access
-      const hasAccess = await hasWriteAccess(targetOctokit, body.owner!, body.repo!, actor);
+      const hasAccess = await hasWriteAccess(targetOctokit, targetOwner, targetRepoName, actor);
       if (!hasAccess) {
         crossRepoLog.warn("cross_repo_denied_no_write_access");
         throw new AuthorizationError({
@@ -491,8 +499,8 @@ export async function handleExchangeTokenForRepo(
         source_installation_source: sourceInstallationSource,
         target_installation_id: targetInstallationId,
         target_installation_source: targetInstallationSource,
-        source_visibility: sourceVisibility,
-        target_visibility: targetVisibility,
+        source_visibility: sourceData.visibility,
+        target_visibility: targetData.visibility,
         run_id: claims.run_id,
         workflow: claims.job_workflow_ref,
       });
@@ -566,21 +574,24 @@ export async function handleExchangeTokenWithPAT(
     );
   }
 
-  const patLog = createLogger({ owner: body.owner, repo: body.repo });
+  // Bind after guard so TypeScript narrows the type for closures below
+  const patOwner = body.owner;
+  const patRepoName = body.repo;
+  const patLog = createLogger({ owner: patOwner, repo: patRepoName });
 
   // Verify the PAT has write access to the repository
   const octokit = new Octokit({ auth: pat });
   try {
     const { data: repoData } = await octokit.repos.get({
-      owner: body.owner,
-      repo: body.repo,
+      owner: patOwner,
+      repo: patRepoName,
     });
     const permissions = repoData.permissions;
     if (!permissions?.admin && !permissions?.push && !permissions?.maintain) {
       patLog.warn("pat_exchange_denied_no_write_access");
       return Result.err(
         new AuthorizationError({
-          message: `PAT does not have write permissions for ${body.owner}/${body.repo}`,
+          message: `PAT does not have write permissions for ${patOwner}/${patRepoName}`,
           reason: "no_write_access",
         }),
       );
@@ -589,14 +600,14 @@ export async function handleExchangeTokenWithPAT(
     patLog.errorWithException("pat_exchange_denied_no_access", error);
     return Result.err(
       new AuthorizationError({
-        message: `PAT does not have access to ${body.owner}/${body.repo}`,
+        message: `PAT does not have access to ${patOwner}/${patRepoName}`,
         reason: "invalid_token",
       }),
     );
   }
 
   // Get installation ID
-  const installationResult = await getInstallationId(env, body.owner, body.repo);
+  const installationResult = await getInstallationId(env, patOwner, patRepoName);
   if (installationResult.isErr()) {
     return Result.err(installationResult.error);
   }
@@ -606,7 +617,7 @@ export async function handleExchangeTokenWithPAT(
   return Result.tryPromise({
     try: async () => {
       const token = await generateInstallationToken(env, installationId, {
-        repositoryNames: [body.repo!],
+        repositoryNames: [patRepoName],
         permissions: {
           contents: "write",
           pull_requests: "write",

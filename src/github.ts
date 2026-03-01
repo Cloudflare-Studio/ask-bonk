@@ -132,7 +132,10 @@ export async function verifyWebhook(
 
   return Result.tryPromise({
     try: async () => {
-      await webhooks.verify(body, signature);
+      const valid = await webhooks.verify(body, signature);
+      if (!valid) {
+        throw new Error("Webhook signature verification failed");
+      }
       return { id, name, payload: JSON.parse(body) };
     },
     catch: (e) => new GitHubAPIError({ operation: "verifyWebhook", cause: e }),

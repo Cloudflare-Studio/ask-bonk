@@ -581,29 +581,31 @@ export async function handleExchangeTokenWithPAT(
 
   // Verify the PAT has write access to the repository
   const octokit = new Octokit({ auth: pat });
-  try {
-    const { data: repoData } = await octokit.repos.get({
-      owner: patOwner,
-      repo: patRepoName,
-    });
-    const permissions = repoData.permissions;
-    if (!permissions?.admin && !permissions?.push && !permissions?.maintain) {
-      patLog.warn("pat_exchange_denied_no_write_access");
-      return Result.err(
-        new AuthorizationError({
+  const patVerifyResult = await Result.tryPromise({
+    try: async () => {
+      const { data: repoData } = await octokit.repos.get({
+        owner: patOwner,
+        repo: patRepoName,
+      });
+      const permissions = repoData.permissions;
+      if (!permissions?.admin && !permissions?.push && !permissions?.maintain) {
+        throw new AuthorizationError({
           message: `PAT does not have write permissions for ${patOwner}/${patRepoName}`,
           reason: "no_write_access",
-        }),
-      );
-    }
-  } catch (error) {
-    patLog.errorWithException("pat_exchange_denied_no_access", error);
-    return Result.err(
-      new AuthorizationError({
+        });
+      }
+    },
+    catch: (error) => {
+      if (AuthorizationError.is(error)) return error;
+      patLog.errorWithException("pat_exchange_denied_no_access", error);
+      return new AuthorizationError({
         message: `PAT does not have access to ${patOwner}/${patRepoName}`,
         reason: "invalid_token",
-      }),
-    );
+      });
+    },
+  });
+  if (patVerifyResult.isErr()) {
+    return Result.err(patVerifyResult.error);
   }
 
   // Get installation ID

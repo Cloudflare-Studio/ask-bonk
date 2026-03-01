@@ -76,6 +76,24 @@ export class SandboxError extends TaggedError("SandboxError")<{
   }
 }
 
+// Analytics/metrics infrastructure errors
+export class MetricsError extends TaggedError("MetricsError")<{
+  operation: string;
+  message: string;
+  cause: unknown;
+  statusCode?: number;
+}>() {
+  constructor(args: { operation: string; cause: unknown; statusCode?: number }) {
+    const msg = args.cause instanceof Error ? args.cause.message : String(args.cause);
+    super({
+      operation: args.operation,
+      cause: args.cause,
+      statusCode: args.statusCode,
+      message: `Metrics ${args.operation} failed: ${msg}`,
+    });
+  }
+}
+
 // Union types for Result error channels
 export type AuthError = OIDCValidationError | AuthorizationError;
 export type TokenExchangeError = AuthError | InstallationNotFoundError | GitHubAPIError;

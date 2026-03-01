@@ -1,4 +1,6 @@
+import { Result } from "better-result";
 import type { Env } from "./types";
+import { MetricsError } from "./errors";
 import eventsPerRepoQuery from "../ae_queries/events_per_repo.sql";
 import errorsByRepoQuery from "../ae_queries/errors_by_repo.sql";
 import eventsByActorQuery from "../ae_queries/events_by_actor.sql";
@@ -63,39 +65,54 @@ export function emitMetric(env: Env, event: MetricEvent): void {
 
 // Query Analytics Engine SQL API
 // https://developers.cloudflare.com/analytics/analytics-engine/worker-querying/
-// Throws on failure -- callers in stats routes catch and return 500.
+// Returns Result to distinguish configuration errors from transient API failures.
 export async function queryAnalyticsEngine(
   env: Env,
   query: string,
-): Promise<Record<string, unknown>[]> {
+): Promise<Result<Record<string, unknown>[], MetricsError>> {
   const { CLOUDFLARE_ACCOUNT_ID, ANALYTICS_TOKEN } = env;
   if (!CLOUDFLARE_ACCOUNT_ID || !ANALYTICS_TOKEN) {
-    throw new Error("Stats endpoint is not configured");
-  }
-
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/analytics_engine/sql`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ANALYTICS_TOKEN}`,
-        "Content-Type": "text/plain",
-      },
-      body: query,
-    },
-  );
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `Analytics Engine query failed (HTTP ${response.status}): ${text.slice(0, 200)}`,
+    return Result.err(
+      new MetricsError({
+        operation: "queryAnalyticsEngine",
+        cause: new Error("Stats endpoint is not configured"),
+      }),
     );
   }
 
-  const result = (await response.json()) as {
-    data?: Record<string, unknown>[];
-  };
-  return result.data ?? [];
+  return Result.tryPromise({
+    try: async () => {
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/analytics_engine/sql`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ANALYTICS_TOKEN}`,
+            "Content-Type": "text/plain",
+          },
+          body: query,
+        },
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          `Analytics Engine query failed (HTTP ${response.status}): ${text.slice(0, 200)}`,
+        );
+      }
+
+      const result = (await response.json()) as {
+        data?: Record<string, unknown>[];
+      };
+      return result.data ?? [];
+    },
+    catch: (e) =>
+      new MetricsError({
+        operation: "queryAnalyticsEngine",
+        cause: e,
+        statusCode: e instanceof Error && "status" in e ? (e as { status: number }).status : undefined,
+      }),
+  });
 }
 
 // Render ASCII bar chart from label/value pairs

@@ -31,13 +31,17 @@ export async function runAsk(
     variant: variant ?? undefined,
   });
 
-  let token: string;
-  try {
-    token = await getInstallationToken(env, installationId);
-  } catch (error) {
-    log.errorWithException("sandbox_token_failed", error);
-    return Result.err(new SandboxError({ operation: "getInstallationToken", cause: error }));
+  const tokenResult = await Result.tryPromise({
+    try: () => getInstallationToken(env, installationId),
+    catch: (error) => {
+      log.errorWithException("sandbox_token_failed", error);
+      return new SandboxError({ operation: "getInstallationToken", cause: error });
+    },
+  });
+  if (tokenResult.isErr()) {
+    return Result.err(tokenResult.error);
   }
+  const token = tokenResult.value;
 
   const sandboxId = `${owner}-${repo}-${Date.now()}`;
   const sandbox = getSandbox(env.Sandbox, sandboxId);

@@ -792,12 +792,14 @@ export async function deleteInstallation(env: Env, installationId: number): Prom
 
   const result = await Result.tryPromise(
     {
-      try: () => auth({ type: "app" }),
+      try: async () => {
+        const { token } = await auth({ type: "app" });
+        const octokit = new ResilientOctokit({ auth: token });
+        await octokit.apps.deleteInstallation({ installation_id: installationId });
+      },
       catch: (e) => new GitHubAPIError({ operation: "deleteInstallation", cause: e }),
     },
     { retry: RETRY_CONFIG },
   );
   if (result.isErr()) throw result.error;
-  const octokit = new ResilientOctokit({ auth: result.value.token });
-  await octokit.apps.deleteInstallation({ installation_id: installationId });
 }

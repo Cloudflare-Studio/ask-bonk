@@ -115,38 +115,35 @@ stats.use(async (c, next) => {
 });
 
 stats.get("/events", async (c) => {
-  try {
-    const data = await queryAnalyticsEngine(c.env, eventsPerRepoQuery);
-    if (c.req.query("format") === "json") return c.json({ data });
-    return c.text(
-      renderBarChart(data, "Webhook events per repo (last 30d)", "repo", "event_count"),
-    );
-  } catch (error) {
-    log.errorWithException("stats_query_failed", error);
+  const result = await queryAnalyticsEngine(c.env, eventsPerRepoQuery);
+  if (result.isErr()) {
+    log.errorWithException("stats_query_failed", result.error);
     return c.json({ error: "Failed to query stats" }, 500);
   }
+  if (c.req.query("format") === "json") return c.json({ data: result.value });
+  return c.text(
+    renderBarChart(result.value, "Webhook events per repo (last 30d)", "repo", "event_count"),
+  );
 });
 
 stats.get("/errors", async (c) => {
-  try {
-    const data = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
-    if (c.req.query("format") === "json") return c.json({ data });
-    return c.text(renderBarChart(data, "Failures by repo (last 24h)", "repo", "error_count"));
-  } catch (error) {
-    log.errorWithException("errors_query_failed", error);
+  const result = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
+  if (result.isErr()) {
+    log.errorWithException("errors_query_failed", result.error);
     return c.json({ error: "Failed to query errors" }, 500);
   }
+  if (c.req.query("format") === "json") return c.json({ data: result.value });
+  return c.text(renderBarChart(result.value, "Failures by repo (last 24h)", "repo", "error_count"));
 });
 
 stats.get("/actors", async (c) => {
-  try {
-    const data = await queryAnalyticsEngine(c.env, eventsByActorQuery);
-    if (c.req.query("format") === "json") return c.json({ data });
-    return c.text(renderBarChart(data, "Mentions per actor (last 7d)", "actor", "event_count"));
-  } catch (error) {
-    log.errorWithException("stats_query_failed", error);
+  const result = await queryAnalyticsEngine(c.env, eventsByActorQuery);
+  if (result.isErr()) {
+    log.errorWithException("stats_query_failed", result.error);
     return c.json({ error: "Failed to query stats" }, 500);
   }
+  if (c.req.query("format") === "json") return c.json({ data: result.value });
+  return c.text(renderBarChart(result.value, "Mentions per actor (last 7d)", "actor", "event_count"));
 });
 
 app.route("/stats", stats);

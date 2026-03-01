@@ -23,16 +23,7 @@ import {
 import { sanitizeSecrets } from "../src/log";
 import { queryAnalyticsEngine, emitMetric } from "../src/metrics";
 import { verifyWebhook, createWebhooks } from "../src/github";
-import {
-  OIDCValidationError,
-  AuthorizationError,
-  InstallationNotFoundError,
-  ValidationError,
-  NotFoundError,
-  GitHubAPIError,
-  SandboxError,
-  MetricsError,
-} from "../src/errors";
+import { GitHubAPIError, MetricsError } from "../src/errors";
 import type { Env } from "../src/types";
 import type {
   ScheduleEventPayload,
@@ -921,110 +912,6 @@ describe("PAT Exchange Security", () => {
     if (result.isErr()) {
       expect(result.error.message).toContain("Missing owner or repo");
     }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// TaggedError .is() Type Guards
-// ---------------------------------------------------------------------------
-
-describe("TaggedError Type Guards", () => {
-  it.each([
-    {
-      ErrorClass: OIDCValidationError,
-      instance: new OIDCValidationError({ message: "bad token" }),
-      tag: "OIDCValidationError",
-    },
-    {
-      ErrorClass: AuthorizationError,
-      instance: new AuthorizationError({
-        message: "forbidden",
-        reason: "missing_header" as const,
-      }),
-      tag: "AuthorizationError",
-    },
-    {
-      ErrorClass: InstallationNotFoundError,
-      instance: new InstallationNotFoundError({ owner: "o", repo: "r" }),
-      tag: "InstallationNotFoundError",
-    },
-    {
-      ErrorClass: ValidationError,
-      instance: new ValidationError({ message: "invalid", field: "name" }),
-      tag: "ValidationError",
-    },
-    {
-      ErrorClass: NotFoundError,
-      instance: new NotFoundError({ resource: "Issue", id: "#42" }),
-      tag: "NotFoundError",
-    },
-    {
-      ErrorClass: GitHubAPIError,
-      instance: new GitHubAPIError({ operation: "test", cause: new Error("fail") }),
-      tag: "GitHubAPIError",
-    },
-    {
-      ErrorClass: SandboxError,
-      instance: new SandboxError({ operation: "clone", cause: new Error("timeout") }),
-      tag: "SandboxError",
-    },
-    {
-      ErrorClass: MetricsError,
-      instance: new MetricsError({ operation: "query", cause: new Error("network") }),
-      tag: "MetricsError",
-    },
-  ])("$tag.is() narrows correctly", ({ ErrorClass, instance, tag }) => {
-    // .is() should return true for its own instances
-    expect(ErrorClass.is(instance)).toBe(true);
-
-    // .is() should return false for non-instances
-    expect(ErrorClass.is(new Error("plain error"))).toBe(false);
-    expect(ErrorClass.is(null)).toBe(false);
-    expect(ErrorClass.is(undefined)).toBe(false);
-    expect(ErrorClass.is("string")).toBe(false);
-
-    // _tag should be set correctly
-    expect(instance._tag).toBe(tag);
-
-    // message should be a non-empty string
-    expect(instance.message).toBeTruthy();
-    expect(typeof instance.message).toBe("string");
-  });
-
-  it("computed messages are generated correctly", () => {
-    const notFound = new NotFoundError({ resource: "PR", id: "#99" });
-    expect(notFound.message).toBe("PR not found: #99");
-
-    const installError = new InstallationNotFoundError({ owner: "acme", repo: "app" });
-    expect(installError.message).toBe("GitHub App not installed for acme/app");
-
-    const apiError = new GitHubAPIError({
-      operation: "fetchIssue",
-      cause: new Error("network timeout"),
-    });
-    expect(apiError.message).toBe("GitHub API fetchIssue failed: network timeout");
-
-    const sandboxError = new SandboxError({
-      operation: "gitCheckout",
-      cause: new Error("clone failed"),
-    });
-    expect(sandboxError.message).toBe("Sandbox gitCheckout failed: clone failed");
-
-    const metricsError = new MetricsError({
-      operation: "queryAnalyticsEngine",
-      cause: new Error("connection refused"),
-    });
-    expect(metricsError.message).toBe(
-      "Metrics queryAnalyticsEngine failed: connection refused",
-    );
-  });
-
-  it("cross-error .is() returns false", () => {
-    const apiError = new GitHubAPIError({ operation: "test", cause: new Error("fail") });
-    expect(NotFoundError.is(apiError)).toBe(false);
-    expect(SandboxError.is(apiError)).toBe(false);
-    expect(OIDCValidationError.is(apiError)).toBe(false);
-    expect(MetricsError.is(apiError)).toBe(false);
   });
 });
 

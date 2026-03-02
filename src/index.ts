@@ -257,7 +257,17 @@ auth.get("/get_github_app_installation", async (c) => {
 
 auth.post("/exchange_github_app_token", async (c) => {
   const authHeader = c.req.header("Authorization") ?? null;
-  const result = await handleExchangeToken(c.env, authHeader);
+
+  // Body is optional — callers may include { permissions } to scope the token.
+  // Accepts a preset name ("READ_ONLY", "WRITE") or a custom permissions object.
+  let body: { permissions?: import("./oidc").TokenPermissionsInput } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // Empty body or non-JSON is fine — use defaults
+  }
+
+  const result = await handleExchangeToken(c.env, authHeader, body);
 
   if (result.isErr()) {
     return c.json({ error: result.error.message }, 401);

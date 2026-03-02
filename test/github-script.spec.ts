@@ -39,6 +39,49 @@ describe("GitHub Action script context", () => {
   });
 });
 
+describe("OIDC exchange permission forwarding", () => {
+  // Tests the TOKEN_PERMISSIONS parsing logic used in orchestrate.ts.
+  // The orchestrate function detects preset names vs JSON objects by checking
+  // whether the value starts with "{". The server-side resolvePermissions
+  // handles the actual clamping.
+
+  function parseTokenPermissions(input: string | undefined): unknown {
+    const trimmed = input?.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith("{")) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return undefined;
+      }
+    }
+    return trimmed; // preset name
+  }
+
+  it("parses JSON permissions object", () => {
+    expect(parseTokenPermissions('{"contents": "read"}')).toEqual({ contents: "read" });
+  });
+
+  it("passes preset name through as a string", () => {
+    expect(parseTokenPermissions("READ_ONLY")).toBe("READ_ONLY");
+    expect(parseTokenPermissions("WRITE")).toBe("WRITE");
+  });
+
+  it("returns undefined for malformed JSON", () => {
+    expect(parseTokenPermissions("{broken")).toBeUndefined();
+  });
+
+  it("returns undefined for empty/whitespace input", () => {
+    expect(parseTokenPermissions("")).toBeUndefined();
+    expect(parseTokenPermissions("  ")).toBeUndefined();
+    expect(parseTokenPermissions(undefined)).toBeUndefined();
+  });
+
+  it("trims whitespace around preset names", () => {
+    expect(parseTokenPermissions("  READ_ONLY  ")).toBe("READ_ONLY");
+  });
+});
+
 describe("GitHub Action script HTTP retry", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

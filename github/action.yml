@@ -41,6 +41,10 @@ inputs:
     description: "Model variant for provider-specific reasoning effort (e.g., high, max, minimal)"
     required: false
 
+  token_permissions:
+    description: "Scope the installation token: 'READ_ONLY' (can comment but not push), 'WRITE' (default), or a JSON permissions object"
+    required: false
+
   opencode_dev:
     description: "Install OpenCode from dev branch instead of latest release"
     required: false
@@ -136,6 +140,8 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
         ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
+        # token scoping
+        TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
     - name: Install opencode

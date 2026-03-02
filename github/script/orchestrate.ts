@@ -511,6 +511,24 @@ async function exchangeOidc(): Promise<OidcResult> {
     return oidcFailClosed(`Invalid OIDC_BASE_URL: ${error}`);
   }
 
+  // Build request body — include token_permissions if provided by the caller.
+  // Accepts a preset name (e.g., "READ_ONLY") or a JSON permissions object.
+  const exchangeBody: Record<string, unknown> = {};
+  const tokenPermissions = process.env.TOKEN_PERMISSIONS?.trim();
+  if (tokenPermissions) {
+    if (tokenPermissions.startsWith("{")) {
+      // Looks like JSON — parse as a custom permissions object
+      try {
+        exchangeBody.permissions = JSON.parse(tokenPermissions);
+      } catch {
+        core.warning(`Invalid TOKEN_PERMISSIONS JSON, using defaults: ${tokenPermissions}`);
+      }
+    } else {
+      // Treat as a preset name (e.g., "READ_ONLY", "WRITE")
+      exchangeBody.permissions = tokenPermissions;
+    }
+  }
+
   let appToken: string;
   try {
     const resp = await fetchWithRetry(
@@ -521,6 +539,7 @@ async function exchangeOidc(): Promise<OidcResult> {
           Authorization: `Bearer ${actionOidcToken}`,
           "Content-Type": "application/json",
         },
+        body: JSON.stringify(exchangeBody),
       },
       { timeoutMs: 10000 },
     );

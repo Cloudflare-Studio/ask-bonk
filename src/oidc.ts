@@ -216,17 +216,86 @@ export async function createOctokitForRepo(
   }
 }
 
+// Token permission levels for installation tokens.
+// Exported so callers and tests can reference the type.
+export type TokenPermissions = {
+  contents?: "read" | "write";
+  issues?: "read" | "write";
+  pull_requests?: "read" | "write";
+  metadata?: "read";
+};
+
+// Named presets for common permission configurations.
+// Callers pass the preset name as a string instead of constructing a JSON object.
+export type TokenPermissionPreset = "READ_ONLY" | "WRITE";
+
+// Callers may pass either a preset name or a custom permissions object.
+export type TokenPermissionsInput = TokenPermissionPreset | TokenPermissions;
+
 // Options for scoped installation token generation
 interface ScopedTokenOptions {
   // Limit token to specific repository names
   repositoryNames?: string[];
   // Limit token permissions (defaults to full installation permissions)
-  permissions?: {
-    contents?: "read" | "write";
-    issues?: "read" | "write";
-    pull_requests?: "read" | "write";
-    metadata?: "read";
-  };
+  permissions?: TokenPermissions;
+}
+
+// Default permissions granted to installation tokens.
+// These represent the maximum permissions the exchange endpoint will issue.
+const DEFAULT_TOKEN_PERMISSIONS: Required<TokenPermissions> = {
+  contents: "write",
+  issues: "write",
+  pull_requests: "write",
+  metadata: "read",
+};
+
+// Named presets — each maps to a concrete TokenPermissions object.
+// READ_ONLY: can read repo contents and post comments/reviews, but cannot push.
+// WRITE: full write access (current default behavior).
+const PERMISSION_PRESETS: Record<TokenPermissionPreset, Required<TokenPermissions>> = {
+  READ_ONLY: {
+    contents: "read",
+    issues: "write",
+    pull_requests: "write",
+    metadata: "read",
+  },
+  WRITE: { ...DEFAULT_TOKEN_PERMISSIONS },
+};
+
+const PERMISSION_RANK: Record<string, number> = { read: 0, write: 1 };
+
+// Resolves a TokenPermissionsInput (preset name or custom object) into a
+// concrete permissions object, enforcing downgrade-only for custom objects.
+//
+// - undefined / null → defaults
+// - Preset name (e.g., "READ_ONLY") → preset permissions
+// - Custom object → merged with defaults; each key clamped to min(default, requested)
+// - Unknown preset name → defaults (fail-open to avoid breaking existing workflows)
+export function resolvePermissions(requested?: TokenPermissionsInput): Required<TokenPermissions> {
+  if (!requested) return { ...DEFAULT_TOKEN_PERMISSIONS };
+
+  // Preset name
+  if (typeof requested === "string") {
+    const preset = PERMISSION_PRESETS[requested.toUpperCase() as TokenPermissionPreset];
+    return preset ? { ...preset } : { ...DEFAULT_TOKEN_PERMISSIONS };
+  }
+
+  // Custom object — merge with defaults, downgrade only
+  const resolved = { ...DEFAULT_TOKEN_PERMISSIONS };
+  for (const key of Object.keys(DEFAULT_TOKEN_PERMISSIONS) as (keyof TokenPermissions)[]) {
+    const requestedValue = requested[key];
+    if (requestedValue === undefined) continue;
+
+    const defaultRank = PERMISSION_RANK[resolved[key]] ?? 0;
+    const requestedRank = PERMISSION_RANK[requestedValue] ?? 0;
+
+    // Only accept the requested value if it doesn't exceed the default
+    if (requestedRank <= defaultRank) {
+      (resolved as Record<string, string>)[key] = requestedValue;
+    }
+  }
+
+  return resolved;
 }
 
 // Generates an installation token for the GitHub App.
@@ -295,10 +364,14 @@ export async function handleGetInstallation(
 }
 
 // Handler for POST /exchange_github_app_token
-// Exchanges a GitHub Actions OIDC token for a GitHub App installation token
+// Exchanges a GitHub Actions OIDC token for a GitHub App installation token.
+// Callers may pass a `permissions` field in the request body — either a preset
+// name ("READ_ONLY", "WRITE") or a custom permissions object. Escalation beyond
+// defaults is silently clamped.
 export async function handleExchangeToken(
   env: Env,
   authHeader: string | null,
+  body?: { permissions?: TokenPermissionsInput },
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
   if (!authHeader?.startsWith("Bearer ")) {
     return Result.err(
@@ -332,17 +405,14 @@ export async function handleExchangeToken(
   }
   const { id: installationId, source: installationSource } = installationResult.value;
 
-  // Generate scoped token
+  // Generate scoped token — use caller-provided permissions (clamped to defaults)
+  const permissions = resolvePermissions(body?.permissions);
+
   return Result.tryPromise({
     try: async () => {
       const token = await generateInstallationToken(env, installationId, {
         repositoryNames: [repo],
-        permissions: {
-          contents: "write",
-          pull_requests: "write",
-          issues: "write",
-          metadata: "read",
-        },
+        permissions,
       });
       return { token };
     },

@@ -19,6 +19,7 @@ import {
   extractBearerToken,
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
+  resolvePermissions,
 } from "../src/oidc";
 import { sanitizeSecrets } from "../src/log";
 import { queryAnalyticsEngine, emitMetric } from "../src/metrics";
@@ -1025,6 +1026,104 @@ describe("Metrics Emit", () => {
         status: "success",
       });
     }).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token Permission Scoping
+// ---------------------------------------------------------------------------
+
+describe("resolvePermissions", () => {
+  const DEFAULTS = {
+    contents: "write",
+    issues: "write",
+    pull_requests: "write",
+    metadata: "read",
+  };
+
+  // --- no input / fallback ---
+
+  it("returns defaults when no permissions provided", () => {
+    expect(resolvePermissions()).toEqual(DEFAULTS);
+  });
+
+  it("returns defaults for undefined input", () => {
+    expect(resolvePermissions(undefined)).toEqual(DEFAULTS);
+  });
+
+  it("returns defaults for empty object", () => {
+    expect(resolvePermissions({})).toEqual(DEFAULTS);
+  });
+
+  // --- preset names ---
+
+  it("resolves READ_ONLY preset", () => {
+    expect(resolvePermissions("READ_ONLY")).toEqual({
+      contents: "read",
+      issues: "write",
+      pull_requests: "write",
+      metadata: "read",
+    });
+  });
+
+  it("resolves WRITE preset (matches defaults)", () => {
+    expect(resolvePermissions("WRITE")).toEqual(DEFAULTS);
+  });
+
+  it("resolves presets case-insensitively", () => {
+    // Action inputs arrive as strings — test that runtime handles mixed case
+    expect(resolvePermissions("read_only" as any)).toEqual(resolvePermissions("READ_ONLY"));
+    expect(resolvePermissions("Write" as any)).toEqual(resolvePermissions("WRITE"));
+  });
+
+  it("returns defaults for unknown preset name", () => {
+    expect(resolvePermissions("NONSENSE" as any)).toEqual(DEFAULTS);
+  });
+
+  // --- custom object: downgrade ---
+
+  it("downgrades contents from write to read", () => {
+    const result = resolvePermissions({ contents: "read" });
+    expect(result.contents).toBe("read");
+    expect(result.issues).toBe("write");
+    expect(result.pull_requests).toBe("write");
+    expect(result.metadata).toBe("read");
+  });
+
+  it("downgrades multiple permissions", () => {
+    const result = resolvePermissions({
+      contents: "read",
+      pull_requests: "read",
+    });
+    expect(result.contents).toBe("read");
+    expect(result.pull_requests).toBe("read");
+    expect(result.issues).toBe("write");
+    expect(result.metadata).toBe("read");
+  });
+
+  // --- custom object: no escalation ---
+
+  it("refuses to escalate metadata from read to write", () => {
+    const result = resolvePermissions({ metadata: "read" });
+    expect(result.metadata).toBe("read");
+  });
+
+  it("keeps default when requested level matches", () => {
+    const result = resolvePermissions({
+      contents: "write",
+      issues: "write",
+    });
+    expect(result.contents).toBe("write");
+    expect(result.issues).toBe("write");
+  });
+
+  it("ignores unknown permission keys", () => {
+    const result = resolvePermissions({
+      contents: "read",
+      actions: "write",
+    } as any);
+    expect(result.contents).toBe("read");
+    expect((result as any).actions).toBeUndefined();
   });
 });
 

@@ -1076,8 +1076,13 @@ describe("resolvePermissions", () => {
     expect(resolvePermissions("Write" as any)).toEqual(resolvePermissions("WRITE"));
   });
 
-  it("returns defaults for unknown preset name", () => {
-    expect(resolvePermissions("NONSENSE" as any)).toEqual(DEFAULTS);
+  it("falls back to READ_ONLY for unknown preset name", () => {
+    expect(resolvePermissions("NONSENSE" as any)).toEqual({
+      contents: "read",
+      issues: "write",
+      pull_requests: "write",
+      metadata: "read",
+    });
   });
 
   // --- custom object: downgrade ---
@@ -1124,6 +1129,26 @@ describe("resolvePermissions", () => {
     } as any);
     expect(result.contents).toBe("read");
     expect((result as any).actions).toBeUndefined();
+  });
+
+  // --- invalid values from untrusted JSON ---
+
+  it("skips invalid string values like 'admin'", () => {
+    const result = resolvePermissions({ contents: "admin" } as any);
+    expect(result.contents).toBe("write"); // keeps default, doesn't pass "admin" through
+  });
+
+  it("skips non-string values", () => {
+    const result = resolvePermissions({ contents: 123 } as any);
+    expect(result.contents).toBe("write"); // keeps default
+  });
+
+  it("returns defaults for array input", () => {
+    expect(resolvePermissions(["READ_ONLY"] as any)).toEqual(DEFAULTS);
+  });
+
+  it("returns defaults for numeric input", () => {
+    expect(resolvePermissions(42 as any)).toEqual(DEFAULTS);
   });
 });
 

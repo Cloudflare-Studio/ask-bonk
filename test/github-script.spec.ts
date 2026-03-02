@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { detectForkFromPR } from "../github/script/context";
+import { detectForkFromPR, parseTokenPermissions } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 
 describe("GitHub Action script context", () => {
@@ -40,23 +40,8 @@ describe("GitHub Action script context", () => {
 });
 
 describe("OIDC exchange permission forwarding", () => {
-  // Tests the TOKEN_PERMISSIONS parsing logic used in orchestrate.ts.
-  // The orchestrate function detects preset names vs JSON objects by checking
-  // whether the value starts with "{". The server-side resolvePermissions
-  // handles the actual clamping.
-
-  function parseTokenPermissions(input: string | undefined): unknown {
-    const trimmed = input?.trim();
-    if (!trimmed) return undefined;
-    if (trimmed.startsWith("{")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return undefined;
-      }
-    }
-    return trimmed; // preset name
-  }
+  // Tests parseTokenPermissions — the function orchestrate.ts uses to parse
+  // the TOKEN_PERMISSIONS env var before forwarding to the exchange endpoint.
 
   it("parses JSON permissions object", () => {
     expect(parseTokenPermissions('{"contents": "read"}')).toEqual({ contents: "read" });

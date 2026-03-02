@@ -267,17 +267,23 @@ const PERMISSION_RANK: Record<string, number> = { read: 0, write: 1 };
 // Resolves a TokenPermissionsInput (preset name or custom object) into a
 // concrete permissions object, enforcing downgrade-only for custom objects.
 //
-// - undefined / null → defaults
+// - undefined / null / falsy → defaults
 // - Preset name (e.g., "READ_ONLY") → preset permissions
 // - Custom object → merged with defaults; each key clamped to min(default, requested)
-// - Unknown preset name → defaults (fail-open to avoid breaking existing workflows)
+// - Unknown preset name → READ_ONLY (fail-closed; no existing callers to protect)
+// - Non-object / array → defaults (defensive against untrusted JSON)
 export function resolvePermissions(requested?: TokenPermissionsInput): Required<TokenPermissions> {
   if (!requested) return { ...DEFAULT_TOKEN_PERMISSIONS };
 
-  // Preset name
+  // Preset name — fail-closed: unrecognized presets get the most restrictive preset
   if (typeof requested === "string") {
     const preset = PERMISSION_PRESETS[requested.toUpperCase() as TokenPermissionPreset];
-    return preset ? { ...preset } : { ...DEFAULT_TOKEN_PERMISSIONS };
+    return preset ? { ...preset } : { ...PERMISSION_PRESETS.READ_ONLY };
+  }
+
+  // Reject non-plain-objects (arrays, numbers, etc. from untrusted JSON)
+  if (typeof requested !== "object" || Array.isArray(requested)) {
+    return { ...DEFAULT_TOKEN_PERMISSIONS };
   }
 
   // Custom object — merge with defaults, downgrade only
@@ -286,8 +292,11 @@ export function resolvePermissions(requested?: TokenPermissionsInput): Required<
     const requestedValue = requested[key];
     if (requestedValue === undefined) continue;
 
+    // Only accept known permission levels — reject unexpected values from untrusted input
+    if (requestedValue !== "read" && requestedValue !== "write") continue;
+
     const defaultRank = PERMISSION_RANK[resolved[key]] ?? 0;
-    const requestedRank = PERMISSION_RANK[requestedValue] ?? 0;
+    const requestedRank = PERMISSION_RANK[requestedValue];
 
     // Only accept the requested value if it doesn't exceed the default
     if (requestedRank <= defaultRank) {

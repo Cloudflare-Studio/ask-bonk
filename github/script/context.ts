@@ -212,3 +212,19 @@ export async function detectForkFromPR(
     return null;
   }
 }
+
+// Parses a TOKEN_PERMISSIONS input value (env var from action.yml).
+// Returns the parsed value (preset name string or JSON object) or undefined
+// for empty/whitespace/malformed input.
+export function parseTokenPermissions(input: string | undefined): unknown {
+  const trimmed = input?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed;
+}

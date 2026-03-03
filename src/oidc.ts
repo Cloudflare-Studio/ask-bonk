@@ -414,6 +414,12 @@ export async function handleExchangeToken(
     return Result.err(repoResult.error);
   }
   const { owner, repo } = repoResult.value;
+  const exchangeLog = createLogger({
+    owner,
+    repo,
+    actor: claims.actor,
+    run_id: Number(claims.run_id) || undefined,
+  });
 
   // Get installation ID
   const installationResult = await getInstallationId(env, owner, repo);
@@ -431,10 +437,19 @@ export async function handleExchangeToken(
         repositoryNames: [repo],
         permissions,
       });
+
+      // Audit log: successful token exchange with resolved permissions
+      exchangeLog.info("token_exchanged", {
+        installation_id: installationId,
+        installation_source: installationSource,
+        requested_permissions: body?.permissions,
+        resolved_permissions: permissions,
+      });
+
       return { token };
     },
     catch: (err) => {
-      createLogger({ owner, repo }).errorWithException("token_generation_failed", err, {
+      exchangeLog.errorWithException("token_generation_failed", err, {
         installation_id: installationId,
         installation_source: installationSource,
       });

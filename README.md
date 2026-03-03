@@ -172,6 +172,30 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
       follow the repository's existing conventions.
 ```
 
+#### Token Scoping
+
+By default, Bonk's installation token has full write access. Use `token_permissions` to restrict what the agent can do -- useful for review-only workflows where the agent should never push code.
+
+```yaml
+# Review-only: can comment and suggest, cannot push
+- name: Run Bonk
+  uses: ask-bonk/ask-bonk/github@main
+  env:
+    OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+  with:
+    model: "opencode/claude-opus-4-5"
+    mentions: "/review"
+    token_permissions: NO_PUSH
+```
+
+`NO_PUSH` sets `contents: read` while keeping `issues: write` and `pull_requests: write` so the agent can still post comments and reviews. `WRITE` is the default (full access). You can also pass a custom JSON object for fine-grained control:
+
+```yaml
+token_permissions: '{"contents": "read", "pull_requests": "read"}'
+```
+
+Custom objects are merged with the defaults and each permission is clamped to the lower of the two -- callers can reduce permissions but never escalate. Invalid input (unknown presets, bad JSON, unrecognized values) fails closed to `NO_PUSH`.
+
 #### Scheduled Tasks
 
 ```yaml
@@ -265,13 +289,14 @@ Bonk is configured via your workflow file and OpenCode's config. There are no bu
 
 ### Workflow Inputs
 
-| Input         | Description                                                   | Required |
-| ------------- | ------------------------------------------------------------- | -------- |
-| `model`       | Model to use (e.g., `opencode/claude-opus-4-5`)               | Yes      |
-| `mentions`    | Comma-separated triggers (e.g., `/bonk,@ask-bonk`)            | No       |
-| `permissions` | Required permission: `admin`, `write`, `any`, or `CODEOWNERS` | No       |
-| `agent`       | OpenCode agent to use                                         | No       |
-| `prompt`      | Custom prompt (for scheduled/dispatch workflows)              | No       |
+| Input                | Description                                                   | Required |
+| -------------------- | ------------------------------------------------------------- | -------- |
+| `model`              | Model to use (e.g., `opencode/claude-opus-4-5`)               | Yes      |
+| `mentions`           | Comma-separated triggers (e.g., `/bonk,@ask-bonk`)            | No       |
+| `permissions`        | Required permission: `admin`, `write`, `any`, or `CODEOWNERS` | No       |
+| `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON     | No       |
+| `agent`              | OpenCode agent to use                                         | No       |
+| `prompt`             | Custom prompt (for scheduled/dispatch workflows)              | No       |
 
 ### OpenCode Config
 

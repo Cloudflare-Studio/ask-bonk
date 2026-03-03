@@ -529,7 +529,9 @@ async function exchangeOidc(): Promise<OidcResult> {
     } else {
       // parseTokenPermissions returns undefined only for malformed JSON (the
       // outer `if` already guarantees the input is non-empty after trim).
-      core.warning(`Invalid TOKEN_PERMISSIONS JSON, using defaults: ${rawPermissions}`);
+      // Fail closed: send NO_PUSH so the server doesn't grant full defaults.
+      core.warning(`Invalid TOKEN_PERMISSIONS JSON, falling back to NO_PUSH: ${rawPermissions}`);
+      exchangeBody.permissions = "NO_PUSH";
     }
   }
 

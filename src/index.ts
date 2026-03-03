@@ -259,7 +259,7 @@ auth.post("/exchange_github_app_token", async (c) => {
   const authHeader = c.req.header("Authorization") ?? null;
 
   // Body is optional — callers may include { permissions } to scope the token.
-  // Accepts a preset name ("READ_ONLY", "WRITE") or a custom permissions object.
+  // Accepts a preset name ("NO_PUSH", "WRITE") or a custom permissions object.
   let body: { permissions?: import("./oidc").TokenPermissionsInput } = {};
   try {
     body = await c.req.json();

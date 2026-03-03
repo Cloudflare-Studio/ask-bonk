@@ -227,7 +227,7 @@ export type TokenPermissions = {
 
 // Named presets for common permission configurations.
 // Callers pass the preset name as a string instead of constructing a JSON object.
-export type TokenPermissionPreset = "READ_ONLY" | "WRITE";
+export type TokenPermissionPreset = "NO_PUSH" | "WRITE";
 
 // Callers may pass either a preset name or a custom permissions object.
 export type TokenPermissionsInput = TokenPermissionPreset | TokenPermissions;
@@ -250,10 +250,10 @@ const DEFAULT_TOKEN_PERMISSIONS: Required<TokenPermissions> = {
 };
 
 // Named presets — each maps to a concrete TokenPermissions object.
-// READ_ONLY: can read repo contents and post comments/reviews, but cannot push.
+// NO_PUSH: can read repo contents and post comments/reviews, but cannot push.
 // WRITE: full write access (current default behavior).
 const PERMISSION_PRESETS: Record<TokenPermissionPreset, Required<TokenPermissions>> = {
-  READ_ONLY: {
+  NO_PUSH: {
     contents: "read",
     issues: "write",
     pull_requests: "write",
@@ -268,26 +268,28 @@ const PERMISSION_RANK: Record<string, number> = { read: 0, write: 1 };
 // concrete permissions object, enforcing downgrade-only for custom objects.
 //
 // - undefined / null / falsy → defaults
-// - Preset name (e.g., "READ_ONLY") → preset permissions
+// - Preset name (e.g., "NO_PUSH") → preset permissions
 // - Custom object → merged with defaults; each key clamped to min(default, requested)
-// - Unknown preset name → READ_ONLY (fail-closed; no existing callers to protect)
-// - Non-object / array → defaults (defensive against untrusted JSON)
+// - Unknown preset name → NO_PUSH (fail-closed; no existing callers to protect)
+// - Non-object / array → NO_PUSH (fail-closed against untrusted JSON)
 export function resolvePermissions(requested?: TokenPermissionsInput): Required<TokenPermissions> {
   if (!requested) return { ...DEFAULT_TOKEN_PERMISSIONS };
 
   // Preset name — fail-closed: unrecognized presets get the most restrictive preset
   if (typeof requested === "string") {
     const preset = PERMISSION_PRESETS[requested.toUpperCase() as TokenPermissionPreset];
-    return preset ? { ...preset } : { ...PERMISSION_PRESETS.READ_ONLY };
+    return preset ? { ...preset } : { ...PERMISSION_PRESETS.NO_PUSH };
   }
 
   // Reject non-plain-objects (arrays, numbers, etc. from untrusted JSON)
   if (typeof requested !== "object" || Array.isArray(requested)) {
-    return { ...DEFAULT_TOKEN_PERMISSIONS };
+    return { ...PERMISSION_PRESETS.NO_PUSH };
   }
 
-  // Custom object — merge with defaults, downgrade only
+  // Custom object — merge with defaults, downgrade only.
+  // If the caller provided keys but none had valid values, fail closed to NO_PUSH.
   const resolved = { ...DEFAULT_TOKEN_PERMISSIONS };
+  let anyAccepted = false;
   for (const key of Object.keys(DEFAULT_TOKEN_PERMISSIONS) as (keyof TokenPermissions)[]) {
     const requestedValue = requested[key];
     if (requestedValue === undefined) continue;
@@ -295,6 +297,7 @@ export function resolvePermissions(requested?: TokenPermissionsInput): Required<
     // Only accept known permission levels — reject unexpected values from untrusted input
     if (requestedValue !== "read" && requestedValue !== "write") continue;
 
+    anyAccepted = true;
     const defaultRank = PERMISSION_RANK[resolved[key]] ?? 0;
     const requestedRank = PERMISSION_RANK[requestedValue];
 
@@ -302,6 +305,11 @@ export function resolvePermissions(requested?: TokenPermissionsInput): Required<
     if (requestedRank <= defaultRank) {
       (resolved as Record<string, string>)[key] = requestedValue;
     }
+  }
+
+  // Caller provided keys but none were valid — fail closed
+  if (!anyAccepted && Object.keys(requested).length > 0) {
+    return { ...PERMISSION_PRESETS.NO_PUSH };
   }
 
   return resolved;
@@ -375,7 +383,7 @@ export async function handleGetInstallation(
 // Handler for POST /exchange_github_app_token
 // Exchanges a GitHub Actions OIDC token for a GitHub App installation token.
 // Callers may pass a `permissions` field in the request body — either a preset
-// name ("READ_ONLY", "WRITE") or a custom permissions object. Escalation beyond
+// name ("NO_PUSH", "WRITE") or a custom permissions object. Escalation beyond
 // defaults is silently clamped.
 export async function handleExchangeToken(
   env: Env,
@@ -533,12 +541,7 @@ export async function handleExchangeTokenForRepo(
       const sourceToken = await generateInstallationToken(env, sourceInstallationId);
       const targetToken = await generateInstallationToken(env, targetInstallationId, {
         repositoryNames: [targetRepoName],
-        permissions: {
-          contents: "write",
-          pull_requests: "write",
-          issues: "write",
-          metadata: "read",
-        },
+        permissions: { ...DEFAULT_TOKEN_PERMISSIONS },
       });
 
       const sourceOctokit = new Octokit({ auth: sourceToken });
@@ -699,12 +702,7 @@ export async function handleExchangeTokenWithPAT(
     try: async () => {
       const token = await generateInstallationToken(env, installationId, {
         repositoryNames: [patRepoName],
-        permissions: {
-          contents: "write",
-          pull_requests: "write",
-          issues: "write",
-          metadata: "read",
-        },
+        permissions: { ...DEFAULT_TOKEN_PERMISSIONS },
       });
 
       // Audit log: PAT exchange

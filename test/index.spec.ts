@@ -1057,8 +1057,8 @@ describe("resolvePermissions", () => {
 
   // --- preset names ---
 
-  it("resolves READ_ONLY preset", () => {
-    expect(resolvePermissions("READ_ONLY")).toEqual({
+  it("resolves NO_PUSH preset", () => {
+    expect(resolvePermissions("NO_PUSH")).toEqual({
       contents: "read",
       issues: "write",
       pull_requests: "write",
@@ -1072,11 +1072,11 @@ describe("resolvePermissions", () => {
 
   it("resolves presets case-insensitively", () => {
     // Action inputs arrive as strings — test that runtime handles mixed case
-    expect(resolvePermissions("read_only" as any)).toEqual(resolvePermissions("READ_ONLY"));
+    expect(resolvePermissions("no_push" as any)).toEqual(resolvePermissions("NO_PUSH"));
     expect(resolvePermissions("Write" as any)).toEqual(resolvePermissions("WRITE"));
   });
 
-  it("falls back to READ_ONLY for unknown preset name", () => {
+  it("falls back to NO_PUSH for unknown preset name", () => {
     expect(resolvePermissions("NONSENSE" as any)).toEqual({
       contents: "read",
       issues: "write",
@@ -1108,8 +1108,9 @@ describe("resolvePermissions", () => {
 
   // --- custom object: no escalation ---
 
-  it("refuses to escalate metadata from read to write", () => {
-    const result = resolvePermissions({ metadata: "read" });
+  it("refuses to escalate metadata beyond its default", () => {
+    // metadata defaults to "read" — passing "write" via untrusted JSON must be clamped
+    const result = resolvePermissions({ metadata: "write" } as any);
     expect(result.metadata).toBe("read");
   });
 
@@ -1133,22 +1134,45 @@ describe("resolvePermissions", () => {
 
   // --- invalid values from untrusted JSON ---
 
-  it("skips invalid string values like 'admin'", () => {
-    const result = resolvePermissions({ contents: "admin" } as any);
-    expect(result.contents).toBe("write"); // keeps default, doesn't pass "admin" through
+  it("falls back to NO_PUSH for invalid string values like 'admin'", () => {
+    const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
+    expect(resolvePermissions({ contents: "admin" } as any)).toEqual(NO_PUSH);
   });
 
-  it("skips non-string values", () => {
-    const result = resolvePermissions({ contents: 123 } as any);
-    expect(result.contents).toBe("write"); // keeps default
+  it("falls back to NO_PUSH for non-string values", () => {
+    const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
+    expect(resolvePermissions({ contents: 123 } as any)).toEqual(NO_PUSH);
   });
 
-  it("returns defaults for array input", () => {
-    expect(resolvePermissions(["READ_ONLY"] as any)).toEqual(DEFAULTS);
+  it("falls back to NO_PUSH when all values are invalid", () => {
+    const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
+    const result = resolvePermissions({
+      contents: "admin",
+      issues: 123,
+      pull_requests: "banana",
+      metadata: "root",
+    } as any);
+    expect(result).toEqual(NO_PUSH);
   });
 
-  it("returns defaults for numeric input", () => {
-    expect(resolvePermissions(42 as any)).toEqual(DEFAULTS);
+  it("applies valid keys and skips invalid ones in mixed input", () => {
+    const result = resolvePermissions({ contents: "read", issues: "banana" } as any);
+    expect(result).toEqual({
+      contents: "read",
+      issues: "write",
+      pull_requests: "write",
+      metadata: "read",
+    });
+  });
+
+  it("falls back to NO_PUSH for array input", () => {
+    const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
+    expect(resolvePermissions(["NO_PUSH"] as any)).toEqual(NO_PUSH);
+  });
+
+  it("falls back to NO_PUSH for numeric input", () => {
+    const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
+    expect(resolvePermissions(42 as any)).toEqual(NO_PUSH);
   });
 });
 

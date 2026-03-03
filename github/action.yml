@@ -42,7 +42,7 @@ inputs:
     required: false
 
   token_permissions:
-    description: "Scope the installation token: 'READ_ONLY' (can comment but not push), 'WRITE' (default), or a JSON permissions object"
+    description: "Scope the installation token: 'NO_PUSH' (can comment but not push), 'WRITE' (default), or a JSON permissions object"
     required: false
 
   opencode_dev:

@@ -48,7 +48,7 @@ describe("OIDC exchange permission forwarding", () => {
   });
 
   it("passes preset name through as a string", () => {
-    expect(parseTokenPermissions("READ_ONLY")).toBe("READ_ONLY");
+    expect(parseTokenPermissions("NO_PUSH")).toBe("NO_PUSH");
     expect(parseTokenPermissions("WRITE")).toBe("WRITE");
   });
 
@@ -63,7 +63,7 @@ describe("OIDC exchange permission forwarding", () => {
   });
 
   it("trims whitespace around preset names", () => {
-    expect(parseTokenPermissions("  READ_ONLY  ")).toBe("READ_ONLY");
+    expect(parseTokenPermissions("  NO_PUSH  ")).toBe("NO_PUSH");
   });
 });
 

@@ -519,10 +519,10 @@ async function exchangeOidc(): Promise<OidcResult> {
   }
 
   // Build request body — include token_permissions if provided by the caller.
-  // Accepts a preset name (e.g., "READ_ONLY") or a JSON permissions object.
+  // Accepts a preset name (e.g., "NO_PUSH") or a JSON permissions object.
   const exchangeBody: Record<string, unknown> = {};
-  const rawPermissions = process.env.TOKEN_PERMISSIONS?.trim();
-  if (rawPermissions) {
+  const rawPermissions = process.env.TOKEN_PERMISSIONS;
+  if (rawPermissions?.trim()) {
     const parsed = parseTokenPermissions(rawPermissions);
     if (parsed !== undefined) {
       exchangeBody.permissions = parsed;

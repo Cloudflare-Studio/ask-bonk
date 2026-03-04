@@ -1,4 +1,4 @@
-name: Dependency update
+name: Update Deps
 
 on:
   schedule:
@@ -28,7 +28,7 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: opencode/claude-opus-4-6
+          model: opencode/claude-sonnet-4-6
           oidc_base_url: "https://ask-bonk.silverlock.workers.dev/auth"
           prompt: |
             Update all dependencies to their latest compatible versions.
@@ -37,9 +37,8 @@ jobs:
             1. Run `bun update` to update dependencies
             2. Run tests with `bun run test` to verify nothing is broken
             3. Run `bun run tsc --noEmit` to verify types
-
-            Create a summary listing each updated package with its old and new version,
+            4 Create a summary table listing each updated package with its old and new version,
             ranked by severity (major > minor > patch).
 
             If any tests fail after updating, identify the problematic package and
-            exclude it from the update, noting it in the PR description.
+            exclude it from the update, and note it in the PR description. Include the root cause and failing test output. 

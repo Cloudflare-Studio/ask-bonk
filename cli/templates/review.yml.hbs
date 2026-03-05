@@ -75,6 +75,7 @@ jobs:
           mentions: '{{MENTIONS}}'
           permissions: write
           agent: reviewer
+          # opencode_version: "1.2.16"  # Pin to a specific OpenCode version (default: latest)
           prompt: |
             Review the following pull request (title: ${{ steps.pr-details.outputs.title }}) against the below review guidelines:
 

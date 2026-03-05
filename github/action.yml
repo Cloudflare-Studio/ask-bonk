@@ -45,6 +45,11 @@ inputs:
     description: "Scope the installation token: 'NO_PUSH' (can comment but not push), 'WRITE' (default), or a JSON permissions object"
     required: false
 
+  opencode_version:
+    description: "Pin to a specific OpenCode version (e.g., '1.2.16'). Falls back to 'latest' on invalid input."
+    required: false
+    default: "latest"
+
   opencode_dev:
     description: "Install OpenCode from dev branch instead of latest release"
     required: false
@@ -121,6 +126,7 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         # version
         GH_TOKEN: ${{ github.token }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         OPENCODE_DEV: ${{ inputs.opencode_dev }}
         # prompt
         PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -149,12 +155,13 @@ runs:
       shell: bash
       env:
         OPENCODE_DEV: ${{ steps.preflight.outputs.dev }}
+        OPENCODE_VERSION: ${{ steps.preflight.outputs.opencode_version }}
       run: |
         set -euo pipefail
         if [ "$OPENCODE_DEV" = "true" ]; then
           bun install -g opencode-ai@dev
         else
-          bun install -g opencode-ai@latest
+          bun install -g "opencode-ai@${OPENCODE_VERSION}"
         fi
         echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
 

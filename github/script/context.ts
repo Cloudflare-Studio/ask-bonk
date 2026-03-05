@@ -213,6 +213,22 @@ export async function detectForkFromPR(
   }
 }
 
+// Validates an OpenCode version string. Accepts "latest", "dev", or a semver-
+// like version (e.g. "1.2.16", "1.2.16-beta.1"). Returns the validated version
+// string, or "latest" for empty/invalid input.
+const SEMVER_RE = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
+
+export function validateOpenCodeVersion(input: string | undefined): string {
+  const trimmed = input?.trim();
+  if (!trimmed || trimmed === "latest" || trimmed === "dev") {
+    return trimmed || "latest";
+  }
+  if (SEMVER_RE.test(trimmed)) {
+    return trimmed;
+  }
+  return "latest";
+}
+
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).
 // Returns the parsed value (preset name string or JSON object) or undefined
 // for empty/whitespace/malformed input.

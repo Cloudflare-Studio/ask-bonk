@@ -26,6 +26,7 @@ jobs:
           {{KEY_NAME}}: ${{ secrets.{{KEY_NAME}} }}
         with:
           model: {{MODEL}}
+          # opencode_version: "1.2.16"  # Pin to a specific OpenCode version (default: latest)
           prompt: |
             Triage the new issue that was just opened.
 

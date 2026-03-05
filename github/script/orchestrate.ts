@@ -16,6 +16,7 @@ import {
   getApiBaseUrl,
   detectForkFromPR,
   parseTokenPermissions,
+  validateOpenCodeVersion,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
@@ -306,6 +307,16 @@ async function checkSetup(): Promise<boolean> {
 function resolveVersion(): void {
   const isDev = process.env.OPENCODE_DEV === "true";
   core.setOutput("dev", isDev ? "true" : "false");
+
+  const rawVersion = process.env.OPENCODE_VERSION;
+  const resolvedVersion = validateOpenCodeVersion(rawVersion);
+  if (rawVersion && rawVersion.trim() !== resolvedVersion && resolvedVersion === "latest") {
+    core.warning(
+      `Invalid opencode_version "${rawVersion}" — falling back to "latest". Use a semver string (e.g. "1.2.16") or "latest".`,
+    );
+  }
+  core.setOutput("opencode_version", resolvedVersion);
+  core.info(`Resolved opencode version: ${resolvedVersion}`);
 }
 
 // ---------------------------------------------------------------------------

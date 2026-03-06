@@ -28,7 +28,7 @@ uses: {{BONK_REPO}}/github@main
 env:
 {{ENV_VARS_INJECTION}}
 with:
-model: "{{MODEL}}"{{OIDC_BASE_URL_YML_INJECTION}}
+model: "{{MODEL}}"{{FALLBACK_MODEL_YML_INJECTION}}{{OIDC_BASE_URL_YML_INJECTION}}
 mentions: "{{MENTIONS}}"
 permissions: {{PERMISSIONS}}
 prompt: |

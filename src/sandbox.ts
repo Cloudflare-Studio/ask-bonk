@@ -22,7 +22,7 @@ export async function runAsk(
   installationId: number,
   request: AskRequest,
 ): Promise<Result<ReadableStream, SandboxError | ValidationError>> {
-  const { id: askId, owner, repo, prompt, agent, model, variant, config } = request;
+  const { id: askId, owner, repo, prompt, agent, model, fallbackModel, variant, config } = request;
   const log = createLogger({
     owner,
     repo,
@@ -187,79 +187,114 @@ export async function runAsk(
 
   (async () => {
     let success = false;
-    try {
-      await sendEvent("session", { id: sessionId, askId });
+    let currentModel = model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL;
+    let failureCount = 0;
+    
+    await sendEvent("session", { id: sessionId, askId });
 
-      const promptResultWrapped = await Result.tryPromise(
-        {
-          try: () =>
-            client.session.prompt({
-              path: { id: sessionId },
-              query: { directory: workDir },
-              body: {
-                model: { providerID, modelID },
-                agent: agent ?? undefined,
-                // variant is supported by the OpenCode API but not yet in the v1 SDK types.
-                // Safe to pass -- the SDK sends all body fields in the HTTP request.
-                ...(variant ? { variant } : {}),
-                parts: [{ type: "text", text: prompt }],
-              },
-            }),
-          catch: (e) => new SandboxError({ operation: "session.prompt", cause: e }),
-        },
-        { retry: RETRY_CONFIG },
-      );
-      if (promptResultWrapped.isErr()) throw promptResultWrapped.error;
-      const promptResult = promptResultWrapped.value;
-
-      const parts = promptResult.data?.parts ?? [];
-      const textPart = parts.find((p) => p.type === "text");
-      const response = textPart?.type === "text" ? textPart.text : "No response";
-
-      // Check for changes
-      const statusResult = await sandbox.exec("git status --porcelain", {
-        cwd: workDir,
-      });
-      const hasChanges = statusResult.success && statusResult.stdout.trim().length > 0;
-
-      let changedFiles: string[] = [];
-      if (hasChanges) {
-        changedFiles = statusResult.stdout
-          .trim()
-          .split("\n")
-          .map((line: string) => line.slice(3).trim())
-          .filter((f: string) => f.length > 0);
-      }
-
-      await sendEvent("response", {
-        text: response,
-        changedFiles: changedFiles.length > 0 ? changedFiles : null,
-      });
-
-      await sendEvent("done", { success: true });
-      success = true;
-    } catch (error) {
-      sessionLog.errorWithException("sandbox_prompt_failed", error, {
-        duration_ms: Date.now() - promptStartTime,
-      });
-      // Try to send error event, but don't fail if stream is already closed
-      const message = error instanceof Error ? error.message : "Unknown error";
-      await sendEvent("error", { message, askId, sessionId });
-    } finally {
-      // Log completion with duration
-      if (success) {
-        sessionLog.info("sandbox_prompt_completed", {
-          duration_ms: Date.now() - promptStartTime,
-        });
-      }
-      // Safely close the writer, ignoring errors if already closed
+    while (failureCount < 2) {
       try {
-        await writer.close();
-      } catch (closeError) {
-        sessionLog.errorWithException("sandbox_sse_close_failed", closeError);
+        const [providerID, ...rest] = currentModel.split("/");
+        const modelID = rest.join("/");
+
+        if (!providerID?.length || !modelID.length) {
+          throw new ValidationError({
+            message: `Invalid model ${currentModel}. Model must be in the format "provider/model".`,
+          });
+        }
+
+        const promptResultWrapped = await Result.tryPromise(
+          {
+            try: () =>
+              client.session.prompt({
+                path: { id: sessionId },
+                query: { directory: workDir },
+                body: {
+                  model: { providerID, modelID },
+                  agent: agent ?? undefined,
+                  // variant is supported by the OpenCode API but not yet in the v1 SDK types.
+                  // Safe to pass -- the SDK sends all body fields in the HTTP request.
+                  ...(variant ? { variant } : {}),
+                  parts: [{ type: "text", text: prompt }],
+                },
+              }),
+            catch: (e) => new SandboxError({ operation: "session.prompt", cause: e }),
+          },
+          { retry: RETRY_CONFIG },
+        );
+        if (promptResultWrapped.isErr()) throw promptResultWrapped.error;
+        const promptResult = promptResultWrapped.value;
+
+        const parts = promptResult.data?.parts ?? [];
+        const textPart = parts.find((p) => p.type === "text");
+        const response = textPart?.type === "text" ? textPart.text : "No response";
+
+        // Check for changes
+        const statusResult = await sandbox.exec("git status --porcelain", {
+          cwd: workDir,
+        });
+        const hasChanges = statusResult.success && statusResult.stdout.trim().length > 0;
+
+        let changedFiles: string[] = [];
+        if (hasChanges) {
+          changedFiles = statusResult.stdout
+            .trim()
+            .split("\n")
+            .map((line: string) => line.slice(3).trim())
+            .filter((f: string) => f.length > 0);
+        }
+
+        await sendEvent("response", {
+          text: response,
+          changedFiles: changedFiles.length > 0 ? changedFiles : null,
+        });
+
+        await sendEvent("done", { success: true });
+        success = true;
+        break; // Exit the while loop on success
+      } catch (error) {
+        failureCount++;
+
+        // If it's the first failure and we have a fallback, try again
+        if (failureCount === 1 && fallbackModel) {
+          sessionLog.warn("sandbox_prompt_failed_falling_back", {
+            error: error instanceof Error ? error.message : String(error),
+            fallback: fallbackModel,
+          });
+          await sendEvent("warning", {
+            message: `Primary model failed. Falling back to ${fallbackModel}...`,
+          });
+          currentModel = fallbackModel;
+          continue;
+        }
+
+        sessionLog.errorWithException("sandbox_prompt_failed", error, {
+          duration_ms: Date.now() - promptStartTime,
+          attempt: failureCount,
+        });
+
+        // Try to send error event, but don't fail if stream is already closed
+        const message = error instanceof Error ? error.message : "Unknown error";
+        await sendEvent("error", { message, askId, sessionId });
+        break; // Exit the loop on failure if no fallback or second failure
       }
     }
+
+    // Log completion with duration
+    if (success) {
+      sessionLog.info("sandbox_prompt_completed", {
+        duration_ms: Date.now() - promptStartTime,
+      });
+    }
+
+    // Safely close the writer, ignoring errors if already closed
+    try {
+      await writer.close();
+    } catch (closeError) {
+      sessionLog.errorWithException("sandbox_sse_close_failed", closeError);
+    }
   })();
+
 
   return Result.ok(readable);
 }

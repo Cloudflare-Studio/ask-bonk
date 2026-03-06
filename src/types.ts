@@ -49,6 +49,7 @@ export interface AskRequest {
   prompt: string;
   agent?: string;
   model?: string;
+  fallbackModel?: string;
   // Provider-specific reasoning effort level (e.g., "high", "max", "minimal").
   // Maps to OpenCode's variant parameter on session.prompt().
   variant?: string;

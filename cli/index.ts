@@ -58,6 +58,7 @@ interface WorkflowConfig {
   name: string;
   filename: string;
   model: string;
+  fallbackModel?: string;
   keyName: string;
   events: EventTrigger[];
   mentions?: string;
@@ -519,6 +520,7 @@ async function runWorkflow(
     const content = renderTemplate(template, {
       NAME: config.name,
       MODEL: config.model,
+      FALLBACK_MODEL_YML_INJECTION: config.fallbackModel ? `\n          fallback_model: "${config.fallbackModel}"` : "",
       OIDC_BASE_URL_YML_INJECTION: process.env.OIDC_BASE_URL ? `\n          oidc_base_url: "${process.env.OIDC_BASE_URL}"` : "",
       ENV_VARS_INJECTION: `${config.keyName}: \${{ secrets.${config.keyName} }}`,
       MENTIONS: config.mentions || "",
@@ -896,11 +898,37 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
     process.exit(0);
   }
 
+  // Optional fallback model
+  let fallbackModel: string | undefined;
+  const useFallback = await p.confirm({
+    message: "Do you want to configure a fallback model? (recommended if primary model is unstable)",
+    initialValue: false,
+  });
+
+  if (p.isCancel(useFallback)) {
+    p.cancel("Operation cancelled.");
+    process.exit(0);
+  }
+
+  if (useFallback) {
+    const fallbackModelInput = await p.text({
+      message: "Enter the fallback model name (e.g. gpt-4o)",
+      validate: (v) => (!v || v.length === 0 ? "Fallback model is required" : undefined),
+    });
+    if (p.isCancel(fallbackModelInput)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    fallbackModel = fallbackModelInput;
+  }
+
   return {
     name,
     filename,
     model,
+    fallbackModel,
     keyName: providerConfig?.keyName || "OPENCODE_API_KEY",
+
     events,
     mentions,
     prompt,

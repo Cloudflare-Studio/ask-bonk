@@ -9,6 +9,10 @@ inputs:
     description: "Model to use (e.g., opencode/claude-opus-4-5)"
     required: true
 
+  fallback_model:
+    description: "Fallback model to use if the primary model fails"
+    required: false
+
   agent:
     description: "Set the agent to use for this workflow. Falls back to the default_agent if set in config, else 'build'"
     required: false
@@ -157,6 +161,12 @@ runs:
         else
           bun install -g opencode-ai@latest
         fi
+        
+        # Install provider plugin if fallback is specified
+        if [ -n "${FALLBACK_MODEL:-}" ]; then
+          bun install -g @opencode-ai/plugin
+        fi
+
         echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
 
     - name: Configure Git
@@ -191,8 +201,67 @@ runs:
         export USE_GITHUB_TOKEN=true
         export GITHUB_TOKEN="${GH_TOKEN}"
         
-        timeout 45m opencode github run
-        EXIT_CODE=$?
+        # Configure plugins for OpenCode if fallback is provided
+        if [ -n "$FALLBACK_MODEL" ]; then
+          # We need to pass the API keys to the plugins.
+          # OpenCode looks for opencode.json or environment variables.
+          # To ensure plugins are loaded correctly in any directory, we use OPENCODE_OPTIONS.
+          # We'll use a temporary opencode.json for the session.
+          cat <<EOF > opencode.json
+{
+  "plugins": [
+    {
+      "name": "openai",
+      "import": "@opencode-ai/plugin/openai",
+      "options": { "apiKey": "${OPENAI_API_KEY}" }
+    },
+    {
+      "name": "anthropic",
+      "import": "@opencode-ai/plugin/anthropic",
+      "options": { "apiKey": "${ANTHROPIC_API_KEY}" }
+    }
+  ]
+}
+EOF
+          export OPENCODE_OPTIONS='{"config": "./opencode.json"}'
+        fi
+
+        CURRENT_MODEL="$MODEL"
+        FAILURE_COUNT=0
+        
+        while [ $FAILURE_COUNT -lt 2 ]; do
+          echo "Running Bonk with model: $CURRENT_MODEL"
+          timeout 45m opencode github run --model "$CURRENT_MODEL"
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -eq 0 ]; then
+             break
+          fi
+          
+          FAILURE_COUNT=$((FAILURE_COUNT + 1))
+          
+          if [ $FAILURE_COUNT -eq 1 ] && [ -n "$FALLBACK_MODEL" ]; then
+            echo "Primary model failed. Attempting fallback to $FALLBACK_MODEL..."
+            
+            # Post a comment to the PR/Issue about the fallback
+            if [ -n "$PR_NUMBER" ]; then
+              TARGET="$PR_NUMBER"
+            else
+              TARGET="$ISSUE_NUMBER"
+            fi
+            
+            if [ -n "$TARGET" ]; then
+              gh pr comment "$TARGET" --body "⚠️ **Primary model ($MODEL) failed.** Falling back to **$FALLBACK_MODEL**... 🔄" || \
+              gh issue comment "$TARGET" --body "⚠️ **Primary model ($MODEL) failed.** Falling back to **$FALLBACK_MODEL**... 🔄" || \
+              echo "Failed to post fallback comment"
+            fi
+            
+            CURRENT_MODEL="$FALLBACK_MODEL"
+            continue
+          fi
+          
+          break
+        done
         
         echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
         exit $EXIT_CODE
@@ -212,6 +281,9 @@ runs:
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || '' }}
         OPENCODE_API_KEY: ${{ env.OPENCODE_API_KEY }}
+        FALLBACK_MODEL: ${{ inputs.fallback_model }}
+        OPENAI_API_KEY: ${{ env.OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY }}
 
     - name: Finalize Bonk run
       if: |

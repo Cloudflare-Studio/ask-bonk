@@ -106,6 +106,17 @@ Mention `@ask-bonk` or `/bonk` in any issue or PR comment.
     model: anthropic/claude-sonnet-4-20250514
 ```
 
+### Fallback Model Support
+If your primary model is prone to timeouts or rate limits, you can configure a fallback model. Bonk will automatically retry with the fallback if the primary run fails, adding a comment to the PR/issue to notify you.
+
+Add `fallback_model` to your `bonk.yml` (or configure it via the CLI):
+
+```yaml
+with:
+  model: "opencode/claude-opus-4-5"
+  fallback_model: "anthropic/claude-3-5-sonnet"
+```
+
 You can also configure Bonk to use [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/):
 
 ```yaml

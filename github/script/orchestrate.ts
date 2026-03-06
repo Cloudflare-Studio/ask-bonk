@@ -443,10 +443,11 @@ async function buildPrompt(): Promise<PromptResult> {
 
   const parts: string[] = [];
 
+  const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
+  const repository = process.env.REPOSITORY || "";
+  const [owner = "", repo = ""] = repository.split("/");
+
   if (detection.isFork) {
-    const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
-    const repository = process.env.REPOSITORY || "";
-    const [owner = "", repo = ""] = repository.split("/");
     const headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
 
     if (!prNumber || !owner || !repo) {
@@ -459,6 +460,14 @@ async function buildPrompt(): Promise<PromptResult> {
     }
 
     core.info("PR is from a fork. Fork guidance prompt built.");
+  } else if (prNumber && owner && repo) {
+    // Inject authoritative PR context so the model never infers the target PR
+    // from git state. Without this, `opencode github run` can discover a
+    // different open PR on the same branch (e.g. an older stale PR) and
+    // post reviews there instead of the PR that triggered this run.
+    // See: https://github.com/ask-bonk/ask-bonk/issues/148
+    parts.push(`You are working on PR #${prNumber} in ${owner}/${repo}. When posting reviews or comments, always target PR #${prNumber}.`);
+    core.info(`Non-fork PR context set: ${owner}/${repo}#${prNumber}`);
   }
 
   const userPrompt = process.env.USER_PROMPT;

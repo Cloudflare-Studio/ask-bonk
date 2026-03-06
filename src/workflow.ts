@@ -1,5 +1,5 @@
 import type { Octokit } from "@octokit/rest";
-import { DEFAULT_MODEL } from "./types";
+import { Env, DEFAULT_MODEL } from "./types";
 import {
   createComment,
   fileExists,
@@ -21,18 +21,21 @@ export interface SetupResult {
   prNumber?: number;
 }
 
-const BOT_MENTION = "@ask-bonk";
-const BOT_COMMAND = "/bonk";
+const DEFAULT_BOT_MENTION = "@ask-bonk";
+const DEFAULT_BOT_COMMAND = "/bonk";
 
-function generateWorkflowContent(): string {
+function generateWorkflowContent(env: Env): string {
+  const botMention = env.BOT_MENTION || DEFAULT_BOT_MENTION;
+  const botCommand = env.BOT_COMMAND || DEFAULT_BOT_COMMAND;
   return workflowTemplate
-    .replace(/\{\{BOT_MENTION\}\}/g, BOT_MENTION)
-    .replace(/\{\{BOT_COMMAND\}\}/g, BOT_COMMAND)
+    .replace(/\{\{BOT_MENTION\}\}/g, botMention)
+    .replace(/\{\{BOT_COMMAND\}\}/g, botCommand)
     .replace(/\{\{MODEL\}\}/g, DEFAULT_MODEL);
 }
 
 // Check if workflow file exists, create PR if not
 export async function ensureWorkflowFile(
+  env: Env,
   octokit: Octokit,
   owner: string,
   repo: string,
@@ -48,10 +51,11 @@ export async function ensureWorkflowFile(
   }
 
   workflowLog.info("workflow_file_missing_creating_pr");
-  return await createWorkflowPR(octokit, owner, repo, issueNumber, defaultBranch);
+  return await createWorkflowPR(env, octokit, owner, repo, issueNumber, defaultBranch);
 }
 
 async function createWorkflowPR(
+  env: Env,
   octokit: Octokit,
   owner: string,
   repo: string,
@@ -95,7 +99,7 @@ async function createWorkflowPR(
     }
   }
 
-  const workflowContent = generateWorkflowContent();
+  const workflowContent = generateWorkflowContent(env);
   await createOrUpdateFile(
     octokit,
     owner,
@@ -106,9 +110,12 @@ async function createWorkflowPR(
     WORKFLOW_BRANCH,
   );
 
+  const botMention = env.BOT_MENTION || DEFAULT_BOT_MENTION;
+  const botCommand = env.BOT_COMMAND || DEFAULT_BOT_COMMAND;
+
   const prBody = `## Summary
 
-This PR adds the Bonk GitHub Action workflow to enable \`@ask-bonk\` / \`/bonk\` mentions in issues and PRs.
+This PR adds the Bonk GitHub Action workflow to enable \`${botMention}\` / \`${botCommand}\` mentions in issues and PRs.
 
 ## Setup Required
 
@@ -117,20 +124,20 @@ After merging, ensure the following secret is set in your repository:
 1. Go to **Settings** > **Secrets and variables** > **Actions**
 2. Add a new repository secret:
    - **Name**: \`OPENCODE_API_KEY\`
-   - **Value**: Your Anthropic API key (get one at https://console.anthropic.com/)
+   - **Value**: Your API key
 
 ## Usage
 
 Once merged and configured, mention the bot in any issue or PR:
 
 \`\`\`
-@ask-bonk fix the type error in utils.ts
+${botMention} fix the type error in utils.ts
 \`\`\`
 
 Or use the slash command:
 
 \`\`\`
-/bonk add tests for the new feature
+${botCommand} add tests for the new feature
 \`\`\`
 `;
 

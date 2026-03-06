@@ -1,36 +1,36 @@
 name: {{NAME}}
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
+issue_comment:
+types: [created]
+pull_request_review_comment:
+types: [created]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
-  cancel-in-progress: false
+group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+cancel-in-progress: false
 
 jobs:
-  bonk:
-    # mentions in this check must match the `mentions` input below
-    if: github.event.sender.type != 'Bot'{{MENTIONS_CHECK}}
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: {{PERMISSIONS}}
-      issues: write
-      pull-requests: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+bonk:
+# mentions in this check must match the `mentions` input below
+if: github.event.sender.type != 'Bot'{{MENTIONS_CHECK}}
+runs-on: ubuntu-latest
+permissions:
+id-token: write
+contents: {{PERMISSIONS}}
+issues: write
+pull-requests: write
+steps:
+- name: Checkout repository
+uses: actions/checkout@v4
+with:
+fetch-depth: 1
 
-      - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
-        env:
-          {{KEY_NAME}}: ${{ secrets.{{KEY_NAME}} }}
-        with:
-          model: "{{MODEL}}"
-          mentions: "{{MENTIONS}}"
-          permissions: {{PERMISSIONS}}
+- name: Run Bonk
+uses: {{BONK_REPO}}/github@main
+env:
+{{ENV_VARS_INJECTION}}
+with:
+model: "{{MODEL}}"{{OIDC_BASE_URL_YML_INJECTION}}
+mentions: "{{MENTIONS}}"
+permissions: {{PERMISSIONS}}

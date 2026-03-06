@@ -113,7 +113,8 @@ runs:
         COMMENT_ACTOR: ${{ github.event.comment.user.login }}
         REVIEW_ACTOR: ${{ github.event.review.user.login }}
         # setup + track
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        OIDC_BASE_URL: ${{ env.OIDC_BASE_URL || inputs.oidc_base_url }}
+        GITHUB_APP_SLUG: ${{ env.GITHUB_APP_SLUG || 'ask-bonk' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
@@ -162,8 +163,10 @@ runs:
       if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       run: |
-        git config --global user.name "ask-bonk[bot]"
-        git config --global user.email "ask-bonk[bot]@users.noreply.github.com"
+        # Use the slug from environment or default to ask-bonk
+        APP_NAME="${GITHUB_APP_SLUG:-ask-bonk}"
+        git config --global user.name "${APP_NAME}[bot]"
+        git config --global user.email "${APP_NAME}[bot]@users.noreply.github.com"
         # Replace the GITHUB_TOKEN credential that actions/checkout persists in
         # local git config. Pushes authenticated with GITHUB_TOKEN don't trigger
         # downstream workflows (by design). The App installation token obtained
@@ -187,8 +190,10 @@ runs:
         # GH_TOKEN is the App token written to GITHUB_ENV by the OIDC exchange step.
         export USE_GITHUB_TOKEN=true
         export GITHUB_TOKEN="${GH_TOKEN}"
+        
         timeout 45m opencode github run
         EXIT_CODE=$?
+        
         echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
         exit $EXIT_CODE
       env:
@@ -198,7 +203,7 @@ runs:
         PROMPT: ${{ steps.preflight.outputs.value }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        OIDC_BASE_URL: ${{ env.OIDC_BASE_URL || inputs.oidc_base_url }}
         # Expose the PR/issue number so OpenCode (and any shell commands the
         # model runs, e.g. `gh api .../pulls/$PR_NUMBER/reviews`) can
         # reference the correct PR without having to infer it from git or
@@ -206,6 +211,7 @@ runs:
         # discovering and acting on a different PR.
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || '' }}
+        OPENCODE_API_KEY: ${{ env.OPENCODE_API_KEY }}
 
     - name: Finalize Bonk run
       if: |
@@ -214,7 +220,7 @@ runs:
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
       env:
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        OIDC_BASE_URL: ${{ env.OIDC_BASE_URL || inputs.oidc_base_url }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
         GITHUB_RUN_ID: ${{ github.run_id }}

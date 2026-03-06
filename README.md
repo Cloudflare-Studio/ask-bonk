@@ -32,6 +32,18 @@ Or add new workflows to an existing installation:
 bun run cli workflow
 ```
 
+#### Custom Installations
+If you are running a self-hosted instance or a custom GitHub App slug other than `ask-bonk`, supply the environment variables during installation. This ensures the CLI generates workflow files that point to your fork and use your custom bot triggers:
+
+```bash
+GITHUB_APP_SLUG="my-custom-bonk" \
+OIDC_BASE_URL="https://my-worker.dev/auth" \
+BONK_REPO="user/repo" \
+BOT_MENTION="@my-bot" \
+BOT_COMMAND="/my-command" \
+bun run cli install
+```
+
 ### Manual Installation
 
 #### 1. Install the GitHub App

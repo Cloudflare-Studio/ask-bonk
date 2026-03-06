@@ -25,14 +25,18 @@ import {
   openUrl,
   repoExists,
   setSecret,
-  waitForAppInstallation,
   workflowExists,
 } from "./github";
+import {
+  GITHUB_APP_SLUG,
+  GITHUB_APP_URL,
+  BONK_REPO,
+  DEFAULT_MODEL,
+  BOT_MENTION,
+  BOT_COMMAND,
+} from "./constants";
 
-const GITHUB_APP_URL = "https://github.com/apps/ask-bonk";
-const DEFAULT_MODEL = "opencode/claude-opus-4-5";
-const BOT_MENTION = "@ask-bonk";
-const BOT_COMMAND = "/bonk";
+
 
 type ProviderChoice = "opencode-zen" | "anthropic" | "openai" | "other";
 type WorkflowPreset = "bonk" | "scheduled" | "triage" | "review" | "custom";
@@ -143,7 +147,7 @@ async function selectProvider(): Promise<ProviderConfig> {
   if (provider === "other") {
     const customKeyName = await p.text({
       message: "Enter the API key name (e.g. OPENROUTER_API_KEY)",
-      validate: (v) => (v.length === 0 ? "Key name is required" : undefined),
+      validate: (v) => (!v || v.length === 0 ? "Key name is required" : undefined),
     });
     if (p.isCancel(customKeyName)) {
       p.cancel("Operation cancelled.");
@@ -153,7 +157,7 @@ async function selectProvider(): Promise<ProviderConfig> {
 
     const customModel = await p.text({
       message: "Enter the model name",
-      validate: (v) => (v.length === 0 ? "Model name is required" : undefined),
+      validate: (v) => (!v || v.length === 0 ? "Model name is required" : undefined),
     });
     if (p.isCancel(customModel)) {
       p.cancel("Operation cancelled.");
@@ -167,12 +171,113 @@ async function selectProvider(): Promise<ProviderConfig> {
 
   const apiKey = await p.password({
     message: `Enter your ${keyName}`,
-    validate: (v) => (v.length === 0 ? "API key is required" : undefined),
+    validate: (v) => (!v || v.length === 0 ? "API key is required" : undefined),
   });
 
   if (p.isCancel(apiKey)) {
     p.cancel("Operation cancelled.");
     process.exit(0);
+  }
+
+  return { keyName, keyValue: apiKey, model: defaultModel };
+}
+
+async function selectFallbackProvider(primaryConfig?: ProviderConfig): Promise<ProviderConfig | undefined> {
+  const wantsFallback = await p.confirm({
+    message: "Would you like to configure a Fallback Model? (Used if the primary model fails)",
+    initialValue: false,
+  });
+
+  if (p.isCancel(wantsFallback)) {
+    p.cancel("Operation cancelled.");
+    process.exit(0);
+  }
+
+  if (!wantsFallback) return undefined;
+
+  const provider = (await p.select({
+    message: "Select your fallback LLM provider",
+    options: [
+      { value: "opencode-zen", label: "OpenCode Zen" },
+      { value: "anthropic", label: "Anthropic" },
+      { value: "openai", label: "OpenAI" },
+      { value: "other", label: "Other OpenCode supported provider" },
+    ],
+  })) as ProviderChoice;
+
+  if (p.isCancel(provider)) {
+    p.cancel("Operation cancelled.");
+    process.exit(0);
+  }
+
+  let keyName: string;
+  let defaultModel: string;
+
+  if (provider === "other") {
+    const customKeyName = await p.text({
+      message: "Enter the API key name (e.g. OPENROUTER_API_KEY)",
+      validate: (v) => (!v || v.length === 0 ? "Key name is required" : undefined),
+    });
+    if (p.isCancel(customKeyName)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    keyName = customKeyName;
+
+    const customModel = await p.text({
+      message: "Enter the fallback model name (e.g. openrouter/anthropic/claude-3.5-sonnet)",
+      validate: (v) => (!v || v.length === 0 ? "Model name is required" : undefined),
+    });
+    if (p.isCancel(customModel)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    defaultModel = customModel;
+  } else {
+    keyName = PROVIDERS[provider].keyName;
+    defaultModel = PROVIDERS[provider].defaultModel;
+
+    const customModel = await p.text({
+      message: "Confirm or customize the fallback model name",
+      initialValue: defaultModel,
+      validate: (v) => (!v || v.length === 0 ? "Model name is required" : undefined),
+    });
+    if (p.isCancel(customModel)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    defaultModel = customModel;
+  }
+
+  let apiKey: string | undefined = undefined;
+
+  if (primaryConfig && primaryConfig.keyName === keyName) {
+    const reuseKey = await p.confirm({
+      message: `Use the same ${keyName} for both models?`,
+      initialValue: true,
+    });
+
+    if (p.isCancel(reuseKey)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+
+    if (reuseKey) {
+      apiKey = primaryConfig.keyValue;
+    }
+  }
+
+  if (!apiKey) {
+    const promptedKey = await p.password({
+      message: `Enter your ${keyName} for the fallback model`,
+      validate: (v) => (!v || v.length === 0 ? "API key is required" : undefined),
+    });
+
+    if (p.isCancel(promptedKey)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    apiKey = promptedKey as string;
   }
 
   return { keyName, keyValue: apiKey, model: defaultModel };
@@ -236,33 +341,29 @@ async function runInstall() {
   // Check GitHub App installation
   const spinner = p.spinner();
   spinner.start("Checking GitHub App installation...");
-
   const isAppInstalled = await checkAppInstallation(targetRepo);
+  spinner.stop(isAppInstalled ? `${GITHUB_APP_SLUG} GitHub App is already installed` : "");
 
-  if (isAppInstalled) {
-    spinner.stop("ask-bonk GitHub App is already installed");
-  } else {
-    spinner.stop("GitHub App not installed");
-    p.log.info(`Install the app: ${GITHUB_APP_URL}`);
-
+  if (!isAppInstalled) {
+    p.log.info(`Install the app on your repository: ${GITHUB_APP_URL}`);
     openUrl(GITHUB_APP_URL);
 
-    spinner.start("Waiting for app installation (checking every 10s for up to 2 mins)...");
-    const installed = await waitForAppInstallation(targetRepo);
+    const confirmed = await p.confirm({
+      message: `Have you installed ${GITHUB_APP_SLUG} on ${targetRepo}?`,
+      initialValue: false,
+    });
 
-    if (!installed) {
-      spinner.stop("App installation not detected");
-      p.log.error(`Install the app manually: ${GITHUB_APP_URL}`);
-      process.exit(1);
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.cancel(`Please install the app first: ${GITHUB_APP_URL}`);
+      process.exit(0);
     }
-
-    spinner.stop("GitHub App installed successfully");
   }
 
   // Select provider and get API key
   const providerConfig = await selectProvider();
+  const fallbackConfig = await selectFallbackProvider(providerConfig);
 
-  // Set secret
+  // Set primary secret
   const setSecretConfirm = await p.confirm({
     message: `Set ${providerConfig.keyName} as a repository secret using gh CLI?`,
   });
@@ -286,6 +387,32 @@ async function runInstall() {
     );
   }
 
+  // Set fallback secret if distinct
+  if (fallbackConfig && fallbackConfig.keyName !== providerConfig.keyName) {
+    const setFallbackSecretConfirm = await p.confirm({
+      message: `Set ${fallbackConfig.keyName} as a repository secret using gh CLI?`,
+    });
+
+    if (p.isCancel(setFallbackSecretConfirm)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+
+    if (setFallbackSecretConfirm) {
+      spinner.start(`Setting ${fallbackConfig.keyName} secret...`);
+      if (setSecret(targetRepo, fallbackConfig.keyName, fallbackConfig.keyValue)) {
+        spinner.stop(`${fallbackConfig.keyName} secret set successfully`);
+      } else {
+        spinner.stop("Failed to set fallback secret");
+        p.log.warn(`Set it manually at: https://github.com/${targetRepo}/settings/secrets/actions`);
+      }
+    } else {
+      p.log.info(
+        `Set ${fallbackConfig.keyName} manually at: https://github.com/${targetRepo}/settings/secrets/actions`,
+      );
+    }
+  }
+
   // Ask to add workflows
   const addWorkflows = await p.confirm({
     message: "Would you like to add workflow files now?",
@@ -297,7 +424,7 @@ async function runInstall() {
   }
 
   if (addWorkflows) {
-    await runWorkflow(targetRepo, providerConfig, canWriteRemote);
+    await runWorkflow(targetRepo, providerConfig, fallbackConfig, canWriteRemote);
   }
 
   p.outro("Setup complete! Run `bonk workflow` to add more workflows.");
@@ -306,6 +433,7 @@ async function runInstall() {
 async function runWorkflow(
   repo?: string,
   providerConfig?: ProviderConfig,
+  fallbackConfig?: ProviderConfig,
   canWriteRemote: boolean = true,
 ) {
   if (!repo) {
@@ -391,7 +519,8 @@ async function runWorkflow(
     const content = renderTemplate(template, {
       NAME: config.name,
       MODEL: config.model,
-      KEY_NAME: config.keyName,
+      OIDC_BASE_URL_YML_INJECTION: process.env.OIDC_BASE_URL ? `\n          oidc_base_url: "${process.env.OIDC_BASE_URL}"` : "",
+      ENV_VARS_INJECTION: `${config.keyName}: \${{ secrets.${config.keyName} }}`,
       MENTIONS: config.mentions || "",
       MENTIONS_CHECK: buildMentionsCheck(config.mentions || ""),
       PROMPT: config.prompt || "",
@@ -399,6 +528,8 @@ async function runWorkflow(
       PERMISSIONS: config.permissions,
       BOT_COMMAND,
       BOT_MENTION,
+      BONK_REPO,
+      GITHUB_APP_SLUG,
       EVENTS: config.events
         .map((e) => {
           if (e === "issue_comment" || e === "pull_request_review_comment") {
@@ -512,7 +643,7 @@ async function runWorkflow(
 
 async function buildPresetWorkflow(
   preset: WorkflowPreset,
-  providerConfig?: ProviderConfig,
+  providerConfig?: ProviderConfig
 ): Promise<WorkflowConfig> {
   const defaults: Record<string, Partial<WorkflowConfig>> = {
     bonk: {
@@ -559,7 +690,7 @@ async function buildPresetWorkflow(
   const filename = await p.text({
     message: "Filename",
     initialValue: presetDefaults.filename,
-    validate: (v) => (!v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
+    validate: (v) => (!v || !v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
   });
 
   if (p.isCancel(filename)) {
@@ -567,15 +698,23 @@ async function buildPresetWorkflow(
     process.exit(0);
   }
 
-  const model = await p.text({
-    message: "Model",
-    initialValue: providerConfig?.model || DEFAULT_MODEL,
-  });
-
-  if (p.isCancel(model)) {
-    p.cancel("Operation cancelled.");
-    process.exit(0);
+  // Skip the model prompt if we already know the model from the provider selection
+  let model: string;
+  if (providerConfig?.model) {
+    model = providerConfig.model;
+  } else {
+    const modelInput = await p.text({
+      message: "Model",
+      initialValue: DEFAULT_MODEL,
+    });
+    if (p.isCancel(modelInput)) {
+      p.cancel("Operation cancelled.");
+      process.exit(0);
+    }
+    model = modelInput;
   }
+
+
 
   let cron = presetDefaults.cron;
   if (preset === "scheduled") {
@@ -605,7 +744,7 @@ async function buildPresetWorkflow(
 async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<WorkflowConfig> {
   const name = await p.text({
     message: "Workflow name",
-    validate: (v) => (v.length === 0 ? "Name is required" : undefined),
+    validate: (v) => (!v || v.length === 0 ? "Name is required" : undefined),
   });
 
   if (p.isCancel(name)) {
@@ -616,7 +755,7 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
   const filename = await p.text({
     message: "Filename",
     initialValue: `${name.toLowerCase().replace(/\s+/g, "-")}.yml`,
-    validate: (v) => (!v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
+    validate: (v) => (!v || !v.endsWith(".yml") ? "Filename must end with .yml" : undefined),
   });
 
   if (p.isCancel(filename)) {
@@ -664,7 +803,7 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
       initialValue: `${BOT_COMMAND},${BOT_MENTION}`,
       validate: (v) => {
         if (!v || v.length === 0) return "At least one mention is required";
-        if (/[^a-zA-Z0-9@\/,\s._-]/.test(v))
+        if (/[^a-zA-Z0-9@/,\s._-]/.test(v))
           return "Mentions may only contain letters, numbers, @, /, -, _, .";
         return undefined;
       },
@@ -719,7 +858,7 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
   if (promptSource === "custom") {
     const customPrompt = await p.text({
       message: "Enter your prompt",
-      validate: (v) => (v.length === 0 ? "Prompt is required" : undefined),
+      validate: (v) => (!v || v.length === 0 ? "Prompt is required" : undefined),
     });
     if (p.isCancel(customPrompt)) {
       p.cancel("Operation cancelled.");
@@ -737,6 +876,8 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
     p.cancel("Operation cancelled.");
     process.exit(0);
   }
+
+
 
   const permissions = (await p.select({
     message: "Permissions",

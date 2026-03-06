@@ -60,7 +60,7 @@ import { log, createLogger, sanitizeSecrets } from "./log";
 export { Sandbox } from "@cloudflare/sandbox";
 export { RepoAgent };
 
-const GITHUB_REPO_URL = "https://github.com/ask-bonk/ask-bonk";
+
 
 function isAllowedOrg(owner: string, env: Env): boolean {
   const allowed = env.ALLOWED_ORGS ?? [];
@@ -99,7 +99,7 @@ function getReactionTarget(
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
+app.get("/", (c) => c.redirect(c.env.GITHUB_REPO_URL || "https://github.com/ask-bonk/ask-bonk", 302));
 app.get("/health", (c) => c.text("OK"));
 app.get("/version", (c) => c.json({ version: __VERSION__, commit: __COMMIT__ }));
 
@@ -151,6 +151,11 @@ app.route("/stats", stats);
 // Webhooks endpoint - receives GitHub events, logs them
 // Tracking is now handled by the GitHub Action calling /api/github/track
 app.post("/webhooks", async (c) => {
+  return handleWebhook(c.req.raw, c.env);
+});
+
+// Alias for /webhooks to support singular /webhook configuration
+app.post("/webhook", async (c) => {
   return handleWebhook(c.req.raw, c.env);
 });
 
@@ -339,6 +344,7 @@ apiGithub.post("/setup", async (c) => {
   }
 
   const oidcResult = await validateOIDCAndExtractRepo(oidcToken);
+  console.log(`[Setup] OIDC validation took ${Date.now() - startTime}ms`);
   if (oidcResult.isErr()) return c.json({ error: oidcResult.error.message }, 401);
 
   const { owner: claimsOwner, repo: claimsRepo } = oidcResult.value;
@@ -360,6 +366,7 @@ apiGithub.post("/setup", async (c) => {
 
   // Look up installation ID
   const installationResult = await getInstallationId(c.env, body.owner, body.repo);
+  console.log(`[Setup] Installation lookup took ${Date.now() - startTime}ms (Source: ${installationResult.isOk() ? installationResult.value.source : 'error'})`);
   if (installationResult.isErr()) {
     setupLog.error("setup_no_installation", {
       duration_ms: Date.now() - startTime,
@@ -381,10 +388,12 @@ apiGithub.post("/setup", async (c) => {
       body.repo,
       installationResult.value,
     );
+    console.log(`[Setup] Octokit creation took ${Date.now() - startTime}ms`);
     installationId = installation.id;
     installationSource = installation.source;
 
     const result = await ensureWorkflowFile(
+      c.env,
       octokit,
       body.owner,
       body.repo,
@@ -675,6 +684,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const startTime = Date.now();
   const requestId = ulid();
   const webhooks = createWebhooks(env);
+  
+  // Debug log for webhook secret (only first 3 chars and length)
+  const secret = env.GITHUB_WEBHOOK_SECRET || "";
+  console.log(`[Webhook] Secret length: ${secret.length}, prefix: ${secret.substring(0, 3)}...`);
+  
   const eventResult = await verifyWebhook(webhooks, request);
   if (eventResult.isErr()) {
     log.error("webhook_signature_invalid", {

@@ -4,8 +4,7 @@
  */
 
 import { execSync, spawnSync } from "child_process";
-
-const OIDC_BASE_URL = "https://ask-bonk.silverlock.workers.dev/auth";
+import { GITHUB_APP_SLUG, OIDC_BASE_URL } from "./constants";
 
 export function commandExists(cmd: string): boolean {
   try {
@@ -203,6 +202,29 @@ export function workflowExists(repo: string, path: string): boolean {
 }
 
 export async function checkAppInstallation(repo: string): Promise<boolean> {
+  const appSlug = GITHUB_APP_SLUG;
+
+
+  // Primary: list user's installed apps and check for our app slug (works with user PAT auth)
+  try {
+    const result = spawnSync(
+      "gh",
+      [
+        "api",
+        "/user/installations",
+        "--jq",
+        `.installations[] | select(.app_slug == "${appSlug}") | .id`,
+      ],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    if (result.status === 0 && result.stdout.trim().length > 0) {
+      return true;
+    }
+  } catch {
+    // fall through to backend check
+  }
+
+  // Fallback: ask the backend OIDC endpoint
   try {
     const [owner, repoName] = repo.split("/");
     const response = await fetch(

@@ -1,42 +1,39 @@
 name: {{NAME}}
 
 on:
-  schedule:
-    - cron: "{{CRON}}"
-  workflow_dispatch: {}
+schedule:
+- cron: "{{CRON}}"
+workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+group: ${{ github.workflow }}-${{ github.ref }}
+cancel-in-progress: false
 
 jobs:
-  scheduled:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: {{PERMISSIONS}}
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+scheduled:
+runs-on: ubuntu-latest
+permissions:
+id-token: write
+contents: {{PERMISSIONS}}
+issues: write
+pull-requests: write
+steps:
+- uses: actions/checkout@v4
+with:
+fetch-depth: 1
 
-      - uses: ask-bonk/ask-bonk/github@main
-        env:
-          {{KEY_NAME}}: ${{ secrets.{{KEY_NAME}} }}
-        with:
-          model: {{MODEL}}
-          prompt: |
-            Update all dependencies to their latest compatible versions.
+- uses: {{BONK_REPO}}/github@main
+env:
+{{ENV_VARS_INJECTION}}
+with:
+model: {{MODEL}}{{OIDC_BASE_URL_YML_INJECTION}}
+prompt: |
+Update all dependencies to their latest compatible versions.
 
-            Steps:
-            1. Run the appropriate update command for this project's package manager
-            2. Run tests to verify nothing is broken
-            3. Run type checking if applicable
+Steps:
+1. Run the appropriate update command for this project's package manager
+2. Run tests to verify nothing is broken
+3. Run type checking if applicable
 
-            Create a summary listing each updated package with its old and new version,
-            ranked by severity (major > minor > patch).
-
-            If any tests fail after updating, identify the problematic package and
-            exclude it from the update, noting it in the PR description.
+Create a summary listing each updated package with its old and new version,
+ranked by severity (major > minor > patch).

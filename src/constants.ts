@@ -5,10 +5,22 @@ import { RequestError } from "@octokit/request-error";
 // Client errors (4xx) are not retried - they won't succeed.
 export const RETRY_CONFIG = {
   times: 3,
-  delayMs: 5000,
+  delayMs: 2000, // Reduced from 5s to 2s for faster feedback
   backoff: "exponential" as const,
-  shouldRetry: (err: unknown) =>
-    !(err instanceof RequestError && err.status >= 400 && err.status < 500),
+  shouldRetry: (err: unknown) => {
+    // Only retry 5xx or specific transient errors
+    if (err instanceof RequestError) {
+      return err.status >= 500 || err.status === 429;
+    }
+    // If it's a network error (no status), retry.
+    // If it's a local error (like key validation), don't retry.
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+    const isLikelyLocal = msg.includes("key") || msg.includes("format") || msg.includes("invalid") || msg.includes("auth");
+    return !isLikelyLocal;
+  },
+  onRetry: (err: unknown, attempt: number) => {
+    console.log(`[Setup] Retrying getInstallationId (attempt ${attempt}) due to: ${err instanceof Error ? err.message : String(err)}`);
+  }
 } as const;
 
 // Installation ID cache TTL (30 minutes)

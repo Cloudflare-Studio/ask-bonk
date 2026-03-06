@@ -138,7 +138,11 @@ export async function verifyWebhook(
       }
       return { id, name, payload: JSON.parse(body) };
     },
-    catch: (e) => new GitHubAPIError({ operation: "verifyWebhook", cause: e }),
+    catch: (e) => {
+      const actual = signature.substring(0, 10);
+      console.log(`[Webhook] Signature Verification Failed. Received: ${actual}... Body length: ${body.length}`);
+      return new GitHubAPIError({ operation: "verifyWebhook", cause: e });
+    },
   });
 }
 

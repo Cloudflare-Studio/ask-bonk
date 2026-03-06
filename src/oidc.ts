@@ -141,6 +141,8 @@ export async function getInstallationId(
     installLog.warn("installation_cache_invalid", { cached_value: cached });
   }
 
+  installLog.info(`[getInstallationId] Looking up installation for ${owner}/${repo} using App ID: ${env.GITHUB_APP_ID}`);
+
   // Look up via GitHub API using the app's JWT.
   // Both createAppAuth and auth() can throw (e.g., malformed private key),
   // so the entire flow is wrapped in Result.tryPromise.

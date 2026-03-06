@@ -33,6 +33,10 @@ export interface Env {
   // the GitHub Actions workflow-level maximum). You're unlikely to need to
   // reduce this; set it higher only for self-hosted runners with custom limits.
   BONK_MAX_TRACK_SECS?: string;
+  // Fork localization
+  BOT_MENTION?: string;
+  BOT_COMMAND?: string;
+  GITHUB_REPO_URL?: string;
 }
 
 // Request body for /ask endpoint

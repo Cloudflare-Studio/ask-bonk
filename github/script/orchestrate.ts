@@ -232,7 +232,7 @@ async function checkSetup(): Promise<boolean> {
 
   const apiBase = getApiBaseUrl();
   const setupUrl = `${apiBase}/api/github/setup`;
-  const setupTimeoutMs = 4000;
+  const setupTimeoutMs = 30000;
   const setupRetries = 2;
   const setupBaseDelayMs = 1000;
 

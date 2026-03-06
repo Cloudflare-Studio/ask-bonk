@@ -1,40 +1,40 @@
 name: {{NAME}}
 
 on:
-  issues:
-    types: [opened]
+issues:
+types: [opened]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number || github.ref }}
-  cancel-in-progress: false
+group: ${{ github.workflow }}-${{ github.event.issue.number || github.ref }}
+cancel-in-progress: false
 
 jobs:
-  triage:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: {{PERMISSIONS}}
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+triage:
+runs-on: ubuntu-latest
+permissions:
+id-token: write
+contents: {{PERMISSIONS}}
+issues: write
+pull-requests: write
+steps:
+- uses: actions/checkout@v4
+with:
+fetch-depth: 1
 
-      - uses: ask-bonk/ask-bonk/github@main
-        env:
-          {{KEY_NAME}}: ${{ secrets.{{KEY_NAME}} }}
-        with:
-          model: {{MODEL}}
-          prompt: |
-            Triage the new issue that was just opened.
+- uses: {{BONK_REPO}}/github@main
+env:
+{{ENV_VARS_INJECTION}}
+with:
+model: {{MODEL}}{{OIDC_BASE_URL_YML_INJECTION}}
+prompt: |
+Triage the new issue that was just opened.
 
-            Review the issue title and body, then:
-            1. Check if this is a duplicate of an existing issue
-            2. Determine the appropriate labels (bug, feature, documentation, etc.)
-            3. Assess priority based on impact and urgency
-            4. If the issue lacks important details, ask clarifying questions
-            5. If you can provide immediate guidance or a quick fix, do so
+Review the issue title and body, then:
+1. Check if this is a duplicate of an existing issue
+2. Determine the appropriate labels (bug, feature, documentation, etc.)
+3. Assess priority based on impact and urgency
+4. If the issue lacks important details, ask clarifying questions
+5. If you can provide immediate guidance or a quick fix, do so
 
-            Be helpful and welcoming to the reporter. If this appears to be a first-time
-            contributor, acknowledge their contribution.
+Be helpful and welcoming to the reporter. If this appears to be a first-time
+contributor, acknowledge their contribution.

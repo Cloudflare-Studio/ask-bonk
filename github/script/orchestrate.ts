@@ -466,7 +466,9 @@ async function buildPrompt(): Promise<PromptResult> {
     // different open PR on the same branch (e.g. an older stale PR) and
     // post reviews there instead of the PR that triggered this run.
     // See: https://github.com/ask-bonk/ask-bonk/issues/148
-    parts.push(`You are working on PR #${prNumber} in ${owner}/${repo}. When posting reviews or comments, always target PR #${prNumber}.`);
+    parts.push(
+      `You are working on PR #${prNumber} in ${owner}/${repo}. When posting reviews or comments, always target PR #${prNumber}.`,
+    );
     core.info(`Non-fork PR context set: ${owner}/${repo}#${prNumber}`);
   }
 

@@ -1,6 +1,7 @@
 // Context helper for GitHub Action scripts
 // Provides a similar interface to actions/github-script's context object
 
+import { appendFileSync } from "fs";
 import { fetchWithRetry } from "./http";
 
 export interface Repo {
@@ -102,6 +103,17 @@ export function getContext(): Context {
   };
 }
 
+// Writes a name=value pair to a GitHub Actions file (GITHUB_OUTPUT or GITHUB_ENV).
+// Multiline values use a random heredoc delimiter to prevent injection.
+export function appendGitHubValue(filePath: string, name: string, value: string): void {
+  if (value.includes("\n")) {
+    const delimiter = `BONK_${crypto.randomUUID().replace(/-/g, "")}`;
+    appendFileSync(filePath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
+  } else {
+    appendFileSync(filePath, `${name}=${value}\n`);
+  }
+}
+
 // Core utilities similar to @actions/core
 export const core: Core = {
   info: (message: string) => {
@@ -120,14 +132,7 @@ export const core: Core = {
   setOutput: (name: string, value: string) => {
     const outputFile = process.env.GITHUB_OUTPUT;
     if (outputFile) {
-      const fs = require("fs");
-      if (value.includes("\n")) {
-        // Multiline values need a random delimiter to prevent injection
-        const delimiter = `BONK_${crypto.randomUUID().replace(/-/g, "")}`;
-        fs.appendFileSync(outputFile, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-      } else {
-        fs.appendFileSync(outputFile, `${name}=${value}\n`);
-      }
+      appendGitHubValue(outputFile, name, value);
     }
   },
 };
@@ -227,6 +232,26 @@ export function validateOpenCodeVersion(input: string | undefined): string {
     return trimmed;
   }
   return "latest";
+}
+
+// Checks whether the actual permission level meets the required level.
+// Only 'admin' and 'write' are recognized as required levels; unrecognized
+// levels return an error message. Returns null when the check passes.
+const PERMISSION_RANK: Record<string, number> = { admin: 2, write: 1 };
+
+export function checkPermissionLevel(
+  actual: string,
+  required: string,
+  actor: string,
+): string | null {
+  const requiredRank = PERMISSION_RANK[required];
+  if (requiredRank === undefined) {
+    return `Unknown permission level: ${required}. Use 'admin', 'write', 'any', or 'CODEOWNERS'`;
+  }
+  if ((PERMISSION_RANK[actual] ?? 0) < requiredRank) {
+    return `User ${actor} does not have ${required} permission (has: ${actual})`;
+  }
+  return null;
 }
 
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).

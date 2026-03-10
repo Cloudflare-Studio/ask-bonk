@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { detectForkFromPR, parseTokenPermissions } from "../github/script/context";
+import { detectForkFromPR, parseTokenPermissions, checkPermissionLevel } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 
 describe("GitHub Action script context", () => {
@@ -65,6 +65,57 @@ describe("OIDC exchange permission forwarding", () => {
   it("trims whitespace around preset names", () => {
     expect(parseTokenPermissions("  NO_PUSH  ")).toBe("NO_PUSH");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Permission Level Checking
+// ---------------------------------------------------------------------------
+
+describe("Permission level checking", () => {
+  // Passing cases: actual permission meets or exceeds required level
+  it.each([
+    { actual: "admin", required: "admin", label: "admin satisfies admin" },
+    { actual: "admin", required: "write", label: "admin satisfies write" },
+    { actual: "write", required: "write", label: "write satisfies write" },
+  ])("$label → passes", ({ actual, required }) => {
+    expect(checkPermissionLevel(actual, required, "alice")).toBeNull();
+  });
+
+  // Failing cases: actual permission is below required level
+  it.each([
+    { actual: "write", required: "admin", label: "write does not satisfy admin" },
+    { actual: "read", required: "admin", label: "read does not satisfy admin" },
+    { actual: "read", required: "write", label: "read does not satisfy write" },
+    { actual: "none", required: "write", label: "none does not satisfy write" },
+    { actual: "none", required: "admin", label: "none does not satisfy admin" },
+    { actual: "triage", required: "write", label: "triage does not satisfy write" },
+    { actual: "maintain", required: "admin", label: "maintain does not satisfy admin" },
+  ])("$label → fails with actor name in message", ({ actual, required }) => {
+    const error = checkPermissionLevel(actual, required, "bob");
+    expect(error).not.toBeNull();
+    expect(error).toContain("bob");
+    expect(error).toContain(required);
+    expect(error).toContain(actual);
+  });
+
+  // Unknown permission levels that aren't in the recognized set ('admin', 'write')
+  // are treated as insufficient — they get rank 0.
+  it.each(["maintain", "triage", "read", "none", "unknown"])(
+    "actual=%s is not recognized as admin or write level",
+    (actual) => {
+      expect(checkPermissionLevel(actual, "write", "alice")).not.toBeNull();
+    },
+  );
+
+  // Unrecognized required levels return a specific error message
+  it.each(["read", "maintain", "triage", "nonsense"])(
+    "required=%s → unknown permission error",
+    (required) => {
+      const error = checkPermissionLevel("admin", required, "alice");
+      expect(error).toContain("Unknown permission level");
+      expect(error).toContain(required);
+    },
+  );
 });
 
 describe("GitHub Action script HTTP retry", () => {

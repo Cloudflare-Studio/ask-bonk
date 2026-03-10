@@ -1,23 +1,11 @@
-import type {
-  IssueCommentEvent,
-  IssuesEvent,
-  PullRequestEvent,
-  PullRequestReviewCommentEvent,
-  PullRequestReviewEvent,
-} from "@octokit/webhooks-types";
+import type { PullRequestReviewCommentEvent } from "@octokit/webhooks-types";
 import {
   DEFAULT_MODEL,
   type Env,
-  type EventContext,
   type ReviewCommentContext,
-  type ScheduledEventContext,
-  type WorkflowDispatchContext,
   type WorkflowRunContext,
-  type ScheduleEventPayload,
-  type WorkflowDispatchPayload,
   type WorkflowRunPayload,
 } from "./types";
-import { log } from "./log";
 
 export function extractPrompt(body: string, reviewContext?: ReviewCommentContext): string {
   const trimmed = body.trim();
@@ -49,184 +37,6 @@ export function detectFork(
   baseRepoFullName: string | undefined | null,
 ): boolean {
   return !headRepoFullName || headRepoFullName !== baseRepoFullName;
-}
-
-function isForkPR(
-  payload: IssueCommentEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent,
-): boolean {
-  // IssueCommentEvent.pull_request is a minimal object without head/base.
-  // PullRequestReviewCommentEvent and PullRequestReviewEvent have the full PR
-  // payload including head.repo and base.repo. Narrow via "path" which is
-  // unique to review comment payloads, or check for "review" which is on both
-  // review event types.
-  if ("pull_request" in payload && "comment" in payload && "path" in payload.comment) {
-    // PullRequestReviewCommentEvent
-    const pr = payload.pull_request;
-    return detectFork(pr.head.repo?.full_name, pr.base.repo?.full_name);
-  }
-  if ("review" in payload) {
-    // PullRequestReviewEvent
-    const pr = payload.pull_request;
-    return detectFork(pr.head.repo?.full_name, pr.base.repo?.full_name);
-  }
-  return false;
-}
-
-// Parse issue comment events - no mention filtering, that's handled by the action
-export function parseIssueCommentEvent(payload: IssueCommentEvent): {
-  context: Omit<EventContext, "env">;
-  prompt: string;
-  triggerCommentId: number;
-} | null {
-  if (payload.action !== "created") {
-    return null;
-  }
-
-  const isPullRequest = Boolean(payload.issue.pull_request);
-
-  return {
-    context: {
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      issueNumber: payload.issue.number,
-      commentId: 0, // Will be set after creating response comment
-      actor: payload.comment.user.login,
-      isPullRequest,
-      isPrivate: payload.repository.private,
-      defaultBranch: payload.repository.default_branch,
-    },
-    prompt: extractPrompt(payload.comment.body),
-    triggerCommentId: payload.comment.id,
-  };
-}
-
-// Parse PR review comment events - no mention filtering, that's handled by the action
-export function parsePRReviewCommentEvent(payload: PullRequestReviewCommentEvent): {
-  context: Omit<EventContext, "env">;
-  prompt: string;
-  triggerCommentId: number;
-  reviewContext: ReviewCommentContext;
-} | null {
-  if (payload.action !== "created") {
-    return null;
-  }
-
-  const fork = isForkPR(payload);
-  const reviewContext = getReviewCommentContext(payload);
-
-  return {
-    context: {
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      issueNumber: payload.pull_request.number,
-      commentId: 0,
-      actor: payload.comment.user.login,
-      isPullRequest: true,
-      isPrivate: payload.repository.private,
-      defaultBranch: payload.repository.default_branch,
-      headBranch: payload.pull_request.head.ref,
-      headSha: payload.pull_request.head.sha,
-      isFork: fork,
-    },
-    prompt: extractPrompt(payload.comment.body, reviewContext),
-    triggerCommentId: payload.comment.id,
-    reviewContext,
-  };
-}
-
-// Parse PR review events - no mention filtering, that's handled by the action
-export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
-  context: Omit<EventContext, "env">;
-  prompt: string;
-  triggerCommentId: number;
-} | null {
-  if (payload.action !== "submitted") {
-    return null;
-  }
-
-  if (!payload.review.body) {
-    return null;
-  }
-
-  const fork = isForkPR(payload);
-
-  return {
-    context: {
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      issueNumber: payload.pull_request.number,
-      commentId: 0,
-      actor: payload.review.user.login,
-      isPullRequest: true,
-      isPrivate: payload.repository.private,
-      defaultBranch: payload.repository.default_branch,
-      headBranch: payload.pull_request.head.ref,
-      headSha: payload.pull_request.head.sha,
-      isFork: fork,
-    },
-    prompt: extractPrompt(payload.review.body),
-    triggerCommentId: payload.review.id,
-  };
-}
-
-// Parse issues events - supports 'opened' and 'edited' actions.
-// Both are processed the same way - filtering logic is handled by the workflow.
-// Other actions (deleted, labeled, etc.) are explicitly rejected.
-export function parseIssuesEvent(payload: IssuesEvent): {
-  context: Omit<EventContext, "env">;
-  issueTitle: string;
-  issueBody: string;
-  issueAuthor: string;
-} | null {
-  if (payload.action === "opened" || payload.action === "edited") {
-    return {
-      context: {
-        owner: payload.repository.owner.login,
-        repo: payload.repository.name,
-        issueNumber: payload.issue.number,
-        commentId: 0,
-        actor: payload.action === "opened" ? payload.issue.user.login : payload.sender.login,
-        isPullRequest: false,
-        isPrivate: payload.repository.private,
-        defaultBranch: payload.repository.default_branch,
-      },
-      issueTitle: payload.issue.title,
-      issueBody: payload.issue.body ?? "",
-      issueAuthor: payload.issue.user.login,
-    };
-  }
-
-  log.info("issues_event_unsupported_action", { action: payload.action });
-  return null;
-}
-
-// Parse pull_request events - all actions pass through (no filtering).
-// Action filtering is the workflow's responsibility.
-export function parsePullRequestEvent(payload: PullRequestEvent): {
-  context: Omit<EventContext, "env">;
-  action: string;
-} {
-  const isFork = detectFork(
-    payload.pull_request.head.repo?.full_name,
-    payload.pull_request.base.repo?.full_name,
-  );
-
-  return {
-    context: {
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      issueNumber: payload.pull_request.number,
-      commentId: 0,
-      actor: payload.sender.login,
-      isPullRequest: true,
-      isPrivate: payload.repository.private,
-      defaultBranch: payload.repository.default_branch,
-      headBranch: payload.pull_request.head.ref,
-      headSha: payload.pull_request.head.sha,
-      isFork,
-    },
-    action: payload.action,
-  };
 }
 
 export function getModel(env: Env): { providerID: string; modelID: string } {
@@ -283,40 +93,6 @@ export function generateBranchName(type: "issue" | "pr", issueNumber: number): s
     .split("T")
     .join("");
   return `bonk/${type}${issueNumber}-${timestamp}`;
-}
-
-export function parseScheduleEvent(payload: ScheduleEventPayload): ScheduledEventContext | null {
-  if (!payload.schedule || !payload.repository) {
-    return null;
-  }
-
-  return {
-    owner: payload.repository.owner.login,
-    repo: payload.repository.name,
-    isPrivate: payload.repository.private,
-    defaultBranch: payload.repository.default_branch,
-    schedule: payload.schedule,
-    workflow: payload.workflow ?? null,
-  };
-}
-
-export function parseWorkflowDispatchEvent(
-  payload: WorkflowDispatchPayload,
-): WorkflowDispatchContext | null {
-  if (!payload.repository || !payload.ref) {
-    return null;
-  }
-
-  return {
-    owner: payload.repository.owner.login,
-    repo: payload.repository.name,
-    isPrivate: payload.repository.private,
-    defaultBranch: payload.repository.default_branch,
-    ref: payload.ref,
-    sender: payload.sender.login,
-    inputs: payload.inputs ?? {},
-    workflow: payload.workflow ?? null,
-  };
 }
 
 // Conclusions that warrant failure handling. We allowlist rather than denylist

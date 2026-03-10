@@ -75,6 +75,10 @@ interface RepoAgentState {
 export class RepoAgent extends Agent<Env, RepoAgentState> {
   initialState: RepoAgentState = { installationId: 0, activeRuns: {} };
 
+  private patchState(partial: Partial<RepoAgentState>): void {
+    this.setState({ ...this.state, ...partial });
+  }
+
   // Read owner/repo from persisted state first (always available, including
   // alarm wakeups), falling back to this.name for the initial RPC call before
   // state has been populated. this.name throws when the DO wakes from an alarm
@@ -135,8 +139,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         // this.name unavailable (alarm wakeup) — state should already have it
       }
     }
-    this.setState({
-      ...this.state,
+    this.patchState({
       ...(owner && { owner }),
       ...(repo && { repo }),
       installationId: id,
@@ -158,8 +161,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       installation,
     );
     if (fresh.id !== this.state.installationId) {
-      this.setState({
-        ...this.state,
+      this.patchState({
         installationId: fresh.id,
         installationSource: fresh.source,
       });
@@ -173,8 +175,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     const { [runId]: _, ...remainingRuns } = this.state.activeRuns;
     const recentlyFinalized = this.pruneRecentlyFinalized();
     recentlyFinalized[runId] = Date.now();
-    this.setState({
-      ...this.state,
+    this.patchState({
       activeRuns: remainingRuns,
       recentlyFinalizedRuns: recentlyFinalized,
     });
@@ -214,7 +215,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
 
     // Store in activeRuns state
     const activeRuns = { ...this.state.activeRuns, [runId]: payload };
-    this.setState({ ...this.state, activeRuns });
+    this.patchState({ activeRuns });
 
     // Schedule polling as safety net. Failure to schedule is non-fatal:
     // the workflow_run webhook acts as a secondary safety net.
@@ -376,7 +377,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         payload = { ...payload, waitingCommentPosted: true };
       }
       const activeRuns = { ...this.state.activeRuns, [runId]: payload };
-      this.setState({ ...this.state, activeRuns });
+      this.patchState({ activeRuns });
     }
 
     // Still running — reschedule the next poll.
@@ -466,7 +467,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
   ): void {
     const failureComments = this.pruneFailureComments();
     failureComments[key] = { commentId, commentType, createdAt: Date.now() };
-    this.setState({ ...this.state, failureComments });
+    this.patchState({ failureComments });
   }
 
   private buildFailureBody(conclusion: string | null, runUrl: string, actor?: string): string {

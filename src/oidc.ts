@@ -390,7 +390,8 @@ export async function handleExchangeToken(
   authHeader: string | null,
   body?: { permissions?: TokenPermissionsInput },
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
-  if (!authHeader?.startsWith("Bearer ")) {
+  const oidcToken = extractBearerToken(authHeader);
+  if (!oidcToken) {
     return Result.err(
       new AuthorizationError({
         message: "Missing or invalid Authorization header",
@@ -398,8 +399,6 @@ export async function handleExchangeToken(
       }),
     );
   }
-
-  const oidcToken = authHeader.slice(7);
 
   // Validate the OIDC token
   const validationResult = await validateGitHubOIDCToken(oidcToken);
@@ -474,7 +473,8 @@ export async function handleExchangeTokenForRepo(
   authHeader: string | null,
   body: { owner?: string; repo?: string },
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
-  if (!authHeader?.startsWith("Bearer ")) {
+  const oidcToken = extractBearerToken(authHeader);
+  if (!oidcToken) {
     return Result.err(
       new AuthorizationError({
         message: "Missing or invalid Authorization header",
@@ -482,8 +482,6 @@ export async function handleExchangeTokenForRepo(
       }),
     );
   }
-
-  const oidcToken = authHeader.slice(7);
 
   // Validate the OIDC token
   const validationResult = await validateGitHubOIDCToken(oidcToken);
@@ -641,7 +639,8 @@ export async function handleExchangeTokenWithPAT(
     );
   }
 
-  if (!authHeader?.startsWith("Bearer ")) {
+  const pat = extractBearerToken(authHeader);
+  if (!pat) {
     return Result.err(
       new AuthorizationError({
         message: "Missing or invalid Authorization header",
@@ -649,8 +648,6 @@ export async function handleExchangeTokenWithPAT(
       }),
     );
   }
-
-  const pat = authHeader.slice(7);
 
   // Only allow tokens that look like PATs
   if (!pat.startsWith("github_pat_") && !pat.startsWith("ghp_")) {

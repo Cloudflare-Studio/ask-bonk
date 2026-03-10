@@ -17,6 +17,8 @@ import {
   detectForkFromPR,
   parseTokenPermissions,
   validateOpenCodeVersion,
+  checkPermissionLevel,
+  appendGitHubValue,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
@@ -165,20 +167,9 @@ async function checkPermissions(): Promise<void> {
     return core.setFailed(`Could not check permission for ${actor}`);
   }
 
-  const permission = data.permission;
-
-  if (requiredPermission === "admin") {
-    if (permission !== "admin") {
-      core.setFailed(`User ${actor} does not have admin permission (has: ${permission})`);
-    }
-  } else if (requiredPermission === "write") {
-    if (permission !== "admin" && permission !== "write") {
-      core.setFailed(`User ${actor} does not have write permission (has: ${permission})`);
-    }
-  } else {
-    core.setFailed(
-      `Unknown permission level: ${requiredPermission}. Use 'admin', 'write', 'any', or 'CODEOWNERS'`,
-    );
+  const error = checkPermissionLevel(data.permission, requiredPermission, actor);
+  if (error) {
+    core.setFailed(error);
   }
 }
 
@@ -501,13 +492,7 @@ function appendToGithubEnv(name: string, value: string): void {
     core.warning("GITHUB_ENV not set; cannot export environment variable");
     return;
   }
-  const fs = require("fs");
-  if (value.includes("\n")) {
-    const delimiter = `BONK_${crypto.randomUUID().replace(/-/g, "")}`;
-    fs.appendFileSync(envFile, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-  } else {
-    fs.appendFileSync(envFile, `${name}=${value}\n`);
-  }
+  appendGitHubValue(envFile, name, value);
 }
 
 function oidcFailClosed(reason: string): OidcResult {

@@ -52,22 +52,6 @@ export interface AskRequest {
   config?: Config;
 }
 
-// Context passed through event handling
-export interface EventContext {
-  env: Env;
-  owner: string;
-  repo: string;
-  issueNumber: number;
-  commentId: number;
-  actor: string;
-  isPullRequest: boolean;
-  isPrivate: boolean;
-  defaultBranch: string;
-  headBranch?: string;
-  headSha?: string;
-  isFork?: boolean;
-}
-
 // Image data extracted from comments
 export interface ImageData {
   filename: string;
@@ -192,55 +176,6 @@ export interface ReviewCommentContext {
   position: number | null;
   commitId: string;
   originalCommitId: string;
-}
-
-// Context for scheduled events (no actor, no issue/PR)
-export interface ScheduledEventContext {
-  owner: string;
-  repo: string;
-  isPrivate: boolean;
-  defaultBranch: string;
-  schedule: string;
-  workflow: string | null;
-}
-
-// Context for workflow_dispatch events (manual trigger, has sender but no issue/PR)
-export interface WorkflowDispatchContext {
-  owner: string;
-  repo: string;
-  isPrivate: boolean;
-  defaultBranch: string;
-  ref: string;
-  sender: string;
-  inputs: Record<string, string>;
-  workflow: string | null;
-}
-
-// GitHub schedule event payload structure (minimal type: only fields we use)
-export interface ScheduleEventPayload {
-  schedule: string;
-  repository: {
-    owner: { login: string };
-    name: string;
-    private: boolean;
-    default_branch: string;
-  };
-  workflow?: string;
-}
-
-// GitHub workflow_dispatch event payload structure (minimal type: only fields we use)
-export interface WorkflowDispatchPayload {
-  // inputs can be null if workflow defines no inputs
-  inputs?: Record<string, string>;
-  ref: string;
-  repository: {
-    owner: { login: string };
-    name: string;
-    private: boolean;
-    default_branch: string;
-  };
-  sender: { login: string };
-  workflow?: string;
 }
 
 // GitHub workflow_run event payload structure (minimal type: only fields we use)

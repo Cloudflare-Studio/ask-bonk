@@ -464,9 +464,9 @@ async function buildPrompt(): Promise<PromptResult> {
     // Prevent the model from inferring a stale PR from git state.
     // See: https://github.com/ask-bonk/ask-bonk/issues/148
     parts.push(
-      `You are working on PR #${prNumber} in ${owner}/${repo}. When posting reviews or comments, always target PR #${prNumber}.`,
+      `You are working on PR #${process.env.PR_NUMBER} in ${owner}/${repo}. When posting reviews or comments, always target PR #${process.env.PR_NUMBER}.`,
     );
-    core.info(`Non-fork PR context set: ${owner}/${repo}#${prNumber}`);
+    core.info(`Non-fork PR context set: ${owner}/${repo}#${process.env.PR_NUMBER}`);
   }
 
   const userPrompt = process.env.USER_PROMPT;

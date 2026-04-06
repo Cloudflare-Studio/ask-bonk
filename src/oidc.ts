@@ -105,11 +105,11 @@ export async function validateOIDCAndExtractRepo(
   Result<{ claims: GitHubActionsJWTClaims; owner: string; repo: string }, OIDCValidationError>
 > {
   const validationResult = await validateGitHubOIDCToken(token);
-  if (validationResult.isErr()) return validationResult;
+  if (validationResult.isErr()) return Result.err(validationResult.error);
 
   const claims = validationResult.value;
   const repoResult = extractRepoFromClaims(claims);
-  if (repoResult.isErr()) return repoResult;
+  if (repoResult.isErr()) return Result.err(repoResult.error);
 
   return Result.ok({ claims, ...repoResult.value });
 }

@@ -21,10 +21,10 @@
     "@octokit/plugin-throttling": "^11.0.3",
     "@octokit/rest": "^22.0.1",
     "@octokit/webhooks": "^14.2.0",
-    "@opencode-ai/plugin": "^1.4.5",
-    "@opencode-ai/sdk": "^1.4.5",
+    "@opencode-ai/plugin": "^1.14.19",
+    "@opencode-ai/sdk": "^1.14.19",
     "agents": "^0.6.0",
-    "ai": "^6.0.161",
+    "ai": "^6.0.168",
     "better-result": "^2.8.2",
     "hono": "^4.12.14",
     "jose": "^6.2.2",
@@ -36,9 +36,9 @@
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^25.6.0",
     "oxfmt": "^0.35.0",
-    "oxlint": "^1.60.0",
+    "oxlint": "^1.61.0",
     "typescript": "^5.9.3",
     "vitest": "~3.2.4",
-    "wrangler": "^4.82.2"
+    "wrangler": "^4.84.1"
   }
 }

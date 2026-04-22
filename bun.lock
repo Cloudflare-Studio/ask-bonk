@@ -12,10 +12,10 @@
         "@octokit/plugin-throttling": "^11.0.3",
         "@octokit/rest": "^22.0.1",
         "@octokit/webhooks": "^14.2.0",
-        "@opencode-ai/plugin": "^1.4.5",
-        "@opencode-ai/sdk": "^1.4.5",
+        "@opencode-ai/plugin": "^1.14.19",
+        "@opencode-ai/sdk": "^1.14.19",
         "agents": "^0.6.0",
-        "ai": "^6.0.161",
+        "ai": "^6.0.168",
         "better-result": "^2.8.2",
         "hono": "^4.12.14",
         "jose": "^6.2.2",
@@ -27,10 +27,10 @@
         "@octokit/webhooks-types": "^7.6.1",
         "@types/node": "^25.6.0",
         "oxfmt": "^0.35.0",
-        "oxlint": "^1.60.0",
+        "oxlint": "^1.61.0",
         "typescript": "^5.9.3",
         "vitest": "~3.2.4",
-        "wrangler": "^4.82.2",
+        "wrangler": "^4.84.1",
       },
     },
   },
@@ -255,9 +255,9 @@
 
     "@octokit/webhooks-types": ["@octokit/webhooks-types@7.6.1", "", {}, "sha512-S8u2cJzklBC0FgTwWVLaM8tMrDuDMVE4xiTK4EYXM9GntyvrdbSoxqDQa+Fh57CCNApyIpyeqPhhFEmHPfrXgw=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.14.19", "", { "dependencies": { "@opencode-ai/sdk": "1.14.19", "effect": "4.0.0-beta.48", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.1.101", "@opentui/solid": ">=0.1.101" }, "optionalPeers": ["@opentui/core", "@opentui/solid"] }, "sha512-g0C8Viocybmet7nBqJK/1xrQnacRS1f30VmqRTPScPmWz+4knIZzc2TEQp8+920sN8rB6BuoGwfBUVRXJmavhQ=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.14.20", "", { "dependencies": { "@opencode-ai/sdk": "1.14.20", "effect": "4.0.0-beta.48", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.1.99", "@opentui/solid": ">=0.1.99" }, "optionalPeers": ["@opentui/core", "@opentui/solid"] }, "sha512-txRfm6Y2DBqFxJtgo63vj5//d7TJS7/angWELUEQcsSK0llfvmVp60gox4e8zIwpGjDcDP9A4qO6oNe++pockg=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.14.19", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-9sTGsi8/HlBBeaWfsUjdJ2yi/SqpRvqSld0IFXc3ldaPb1w1uIPvgCGzhlHYQtqatXxSaX5lTN7zpudMaE21aw=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.14.20", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-kPZP1An1ZdWOfLfDYhNjh665HX4RcI8au6Lzjn0FktoQ3RpWHq1WXRLHrJO8rJqwWvQDOzS48cXt9jbr+uwQiA=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 

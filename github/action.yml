@@ -135,6 +135,9 @@ runs:
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}
         USER_PROMPT: ${{ inputs.prompt }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        REVIEW_BODY: ${{ github.event.review.body }}
+        MENTIONS: ${{ inputs.mentions }}
         ACTION_PATH: ${{ github.action_path }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # fork-comment

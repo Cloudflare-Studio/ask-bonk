@@ -254,6 +254,29 @@ export function checkPermissionLevel(
   return null;
 }
 
+export function extractMentionPrompt(
+  body: string | undefined,
+  mentionsInput: string | undefined,
+): string | null {
+  const trimmed = body?.trim();
+  if (!trimmed) return null;
+
+  const mentions = (mentionsInput || "/bonk,@ask-bonk")
+    .split(",")
+    .map((mention) => mention.trim().toLowerCase())
+    .filter(Boolean);
+  if (mentions.length === 0) return null;
+
+  const lower = trimmed.toLowerCase();
+  if (mentions.some((mention) => lower === mention)) {
+    return "Summarize this thread";
+  }
+  if (mentions.some((mention) => lower.includes(mention))) {
+    return trimmed;
+  }
+  return null;
+}
+
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).
 // Returns the parsed value (preset name string or JSON object) or undefined
 // for empty/whitespace/malformed input.

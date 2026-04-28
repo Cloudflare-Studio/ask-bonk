@@ -18,6 +18,7 @@ import {
   parseTokenPermissions,
   validateOpenCodeVersion,
   checkPermissionLevel,
+  extractMentionPrompt,
   appendGitHubValue,
   core,
 } from "./context";
@@ -460,9 +461,17 @@ async function buildPrompt(): Promise<PromptResult> {
     core.info(`Non-fork PR context set: ${owner}/${repo}#${process.env.PR_NUMBER}`);
   }
 
-  const userPrompt = process.env.USER_PROMPT;
+  const userPrompt = process.env.USER_PROMPT?.trim();
   if (userPrompt) {
     parts.push(userPrompt);
+  } else if (parts.length > 0) {
+    const commentPrompt = extractMentionPrompt(
+      process.env.COMMENT_BODY || process.env.REVIEW_BODY,
+      process.env.MENTIONS,
+    );
+    if (commentPrompt) {
+      parts.push(commentPrompt);
+    }
   }
 
   return {

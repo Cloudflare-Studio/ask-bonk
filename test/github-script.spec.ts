@@ -1,5 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { detectForkFromPR, parseTokenPermissions, checkPermissionLevel } from "../github/script/context";
+import {
+  detectForkFromPR,
+  parseTokenPermissions,
+  checkPermissionLevel,
+  extractMentionPrompt,
+} from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 
 describe("GitHub Action script context", () => {
@@ -64,6 +69,22 @@ describe("OIDC exchange permission forwarding", () => {
 
   it("trims whitespace around preset names", () => {
     expect(parseTokenPermissions("  NO_PUSH  ")).toBe("NO_PUSH");
+  });
+});
+
+describe("GitHub Action mention prompt extraction", () => {
+  it("preserves the user's requested task from a Bonk mention", () => {
+    expect(extractMentionPrompt("/bonk fix the flaky test", "/bonk,@ask-bonk")).toBe(
+      "/bonk fix the flaky test",
+    );
+  });
+
+  it("returns the bare-mention fallback", () => {
+    expect(extractMentionPrompt("@ask-bonk", "/bonk,@ask-bonk")).toBe("Summarize this thread");
+  });
+
+  it("ignores comments without a configured mention", () => {
+    expect(extractMentionPrompt("please fix this", "/bonk,@ask-bonk")).toBeNull();
   });
 });
 

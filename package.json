@@ -10,6 +10,7 @@
     "cf-typegen": "wrangler types",
     "cli:build": "bun build cli/index.ts --compile --outfile cli/bonk",
     "cli": "bun run cli/index.ts",
+    "tsc": "tsgo",
     "lint": "oxlint",
     "format": "oxfmt ."
   },
@@ -35,9 +36,10 @@
     "@cloudflare/vitest-pool-workers": "^0.12.21",
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^25.6.0",
+    "@typescript/native-preview": "beta",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.61.0",
-    "typescript": "^5.9.3",
+    "typescript": "npm:@typescript/typescript6@^6.0.0",
     "vitest": "~3.2.4",
     "wrangler": "^4.84.1"
   }

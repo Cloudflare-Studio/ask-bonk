@@ -128,7 +128,9 @@ stats.get("/actors", async (c) => {
     return c.json({ error: "Failed to query stats" }, 500);
   }
   if (c.req.query("format") === "json") return c.json({ data: result.value });
-  return c.text(renderBarChart(result.value, "Mentions per actor (last 7d)", "actor", "event_count"));
+  return c.text(
+    renderBarChart(result.value, "Mentions per actor (last 7d)", "actor", "event_count"),
+  );
 });
 
 app.route("/stats", stats);
@@ -243,9 +245,15 @@ auth.get("/get_github_app_installation", async (c) => {
 auth.post("/exchange_github_app_token", async (c) => {
   const authHeader = c.req.header("Authorization") ?? null;
 
-  // Body is optional — callers may include { permissions } to scope the token.
-  // Accepts a preset name ("NO_PUSH", "WRITE") or a custom permissions object.
-  let body: { permissions?: import("./oidc").TokenPermissionsInput } = {};
+  // Body is optional — callers may include:
+  //   permissions: preset name ("NO_PUSH", "WRITE") or custom permissions object
+  //   codeowners_teams: array of "org/team" strings from CODEOWNERS (for team membership check)
+  //   actor: GitHub username to check (defaults to OIDC claims.actor)
+  let body: {
+    permissions?: import("./oidc").TokenPermissionsInput;
+    codeowners_teams?: string[];
+    actor?: string;
+  } = {};
   try {
     body = await c.req.json();
   } catch {

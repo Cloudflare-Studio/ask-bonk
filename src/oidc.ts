@@ -380,15 +380,102 @@ export async function handleGetInstallation(
   return { installation: null };
 }
 
+// Checks whether an actor is a member of a GitHub team using an unscoped
+// installation token (no repositoryNames restriction). The unscoped token has
+// org-level access, which is required for the team membership API.
+//
+// The team org MUST match the repo owner to prevent cross-org lookups against
+// orgs where the app may not be installed.
+//
+// Returns true if the actor is an active team member, false otherwise.
+// Logs a warning and returns false on API errors (fail-closed).
+async function checkTeamMembership(
+  env: Env,
+  installationId: number,
+  repoOwner: string,
+  teamPath: string,
+  actor: string,
+  log: ReturnType<typeof createLogger>,
+): Promise<boolean> {
+  const slashIdx = teamPath.indexOf("/");
+  if (slashIdx === -1) {
+    log.warn("team_membership_skip_invalid_pattern", { team_path: teamPath });
+    return false;
+  }
+  const teamOrg = teamPath.slice(0, slashIdx);
+  const teamSlug = teamPath.slice(slashIdx + 1);
+
+  // Security: only check membership for teams in the same org as the repo.
+  // Without this, a CODEOWNERS entry like @other-org/team would cause the
+  // server to make membership calls against an org where the app may not be
+  // installed (and whose membership should not gate access to this repo).
+  if (teamOrg.toLowerCase() !== repoOwner.toLowerCase()) {
+    log.warn("team_membership_skip_cross_org", {
+      team_org: teamOrg,
+      repo_owner: repoOwner,
+      team_path: teamPath,
+    });
+    return false;
+  }
+
+  // Generate an unscoped token — no repositoryNames restriction — so the token
+  // has org-level access needed to read team membership. This token is used
+  // only within this request and never returned to the caller.
+  let unscopedToken: string;
+  try {
+    unscopedToken = await generateInstallationToken(env, installationId);
+  } catch (err) {
+    log.errorWithException("team_membership_token_failed", err, { team_path: teamPath });
+    return false;
+  }
+
+  try {
+    const resp = await fetch(
+      `https://api.github.com/orgs/${teamOrg}/teams/${teamSlug}/memberships/${actor}`,
+      {
+        headers: {
+          Authorization: `Bearer ${unscopedToken}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+    );
+    if (resp.status === 200) {
+      const data = (await resp.json()) as { state?: string };
+      return data.state === "active";
+    }
+    // 404 means not a member (or token lacks org access — both fail-closed).
+    // Any other status is an unexpected error.
+    if (resp.status !== 404) {
+      const text = await resp.text();
+      log.warn("team_membership_api_error", {
+        team_path: teamPath,
+        status: resp.status,
+        body: text.slice(0, 200),
+      });
+    }
+    return false;
+  } catch (err) {
+    log.errorWithException("team_membership_fetch_failed", err, { team_path: teamPath });
+    return false;
+  }
+}
+
 // Handler for POST /exchange_github_app_token
 // Exchanges a GitHub Actions OIDC token for a GitHub App installation token.
 // Callers may pass a `permissions` field in the request body — either a preset
 // name ("NO_PUSH", "WRITE") or a custom permissions object. Escalation beyond
 // defaults is silently clamped.
+//
+// Optional: pass `codeowners_teams` (array of "org/team" strings) and `actor`
+// (GitHub username) to perform a server-side team membership check before
+// issuing the token. This is used by the CODEOWNERS permission mode when the
+// actor is not individually listed in CODEOWNERS but belongs to a listed team.
+// The check is only performed when both fields are present and non-empty.
 export async function handleExchangeToken(
   env: Env,
   authHeader: string | null,
-  body?: { permissions?: TokenPermissionsInput },
+  body?: { permissions?: TokenPermissionsInput; codeowners_teams?: string[]; actor?: string },
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
   const oidcToken = extractBearerToken(authHeader);
   if (!oidcToken) {
@@ -426,6 +513,48 @@ export async function handleExchangeToken(
     return Result.err(installationResult.error);
   }
   const { id: installationId, source: installationSource } = installationResult.value;
+
+  // Server-side CODEOWNERS team membership check.
+  // When the action's checkCodeowners() finds team patterns but the actor is
+  // not individually listed, it forwards those patterns here. The server uses
+  // an unscoped installation token (org-level access) to check membership —
+  // something the action's github.token cannot do.
+  const teamPatterns = body?.codeowners_teams;
+  const teamActor = body?.actor ?? claims.actor;
+  if (Array.isArray(teamPatterns) && teamPatterns.length > 0 && teamActor) {
+    let isMember = false;
+    for (const teamPath of teamPatterns) {
+      if (typeof teamPath !== "string" || !teamPath.includes("/")) continue;
+      const memberResult = await checkTeamMembership(
+        env,
+        installationId,
+        owner,
+        teamPath,
+        teamActor,
+        exchangeLog,
+      );
+      if (memberResult) {
+        exchangeLog.info("codeowners_team_membership_verified", {
+          actor: teamActor,
+          team_path: teamPath,
+        });
+        isMember = true;
+        break;
+      }
+    }
+    if (!isMember) {
+      exchangeLog.warn("codeowners_team_membership_denied", {
+        actor: teamActor,
+        teams: teamPatterns,
+      });
+      return Result.err(
+        new AuthorizationError({
+          message: `${teamActor} is not a member of any CODEOWNERS team`,
+          reason: "no_write_access",
+        }),
+      );
+    }
+  }
 
   // Generate scoped token — use caller-provided permissions (clamped to defaults)
   const permissions = resolvePermissions(body?.permissions);

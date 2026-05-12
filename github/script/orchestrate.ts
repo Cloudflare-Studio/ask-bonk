@@ -34,10 +34,6 @@ interface ContentResponse {
   content: string;
 }
 
-interface TeamMembershipResponse {
-  state?: string;
-}
-
 async function githubApi<T>(path: string, token: string): Promise<T | null> {
   const resp = await fetchWithRetry(`https://api.github.com${path}`, {
     headers: {
@@ -79,13 +75,20 @@ function parseCodeowners(content: string): {
   return { owners, teamPatterns };
 }
 
+// Returns null on success (actor matched individually), or an array of team
+// patterns that need server-side membership verification. Calls core.setFailed
+// if the CODEOWNERS file is missing (hard stop — nothing more to check).
+//
+// Team membership is NOT checked here because github.token lacks read:org
+// scope. Team patterns are returned so they can be forwarded to the bonk
+// server, which uses an unscoped app installation token with org-level access.
 async function checkCodeowners(
   owner: string,
   repo: string,
   ref: string,
   actor: string,
   token: string,
-): Promise<void> {
+): Promise<string[] | null> {
   let codeownersContent = "";
 
   for (const path of CODEOWNERS_PATHS) {
@@ -101,7 +104,9 @@ async function checkCodeowners(
   }
 
   if (!codeownersContent) {
-    return core.setFailed("CODEOWNERS file not found in .github/, root, or docs/ directory");
+    core.setFailed("CODEOWNERS file not found in .github/, root, or docs/ directory");
+    // core.setFailed exits the process; this return is for TypeScript
+    return null;
   }
 
   const { owners, teamPatterns } = parseCodeowners(codeownersContent);
@@ -109,39 +114,40 @@ async function checkCodeowners(
 
   if (owners.has(actorLower)) {
     core.info(`User ${actor} is a code owner`);
-    return;
+    // Individually listed — no team check needed
+    return null;
   }
 
-  for (const teamPath of teamPatterns) {
-    const [org, team] = teamPath.split("/");
-    try {
-      const membership = await githubApi<TeamMembershipResponse>(
-        `/orgs/${org}/teams/${team}/memberships/${actor}`,
-        token,
-      );
-      if (membership?.state === "active") {
-        core.info(`User ${actor} is a member of team @${teamPath}`);
-        return;
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      core.warning(`Could not check team membership for @${teamPath}: ${message}`);
-    }
+  if (teamPatterns.length === 0) {
+    // No individual match and no teams to check
+    core.setFailed(`User ${actor} is not listed in CODEOWNERS`);
+    return null;
   }
 
-  core.setFailed(`User ${actor} is not listed in CODEOWNERS`);
+  // Actor not individually listed; return team patterns for server-side check.
+  // The OIDC exchange will verify membership and deny the token if the actor
+  // is not in any of these teams.
+  core.info(
+    `User ${actor} not individually listed in CODEOWNERS; ` +
+      `will verify team membership server-side for: ${teamPatterns.map((t) => `@${t}`).join(", ")}`,
+  );
+  return teamPatterns;
 }
 
-async function checkPermissions(): Promise<void> {
+// Returns team patterns that need server-side membership verification,
+// or null if no further check is needed (actor passed or process already exited).
+async function checkPermissions(): Promise<string[] | null> {
   const requiredPermission = process.env.REQUIRED_PERMISSION;
   if (!requiredPermission) {
-    return core.setFailed("REQUIRED_PERMISSION not set");
+    core.setFailed("REQUIRED_PERMISSION not set");
+    return null;
   }
-  if (requiredPermission === "any") return;
+  if (requiredPermission === "any") return null;
 
   const token = process.env.GH_TOKEN;
   if (!token) {
-    return core.setFailed("GH_TOKEN not set");
+    core.setFailed("GH_TOKEN not set");
+    return null;
   }
 
   const repository = process.env.GITHUB_REPOSITORY || "";
@@ -151,12 +157,12 @@ async function checkPermissions(): Promise<void> {
   const ref = process.env.DEFAULT_BRANCH || "main";
 
   if (!owner || !repo || !actor) {
-    return core.setFailed("Missing required context (owner, repo, or actor)");
+    core.setFailed("Missing required context (owner, repo, or actor)");
+    return null;
   }
 
   if (requiredPermission === "CODEOWNERS") {
-    await checkCodeowners(owner, repo, ref, actor, token);
-    return;
+    return checkCodeowners(owner, repo, ref, actor, token);
   }
 
   const data = await githubApi<{ permission: string }>(
@@ -165,13 +171,15 @@ async function checkPermissions(): Promise<void> {
   );
 
   if (!data) {
-    return core.setFailed(`Could not check permission for ${actor}`);
+    core.setFailed(`Could not check permission for ${actor}`);
+    return null;
   }
 
   const error = checkPermissionLevel(data.permission, requiredPermission, actor);
   if (error) {
     core.setFailed(error);
   }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +517,7 @@ function oidcFailClosed(reason: string): OidcResult {
   return { failed: true };
 }
 
-async function exchangeOidc(): Promise<OidcResult> {
+async function exchangeOidc(codeownersTeams?: string[]): Promise<OidcResult> {
   const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
@@ -545,6 +553,18 @@ async function exchangeOidc(): Promise<OidcResult> {
       // Fail closed: send NO_PUSH so the server doesn't grant full defaults.
       core.warning(`Invalid TOKEN_PERMISSIONS JSON, falling back to NO_PUSH: ${rawPermissions}`);
       exchangeBody.permissions = "NO_PUSH";
+    }
+  }
+
+  // Forward CODEOWNERS team patterns for server-side membership verification.
+  // The server uses an unscoped installation token (org-level access) to check
+  // whether the actor is a member of any of these teams. If the actor is not
+  // a member of any team, the server returns 401 and we fail closed.
+  if (codeownersTeams && codeownersTeams.length > 0) {
+    exchangeBody.codeowners_teams = codeownersTeams;
+    const actor = process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR;
+    if (actor) {
+      exchangeBody.actor = actor;
     }
   }
 
@@ -781,8 +801,10 @@ async function trackRun(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  // Step 1: Check permissions (must pass before anything else)
-  await checkPermissions();
+  // Step 1: Check permissions (must pass before anything else).
+  // For CODEOWNERS mode, returns team patterns that need server-side
+  // membership verification when the actor is not individually listed.
+  const codeownersTeams = await checkPermissions();
 
   // Step 2: Check setup (may skip remaining steps)
   const shouldSkip = await checkSetup();
@@ -792,7 +814,12 @@ async function main() {
   // in parallel (they are independent of each other).
   resolveVersion();
 
-  const [promptResult, oidcResult] = await Promise.all([buildPrompt(), exchangeOidc()]);
+  // Pass codeownersTeams to the OIDC exchange so the server can verify team
+  // membership using an org-level installation token.
+  const [promptResult, oidcResult] = await Promise.all([
+    buildPrompt(),
+    exchangeOidc(codeownersTeams ?? undefined),
+  ]);
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));

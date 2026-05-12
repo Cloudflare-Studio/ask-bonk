@@ -76,7 +76,7 @@ runs:
           pull_request_review)
             BODY="$REVIEW_BODY"
             ;;
-          issues|pull_request|workflow_dispatch|schedule)
+          issues|pull_request|pull_request_target|workflow_dispatch|schedule)
             echo "skip=false" >> $GITHUB_OUTPUT
             exit 0
             ;;

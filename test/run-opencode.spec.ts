@@ -72,32 +72,51 @@ describe("classifyOpenCodeResult", () => {
   it.each([
     { exitCode: 1, outputTail: "some error", classification: "unknown_failure", retryable: false, label: "unknown failure" },
     { exitCode: 1, outputTail: "Error: The operation was canceled", classification: "transient", retryable: true, label: "transient pattern" },
-    { exitCode: 1, outputTail: "stream ended unexpectedly", classification: "transient", retryable: true, label: "stream ended" },
+    { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", classification: "transient", retryable: true, label: "stream ended" },
     { exitCode: 1, outputTail: "Error: fetch failed: 502", classification: "transient", retryable: true, label: "fetch failure" },
-    { exitCode: 1, outputTail: "HTTP 429", classification: "transient", retryable: true, label: "rate limit" },
-    { exitCode: 1, outputTail: "HTTP 503", classification: "transient", retryable: true, label: "503" },
-    { exitCode: 1, outputTail: "ECONNRESET", classification: "transient", retryable: true, label: "network error" },
+    { exitCode: 1, outputTail: "Error: HTTP 429", classification: "transient", retryable: true, label: "rate limit" },
+    { exitCode: 1, outputTail: "Error: HTTP 503", classification: "transient", retryable: true, label: "503" },
+    { exitCode: 1, outputTail: "Error: ECONNRESET", classification: "transient", retryable: true, label: "network error" },
+    { exitCode: 1, outputTail: "Error [ERR_STREAM_ABORT]: aborted", classification: "transient", retryable: true, label: "ERR_STREAM_ABORT" },
   ])("exit %d with %s → %s", ({ exitCode, outputTail, classification, retryable }) => {
     const result = classifyOpenCodeResult(makeResult({ exitCode, outputTail }));
     expect(result.classification).toBe(classification);
     expect(result.retryable).toBe(retryable);
   });
 
+  // Negative tests: every pattern must NOT match ordinary repo/test/tool output.
   it.each([
-    { outputTail: "Test output: 500 Internal Server Error", label: "normal test output" },
-    { outputTail: "Expected fetch failed", label: "plain fetch failed without Error: prefix" },
+    { outputTail: "Test output: 500 Internal Server Error", label: "HTTP 500 in test output" },
+    { outputTail: "Expected fetch failed", label: "fetch failed without Error: prefix" },
     { outputTail: "The operation was canceled", label: "The operation was canceled without Error: prefix" },
+    { outputTail: "Simulated ECONNRESET in test", label: "ECONNRESET in test output" },
+    { outputTail: "Simulated ETIMEDOUT in test", label: "ETIMEDOUT in test output" },
+    { outputTail: "Simulated ECONNREFUSED in test", label: "ECONNREFUSED in test output" },
+    { outputTail: "Simulated ENOTFOUND in test", label: "ENOTFOUND in test output" },
+    { outputTail: "Simulated EAI_AGAIN in test", label: "EAI_AGAIN in test output" },
+    { outputTail: "Simulated ECONNABORTED in test", label: "ECONNABORTED in test output" },
+    { outputTail: "Simulated ERR_STREAM_ABORT in test", label: "ERR_STREAM_ABORT in test output" },
+    { outputTail: "Simulated HTTP 429 in test", label: "HTTP 429 in test output" },
+    { outputTail: "Simulated HTTP 502 in test", label: "HTTP 502 in test output" },
+    { outputTail: "Simulated HTTP 504 in test", label: "HTTP 504 in test output" },
+    { outputTail: "stream ended unexpectedly", label: "stream ended unexpectedly without provider frame" },
   ])("does not classify as transient when output contains $label", ({ outputTail }) => {
     const result = classifyOpenCodeResult(makeResult({ exitCode: 1, outputTail }));
     expect(result.classification).toBe("unknown_failure");
     expect(result.retryable).toBe(false);
   });
+
+  it("classifies as transient only when exit code is non-zero", () => {
+    const match = classifyOpenCodeResult(makeResult({ exitCode: 0, outputTail: "stream ended unexpectedly (provider: openai)" }));
+    expect(match.classification).toBe("success");
+    expect(match.retryable).toBe(false);
+  });
 });
 
 describe("shouldRetryOpenCodeResult", () => {
   it.each([
-    { exitCode: 1, outputTail: "stream ended unexpectedly", attempt: 1, maxAttempts: 2, expected: true, label: "transient within limit" },
-    { exitCode: 1, outputTail: "stream ended unexpectedly", attempt: 2, maxAttempts: 2, expected: false, label: "at limit" },
+    { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", attempt: 1, maxAttempts: 2, expected: true, label: "transient within limit" },
+    { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", attempt: 2, maxAttempts: 2, expected: false, label: "at limit" },
     { exitCode: 124, outputTail: "", attempt: 1, maxAttempts: 2, expected: false, label: "non-retryable classification" },
     { exitCode: 1, outputTail: "some error", attempt: 1, maxAttempts: 2, expected: false, label: "unknown failure" },
   ])("$label", ({ exitCode, outputTail, attempt, maxAttempts, expected }) => {

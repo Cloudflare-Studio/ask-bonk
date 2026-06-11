@@ -42,23 +42,26 @@ export interface ClassifiedResult {
 
 // Narrow patterns anchored to known provider/network failure formats.
 // Avoid broad substrings that could match user code, test output, or log lines.
+// These patterns are anchored to actual error contexts (Error: prefix, system error
+// codes, or provider-specific frame text) so normal repo output does not trigger
+// a retry.
 const TRANSIENT_PATTERNS = [
   "Error: The operation was canceled",
-  "stream ended unexpectedly",
+  "stream ended unexpectedly (provider:",
   "Error: fetch failed",
   "Error: socket hang up",
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNABORTED",
-  "ERR_STREAM_ABORT",
-  "HTTP 429",
-  "HTTP 500",
-  "HTTP 502",
-  "HTTP 503",
-  "HTTP 504",
+  "Error: ECONNRESET",
+  "Error: ETIMEDOUT",
+  "Error: ECONNREFUSED",
+  "Error: ENOTFOUND",
+  "Error: EAI_AGAIN",
+  "Error: ECONNABORTED",
+  "Error [ERR_STREAM_ABORT]",
+  "Error: HTTP 429",
+  "Error: HTTP 500",
+  "Error: HTTP 502",
+  "Error: HTTP 503",
+  "Error: HTTP 504",
 ];
 
 function matchesTransientPattern(output: string): boolean {

@@ -239,12 +239,19 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     fallbackIssueNumber?: number,
     fallbackRunUrl?: string,
     actor?: string,
+    retryMeta?: { exit_code?: number; attempt_count?: number; final_reason?: string },
   ): Promise<void> {
     const run = this.state.activeRuns[runId];
     const issueNumber = run?.issueNumber ?? fallbackIssueNumber;
     const log = this.logger(runId, issueNumber);
 
-    log.info("run_finalizing", { status, has_active_run: !!run });
+    log.info("run_finalizing", {
+      status,
+      has_active_run: !!run,
+      ...(retryMeta?.exit_code !== undefined && { exit_code: retryMeta.exit_code }),
+      ...(retryMeta?.attempt_count !== undefined && { attempt_count: retryMeta.attempt_count }),
+      ...(retryMeta?.final_reason && { final_reason: retryMeta.final_reason }),
+    });
 
     // Run was never tracked or was already removed (e.g., polling timeout
     // removed it before the action's finalize step arrived). For non-success

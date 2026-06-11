@@ -192,15 +192,7 @@ runs:
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       id: opencode
       shell: bash
-      run: |
-        set +e
-        # GH_TOKEN is the App token written to GITHUB_ENV by the OIDC exchange step.
-        export USE_GITHUB_TOKEN=true
-        export GITHUB_TOKEN="${GH_TOKEN}"
-        timeout 45m opencode github run
-        EXIT_CODE=$?
-        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-        exit $EXIT_CODE
+      run: bun run ${{ github.action_path }}/script/run-opencode.ts
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
@@ -231,6 +223,11 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
+        # Retry metadata from the resilient wrapper so the server can track
+        # success-after-retry, transient failures, and dirty-workspace refusals.
+        OPENCODE_EXIT_CODE: ${{ steps.opencode.outputs.exit_code }}
+        OPENCODE_ATTEMPT_COUNT: ${{ steps.opencode.outputs.attempt_count }}
+        OPENCODE_FINAL_REASON: ${{ steps.opencode.outputs.final_reason }}
         # Pass issue/PR context so the server can post failure comments even
         # when the run was never tracked or was already removed from activeRuns.
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}

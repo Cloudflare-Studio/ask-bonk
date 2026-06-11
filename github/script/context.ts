@@ -292,3 +292,16 @@ export function parseTokenPermissions(input: string | undefined): unknown {
   }
   return trimmed;
 }
+
+// Extracts a human-readable message from an unknown value.
+// Replaces the repetitive `error instanceof Error ? error.message : String(error)`
+// pattern that appears across every catch block in the action scripts.
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return String(error);
+}

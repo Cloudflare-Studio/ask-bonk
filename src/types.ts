@@ -246,6 +246,11 @@ export interface FinalizeWorkflowRequest {
   // removed it before the action's finalize step ran).
   issue_number?: number;
   run_url?: string;
+  // Retry metadata from the resilient wrapper so the server can track
+  // success-after-retry, transient failures, and dirty-workspace refusals.
+  exit_code?: number;
+  attempt_count?: number;
+  final_reason?: string;
 }
 
 // Request to check/create workflow file (POST /api/github/setup)

@@ -608,7 +608,18 @@ apiGithub.put("/track", async (c) => {
       `${body.owner}/${body.repo}`,
     );
     await agent.setInstallationId(installationId, installationSource);
-    await agent.finalizeRun(body.run_id, body.status, body.issue_number, body.run_url, actor);
+    await agent.finalizeRun(
+      body.run_id,
+      body.status,
+      body.issue_number,
+      body.run_url,
+      actor,
+      {
+        exit_code: body.exit_code,
+        attempt_count: body.attempt_count,
+        final_reason: body.final_reason,
+      },
+    );
 
     finalizeLog.info("finalize_completed", {
       installation_id: installationId,

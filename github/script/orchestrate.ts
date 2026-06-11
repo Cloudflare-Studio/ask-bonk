@@ -21,6 +21,7 @@ import {
   extractMentionPrompt,
   appendGitHubValue,
   core,
+  getErrorMessage,
 } from "./context";
 import { fetchWithRetry } from "./http";
 
@@ -124,8 +125,7 @@ async function checkCodeowners(
         return;
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      core.warning(`Could not check team membership for @${teamPath}: ${message}`);
+      core.warning(`Could not check team membership for @${teamPath}: ${getErrorMessage(e)}`);
     }
   }
 
@@ -408,7 +408,7 @@ function buildForkGuidance(prNumber: string, owner: string, repo: string, headSh
   try {
     guidance = readFileSync(join(actionPath, "fork_guidance.md"), "utf-8");
   } catch (error) {
-    core.warning(`Could not read fork_guidance.md: ${error}`);
+    core.warning(`Could not read fork_guidance.md: ${getErrorMessage(error)}`);
     return `This PR is from a fork. You are in comment-only mode for PR #${prNumber} in ${owner}/${repo}. Do not attempt git write operations.`;
   }
 

@@ -16,6 +16,10 @@ async function main() {
   // failure rather than an intentional skip.
   const status = rawStatus === "skipped" ? "failure" : rawStatus;
 
+  const exitCode = process.env.OPENCODE_EXIT_CODE;
+  const attemptCount = process.env.OPENCODE_ATTEMPT_COUNT;
+  const finalReason = process.env.OPENCODE_FINAL_REASON;
+
   let oidcToken: string;
   try {
     oidcToken = await getOidcToken();
@@ -43,6 +47,10 @@ async function main() {
         // run was never tracked or was already removed from activeRuns.
         issue_number: context.issue?.number,
         run_url: context.runUrl,
+        // Retry metadata from the resilient wrapper.
+        ...(exitCode && { exit_code: Number(exitCode) }),
+        ...(attemptCount && { attempt_count: Number(attemptCount) }),
+        ...(finalReason && { final_reason: finalReason }),
       }),
     });
 

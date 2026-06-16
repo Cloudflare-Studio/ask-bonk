@@ -1,8 +1,24 @@
 // Finalize tracking a workflow run
 // Called by the GitHub Action after OpenCode completes (with if: always())
 
-import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
+import { getContext, getOidcToken, getApiBaseUrl, core, getErrorMessage } from "./context";
 import { fetchWithRetry } from "./http";
+
+function parseOptionalNumberEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseOptionalStringEnv(value: string | undefined): string | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  return value;
+}
 
 async function main() {
   const context = getContext();
@@ -16,16 +32,16 @@ async function main() {
   // failure rather than an intentional skip.
   const status = rawStatus === "skipped" ? "failure" : rawStatus;
 
-  const exitCode = process.env.OPENCODE_EXIT_CODE;
-  const attemptCount = process.env.OPENCODE_ATTEMPT_COUNT;
-  const finalReason = process.env.OPENCODE_FINAL_REASON;
+  const exitCode = parseOptionalNumberEnv(process.env.OPENCODE_EXIT_CODE);
+  const attemptCount = parseOptionalNumberEnv(process.env.OPENCODE_ATTEMPT_COUNT);
+  const finalReason = parseOptionalStringEnv(process.env.OPENCODE_FINAL_REASON);
 
   let oidcToken: string;
   try {
     oidcToken = await getOidcToken();
   } catch (error) {
     // Don't fail the workflow on finalize errors - just warn
-    core.warning(`Failed to get OIDC token for finalize: ${error}`);
+    core.warning(`Failed to get OIDC token for finalize: ${getErrorMessage(error)}`);
     return;
   }
 
@@ -48,9 +64,9 @@ async function main() {
         issue_number: context.issue?.number,
         run_url: context.runUrl,
         // Retry metadata from the resilient wrapper.
-        ...(exitCode && { exit_code: Number(exitCode) }),
-        ...(attemptCount && { attempt_count: Number(attemptCount) }),
-        ...(finalReason && { final_reason: finalReason }),
+        ...(exitCode !== undefined && { exit_code: exitCode }),
+        ...(attemptCount !== undefined && { attempt_count: attemptCount }),
+        ...(finalReason !== undefined && { final_reason: finalReason }),
       }),
     });
 
@@ -63,11 +79,11 @@ async function main() {
     core.info(`Successfully finalized run ${context.runId} with status ${statusInfo}`);
   } catch (error) {
     // Don't fail on finalize errors
-    core.warning(`Failed to finalize Bonk run tracking: ${error}`);
+    core.warning(`Failed to finalize Bonk run tracking: ${getErrorMessage(error)}`);
   }
 }
 
 main().catch((error) => {
   // Don't fail the workflow on finalize errors
-  core.warning(`Unexpected error in finalize: ${error}`);
+  core.warning(`Unexpected error in finalize: ${getErrorMessage(error)}`);
 });

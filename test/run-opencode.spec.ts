@@ -7,7 +7,6 @@ import {
   main,
   OUTPUT_TAIL_LIMIT,
   type SpawnFn,
-  type SpawnResult,
 } from "../github/script/run-opencode";
 import type { RunResult } from "../github/script/run-opencode";
 
@@ -18,12 +17,13 @@ import type { RunResult } from "../github/script/run-opencode";
 function makeResult(overrides: Partial<RunResult> = {}): RunResult {
   return {
     exitCode: 0,
-    signal: null,
     outputTail: "",
     attempt: 1,
     ...overrides,
   };
 }
+
+const noSleep = async (_ms: number) => {};
 
 // Test double for SpawnFn that returns real ReadableStream objects.
 // Exercises the actual stream wiring in runOpenCode without requiring
@@ -88,6 +88,7 @@ describe("classifyOpenCodeResult", () => {
   it.each([
     { outputTail: "Test output: 500 Internal Server Error", label: "HTTP 500 in test output" },
     { outputTail: "Expected fetch failed", label: "fetch failed without Error: prefix" },
+    { outputTail: "error: fetch failed in mock test", label: "lowercase error prefix" },
     { outputTail: "The operation was canceled", label: "The operation was canceled without Error: prefix" },
     { outputTail: "Simulated ECONNRESET in test", label: "ECONNRESET in test output" },
     { outputTail: "Simulated ETIMEDOUT in test", label: "ETIMEDOUT in test output" },
@@ -179,7 +180,6 @@ describe("main", () => {
   it("succeeds on first attempt", async () => {
     const run = async () => ({
       exitCode: 0,
-      signal: null,
       outputTail: "success",
     });
     const clean = () => Promise.resolve(true);
@@ -207,7 +207,7 @@ describe("main", () => {
     const clean = () => Promise.resolve(true);
     const headSha = () => Promise.resolve("abc1234");
 
-    const exitCode = await main(run, clean, headSha);
+    const exitCode = await main(run, clean, headSha, noSleep);
     expect(exitCode).toBe(0);
     expect(callCount).toBe(2);
 
@@ -265,7 +265,6 @@ describe("main", () => {
   it("does not retry non-retryable failure", async () => {
     const run = async () => ({
       exitCode: 127,
-      signal: null,
       outputTail: "",
     });
     const clean = () => Promise.resolve(true);

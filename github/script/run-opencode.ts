@@ -18,7 +18,6 @@ import { core, getErrorMessage } from "./context";
 
 export interface RunResult {
   exitCode: number | null;
-  signal: string | null;
   outputTail: string;
   attempt: number;
 }
@@ -65,8 +64,7 @@ const TRANSIENT_PATTERNS = [
 ];
 
 function matchesTransientPattern(output: string): boolean {
-  const lower = output.toLowerCase();
-  return TRANSIENT_PATTERNS.some((pattern) => lower.includes(pattern.toLowerCase()));
+  return TRANSIENT_PATTERNS.some((pattern) => output.includes(pattern));
 }
 
 const EXIT_CODE_MAP: Record<number, ClassifiedResult> = {
@@ -97,7 +95,7 @@ export function classifyOpenCodeResult(result: RunResult): ClassifiedResult {
   return {
     classification: "unknown_failure",
     retryable: false,
-    reason: `unknown failure (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "null"})`,
+    reason: `unknown failure (exit ${result.exitCode ?? "null"})`,
   };
 }
 
@@ -159,7 +157,6 @@ export const OUTPUT_TAIL_LIMIT = 64 * 1024; // 64KB
 
 export interface SpawnResult {
   exitCode: number | null;
-  signal: string | null;
   outputTail: string;
 }
 
@@ -184,10 +181,6 @@ export async function runOpenCode(
   spawnFn: SpawnFn = defaultSpawnFn,
 ): Promise<SpawnResult> {
   try {
-    // Preserve the auth setup that the old inline shell block performed.
-    process.env.USE_GITHUB_TOKEN = "true";
-    process.env.GITHUB_TOKEN = process.env.GH_TOKEN ?? "";
-
     const proc = spawnFn(["timeout", "45m", "opencode", "github", "run"], {
       stdout: "pipe",
       stderr: "pipe",
@@ -252,13 +245,11 @@ export async function runOpenCode(
     const outputTail = Buffer.concat(chunks).toString("utf-8");
     return {
       exitCode: exitCode ?? null,
-      signal: null,
       outputTail,
     };
   } catch (error) {
     return {
       exitCode: 1,
-      signal: null,
       outputTail: getErrorMessage(error),
     };
   }
@@ -270,8 +261,16 @@ export async function runOpenCode(
 
 export const MAX_ATTEMPTS = 2;
 
+type SleepFn = (ms: number) => Promise<void>;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function configureOpenCodeEnv(): void {
+  // Preserve the auth setup that the old inline shell block performed.
+  process.env.USE_GITHUB_TOKEN = "true";
+  process.env.GITHUB_TOKEN = process.env.GH_TOKEN ?? "";
 }
 
 function setRunOutputs(exitCode: number, attempt: number, reason: string): void {
@@ -284,7 +283,10 @@ export async function main(
   runOpenCodeFn = runOpenCode,
   checkWorkspaceCleanFn = checkWorkspaceClean,
   getHeadShaFn = getHeadSha,
+  sleepFn: SleepFn = sleep,
 ): Promise<number> {
+  configureOpenCodeEnv();
+
   let beforeHead: string | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -302,7 +304,6 @@ export async function main(
 
       const result: RunResult = {
         exitCode: lastResult.exitCode,
-        signal: lastResult.signal,
         outputTail: lastResult.outputTail,
         attempt,
       };
@@ -347,7 +348,7 @@ export async function main(
         }
 
         core.warning(`Retryable failure detected: ${classified.reason}. Retrying in 2s...`);
-        await sleep(2000);
+        await sleepFn(2000);
         continue;
       }
 
@@ -371,6 +372,9 @@ if (import.meta.main) {
   main()
     .then((exitCode) => process.exit(exitCode))
     .catch((error) => {
-      core.setFailed(`run-opencode wrapper failed: ${error}`);
+      const message = getErrorMessage(error);
+      core.error(`run-opencode wrapper failed: ${message}`);
+      setRunOutputs(1, 0, `wrapper_crash: ${message}`);
+      process.exit(1);
     });
 }

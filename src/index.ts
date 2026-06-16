@@ -150,7 +150,7 @@ ask.use("*", async (c, next) => {
   if (!secret) {
     return c.json({ error: "Ask endpoint is disabled" }, 403);
   }
-  const auth = bearerAuth({ token: secret });
+  const auth = bearerAuth<{ Bindings: Env }>({ token: secret });
   return auth(c, next);
 });
 

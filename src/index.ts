@@ -608,17 +608,24 @@ apiGithub.put("/track", async (c) => {
       `${body.owner}/${body.repo}`,
     );
     await agent.setInstallationId(installationId, installationSource);
+    const retryMeta =
+      body.exit_code !== undefined ||
+      body.attempt_count !== undefined ||
+      body.final_reason !== undefined
+        ? {
+            exit_code: body.exit_code,
+            attempt_count: body.attempt_count,
+            final_reason: body.final_reason,
+          }
+        : undefined;
+
     await agent.finalizeRun(
       body.run_id,
       body.status,
       body.issue_number,
       body.run_url,
       actor,
-      {
-        exit_code: body.exit_code,
-        attempt_count: body.attempt_count,
-        final_reason: body.final_reason,
-      },
+      retryMeta,
     );
 
     finalizeLog.info("finalize_completed", {

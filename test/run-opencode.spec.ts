@@ -17,6 +17,7 @@ import type { RunResult } from "../github/script/run-opencode";
 function makeResult(overrides: Partial<RunResult> = {}): RunResult {
   return {
     exitCode: 0,
+    signal: null,
     outputTail: "",
     attempt: 1,
     ...overrides,
@@ -47,6 +48,24 @@ function spawnTestDouble(
       },
     }),
     exited: Promise.resolve(exitCode),
+    signalCode: null,
+  });
+}
+
+function spawnSignalTestDouble(signalCode: string): SpawnFn {
+  return () => ({
+    stdout: new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    }),
+    stderr: new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    }),
+    exited: Promise.resolve(137),
+    signalCode,
   });
 }
 
@@ -136,6 +155,12 @@ describe("runOpenCode", () => {
     expect(result.exitCode).toBe(0);
     expect(result.outputTail).toContain("hello stdout");
     expect(result.outputTail).toContain("hello stderr");
+  });
+
+  it("captures signal termination metadata", async () => {
+    const result = await runOpenCode(spawnSignalTestDouble("SIGKILL"));
+    expect(result.exitCode).toBe(137);
+    expect(result.signal).toBe("SIGKILL");
   });
 
   it("slices oversized output to preserve the tail", async () => {
@@ -265,6 +290,7 @@ describe("main", () => {
   it("does not retry non-retryable failure", async () => {
     const run = async () => ({
       exitCode: 127,
+      signal: null,
       outputTail: "",
     });
     const clean = () => Promise.resolve(true);

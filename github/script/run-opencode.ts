@@ -18,6 +18,7 @@ import { core, getErrorMessage } from "./context";
 
 export interface RunResult {
   exitCode: number | null;
+  signal: string | null;
   outputTail: string;
   attempt: number;
 }
@@ -70,7 +71,11 @@ function matchesTransientPattern(output: string): boolean {
 const EXIT_CODE_MAP: Record<number, ClassifiedResult> = {
   0: { classification: "success", retryable: false, reason: "success" },
   124: { classification: "timeout", retryable: false, reason: "timeout (45m)" },
-  126: { classification: "command_not_executable", retryable: false, reason: "command not executable" },
+  126: {
+    classification: "command_not_executable",
+    retryable: false,
+    reason: "command not executable",
+  },
   127: { classification: "command_not_found", retryable: false, reason: "command not found" },
   130: { classification: "sigint", retryable: false, reason: "SIGINT" },
   137: { classification: "sigkill", retryable: false, reason: "SIGKILL / OOM" },
@@ -88,14 +93,14 @@ export function classifyOpenCodeResult(result: RunResult): ClassifiedResult {
     return {
       classification: "transient",
       retryable: true,
-      reason: `transient failure (exit ${result.exitCode ?? "null"}, matched pattern)`,
+      reason: `transient failure (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "null"}, matched pattern)`,
     };
   }
 
   return {
     classification: "unknown_failure",
     retryable: false,
-    reason: `unknown failure (exit ${result.exitCode ?? "null"})`,
+    reason: `unknown failure (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "null"})`,
   };
 }
 
@@ -157,6 +162,7 @@ export const OUTPUT_TAIL_LIMIT = 64 * 1024; // 64KB
 
 export interface SpawnResult {
   exitCode: number | null;
+  signal: string | null;
   outputTail: string;
 }
 
@@ -164,22 +170,28 @@ interface SubprocessLike {
   stdout: ReadableStream;
   stderr: ReadableStream;
   exited: Promise<number>;
+  signalCode?: string | null;
 }
 
-export type SpawnFn = (command: string[], options: { stdout: "pipe"; stderr: "pipe" }) => SubprocessLike;
+export type SpawnFn = (
+  command: string[],
+  options: { stdout: "pipe"; stderr: "pipe" },
+) => SubprocessLike;
 
-function defaultSpawnFn(command: string[], options: { stdout: "pipe"; stderr: "pipe" }): SubprocessLike {
+function defaultSpawnFn(
+  command: string[],
+  options: { stdout: "pipe"; stderr: "pipe" },
+): SubprocessLike {
   const proc = Bun.spawn(command, options);
   return {
     stdout: proc.stdout,
     stderr: proc.stderr,
     exited: proc.exited,
+    signalCode: proc.signalCode,
   };
 }
 
-export async function runOpenCode(
-  spawnFn: SpawnFn = defaultSpawnFn,
-): Promise<SpawnResult> {
+export async function runOpenCode(spawnFn: SpawnFn = defaultSpawnFn): Promise<SpawnResult> {
   try {
     const proc = spawnFn(["timeout", "45m", "opencode", "github", "run"], {
       stdout: "pipe",
@@ -245,11 +257,13 @@ export async function runOpenCode(
     const outputTail = Buffer.concat(chunks).toString("utf-8");
     return {
       exitCode: exitCode ?? null,
+      signal: proc.signalCode ?? null,
       outputTail,
     };
   } catch (error) {
     return {
       exitCode: 1,
+      signal: null,
       outputTail: getErrorMessage(error),
     };
   }
@@ -304,6 +318,7 @@ export async function main(
 
       const result: RunResult = {
         exitCode: lastResult.exitCode,
+        signal: lastResult.signal,
         outputTail: lastResult.outputTail,
         attempt,
       };

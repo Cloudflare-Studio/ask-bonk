@@ -40,28 +40,11 @@ export interface ClassifiedResult {
   reason: string;
 }
 
-// Narrow patterns anchored to known provider/network failure formats.
-// Avoid broad substrings that could match user code, test output, or log lines.
-// These patterns are anchored to actual error contexts (Error: prefix, system error
-// codes, or provider-specific frame text) so normal repo output does not trigger
-// a retry.
+// Retry only on provider-owned OpenCode frames. The output tail can include
+// arbitrary repo/test/tool output, so generic strings like "Error: fetch failed"
+// are intentionally not retry signals by themselves.
 const TRANSIENT_PATTERNS = [
-  "Error: The operation was canceled",
   "stream ended unexpectedly (provider:",
-  "Error: fetch failed",
-  "Error: socket hang up",
-  "Error: ECONNRESET",
-  "Error: ETIMEDOUT",
-  "Error: ECONNREFUSED",
-  "Error: ENOTFOUND",
-  "Error: EAI_AGAIN",
-  "Error: ECONNABORTED",
-  "Error [ERR_STREAM_ABORT]",
-  "Error: HTTP 429",
-  "Error: HTTP 500",
-  "Error: HTTP 502",
-  "Error: HTTP 503",
-  "Error: HTTP 504",
 ];
 
 function matchesTransientPattern(output: string): boolean {
@@ -170,7 +153,7 @@ interface SubprocessLike {
   stdout: ReadableStream;
   stderr: ReadableStream;
   exited: Promise<number>;
-  signalCode?: string | null;
+  readonly signalCode?: string | null;
 }
 
 export type SpawnFn = (
@@ -187,7 +170,9 @@ function defaultSpawnFn(
     stdout: proc.stdout,
     stderr: proc.stderr,
     exited: proc.exited,
-    signalCode: proc.signalCode,
+    get signalCode() {
+      return proc.signalCode;
+    },
   };
 }
 

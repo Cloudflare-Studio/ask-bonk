@@ -69,6 +69,31 @@ function spawnSignalTestDouble(signalCode: string): SpawnFn {
   });
 }
 
+function spawnDelayedSignalTestDouble(signalCode: string): SpawnFn {
+  return () => {
+    let exited = false;
+    return {
+      stdout: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      stderr: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      exited: Promise.resolve().then(() => {
+        exited = true;
+        return 137;
+      }),
+      get signalCode() {
+        return exited ? signalCode : null;
+      },
+    };
+  };
+}
+
 // ---------------------------------------------------------------------------
 // OpenCode Run Classification
 // ---------------------------------------------------------------------------
@@ -90,13 +115,7 @@ describe("classifyOpenCodeResult", () => {
 
   it.each([
     { exitCode: 1, outputTail: "some error", classification: "unknown_failure", retryable: false, label: "unknown failure" },
-    { exitCode: 1, outputTail: "Error: The operation was canceled", classification: "transient", retryable: true, label: "transient pattern" },
     { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", classification: "transient", retryable: true, label: "stream ended" },
-    { exitCode: 1, outputTail: "Error: fetch failed: 502", classification: "transient", retryable: true, label: "fetch failure" },
-    { exitCode: 1, outputTail: "Error: HTTP 429", classification: "transient", retryable: true, label: "rate limit" },
-    { exitCode: 1, outputTail: "Error: HTTP 503", classification: "transient", retryable: true, label: "503" },
-    { exitCode: 1, outputTail: "Error: ECONNRESET", classification: "transient", retryable: true, label: "network error" },
-    { exitCode: 1, outputTail: "Error [ERR_STREAM_ABORT]: aborted", classification: "transient", retryable: true, label: "ERR_STREAM_ABORT" },
   ])("exit %d with %s → %s", ({ exitCode, outputTail, classification, retryable }) => {
     const result = classifyOpenCodeResult(makeResult({ exitCode, outputTail }));
     expect(result.classification).toBe(classification);
@@ -106,6 +125,11 @@ describe("classifyOpenCodeResult", () => {
   // Negative tests: every pattern must NOT match ordinary repo/test/tool output.
   it.each([
     { outputTail: "Test output: 500 Internal Server Error", label: "HTTP 500 in test output" },
+    { outputTail: "Error: fetch failed", label: "exact generic fetch failure" },
+    { outputTail: "Error: HTTP 500", label: "exact generic HTTP 500" },
+    { outputTail: "Error: HTTP 503", label: "exact generic HTTP 503" },
+    { outputTail: "Error: ECONNRESET", label: "exact generic ECONNRESET" },
+    { outputTail: "Error: The operation was canceled", label: "generic cancellation" },
     { outputTail: "Expected fetch failed", label: "fetch failed without Error: prefix" },
     { outputTail: "error: fetch failed in mock test", label: "lowercase error prefix" },
     { outputTail: "The operation was canceled", label: "The operation was canceled without Error: prefix" },
@@ -163,6 +187,12 @@ describe("runOpenCode", () => {
     expect(result.signal).toBe("SIGKILL");
   });
 
+  it("reads signal termination metadata after the process exits", async () => {
+    const result = await runOpenCode(spawnDelayedSignalTestDouble("SIGKILL"));
+    expect(result.exitCode).toBe(137);
+    expect(result.signal).toBe("SIGKILL");
+  });
+
   it("slices oversized output to preserve the tail", async () => {
     const oversized = "a".repeat(OUTPUT_TAIL_LIMIT + 1000);
     const result = await runOpenCode(spawnTestDouble(oversized, "", 1));
@@ -205,6 +235,7 @@ describe("main", () => {
   it("succeeds on first attempt", async () => {
     const run = async () => ({
       exitCode: 0,
+      signal: null,
       outputTail: "success",
     });
     const clean = () => Promise.resolve(true);
@@ -224,7 +255,7 @@ describe("main", () => {
       callCount++;
       if (callCount === 1) {
         return runOpenCode(
-          spawnTestDouble("Error: The operation was canceled", "", 1),
+          spawnTestDouble("stream ended unexpectedly (provider: openai)", "", 1),
         );
       }
       return runOpenCode(spawnTestDouble("success", "", 0));
@@ -243,7 +274,7 @@ describe("main", () => {
 
   it("does not retry when workspace is dirty", async () => {
     const run = async () =>
-      runOpenCode(spawnTestDouble("Error: The operation was canceled", "", 1));
+      runOpenCode(spawnTestDouble("stream ended unexpectedly (provider: openai)", "", 1));
     const clean = () => Promise.resolve(false);
     const headSha = () => Promise.resolve("abc1234");
 
@@ -259,7 +290,7 @@ describe("main", () => {
     let callCount = 0;
     const run = async () => {
       callCount++;
-      return runOpenCode(spawnTestDouble("Error: The operation was canceled", "", 1));
+      return runOpenCode(spawnTestDouble("stream ended unexpectedly (provider: openai)", "", 1));
     };
     const clean = () => Promise.resolve(true);
     const headSha = () => Promise.resolve(callCount === 1 ? "abc1234" : "def5678");
@@ -275,7 +306,7 @@ describe("main", () => {
 
   it("does not retry when HEAD cannot be determined", async () => {
     const run = async () =>
-      runOpenCode(spawnTestDouble("Error: The operation was canceled", "", 1));
+      runOpenCode(spawnTestDouble("stream ended unexpectedly (provider: openai)", "", 1));
     const clean = () => Promise.resolve(true);
     const headSha = () => Promise.resolve(null);
 

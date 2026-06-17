@@ -117,6 +117,7 @@ describe("classifyOpenCodeResult", () => {
   it.each([
     { exitCode: 1, outputTail: "some error", classification: "unknown_failure", retryable: false, label: "unknown failure" },
     { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", classification: "transient", retryable: true, label: "stream ended" },
+    { exitCode: 1, outputTail: "Error: The operation was canceled.", classification: "transient", retryable: true, label: "provider cancellation" },
   ])("exit %d with %s → %s", ({ exitCode, outputTail, classification, retryable }) => {
     const result = classifyOpenCodeResult(makeResult({ exitCode, outputTail }));
     expect(result.classification).toBe(classification);
@@ -130,7 +131,6 @@ describe("classifyOpenCodeResult", () => {
     { outputTail: "Error: HTTP 500", label: "exact generic HTTP 500" },
     { outputTail: "Error: HTTP 503", label: "exact generic HTTP 503" },
     { outputTail: "Error: ECONNRESET", label: "exact generic ECONNRESET" },
-    { outputTail: "Error: The operation was canceled", label: "generic cancellation" },
     { outputTail: "Expected fetch failed", label: "fetch failed without Error: prefix" },
     { outputTail: "error: fetch failed in mock test", label: "lowercase error prefix" },
     { outputTail: "The operation was canceled", label: "The operation was canceled without Error: prefix" },
@@ -155,6 +155,14 @@ describe("classifyOpenCodeResult", () => {
     const match = classifyOpenCodeResult(makeResult({ exitCode: 0, outputTail: "stream ended unexpectedly (provider: openai)" }));
     expect(match.classification).toBe("success");
     expect(match.retryable).toBe(false);
+  });
+
+  it("does not retry real GitHub Actions cancellation even if output mentions operation canceled", () => {
+    const result = classifyOpenCodeResult(
+      makeResult({ exitCode: 143, outputTail: "Error: The operation was canceled." }),
+    );
+    expect(result.classification).toBe("sigterm");
+    expect(result.retryable).toBe(false);
   });
 });
 

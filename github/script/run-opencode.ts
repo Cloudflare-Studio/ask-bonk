@@ -43,8 +43,13 @@ export interface ClassifiedResult {
 // Retry only on provider-owned OpenCode frames. The output tail can include
 // arbitrary repo/test/tool output, so generic strings like "Error: fetch failed"
 // are intentionally not retry signals by themselves.
+//
+// "Error: The operation was canceled." is retried only for unknown exit codes.
+// Known signal/timeout codes (SIGINT 130, SIGKILL 137, SIGTERM 143, timeout 124)
+// take precedence, so real GitHub Actions cancellations are never retried.
 const TRANSIENT_PATTERNS = [
   "stream ended unexpectedly (provider:",
+  "Error: The operation was canceled",
 ];
 
 function matchesTransientPattern(output: string): boolean {

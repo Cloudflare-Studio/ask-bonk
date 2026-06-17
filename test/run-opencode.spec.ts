@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { core } from "../github/script/context";
 import {
   classifyOpenCodeResult,
+  configureOpenCodeEnv,
   shouldRetryOpenCodeResult,
   runOpenCode,
   main,
@@ -247,6 +248,20 @@ describe("main", () => {
     expect(core.setOutput).toHaveBeenCalledWith("exit_code", "0");
     expect(core.setOutput).toHaveBeenCalledWith("attempt_count", "1");
     expect(core.setOutput).toHaveBeenCalledWith("final_reason", "success");
+  });
+
+  it("configures auth env from GH_TOKEN", () => {
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "app-installation-token" };
+    configureOpenCodeEnv(env);
+    expect(env.USE_GITHUB_TOKEN).toBe("true");
+    expect(env.GITHUB_TOKEN).toBe("app-installation-token");
+  });
+
+  it("falls back to empty GITHUB_TOKEN when GH_TOKEN is missing", () => {
+    const env: NodeJS.ProcessEnv = {};
+    configureOpenCodeEnv(env);
+    expect(env.USE_GITHUB_TOKEN).toBe("true");
+    expect(env.GITHUB_TOKEN).toBe("");
   });
 
   it("retries transient failure then succeeds", async () => {

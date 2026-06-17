@@ -105,13 +105,18 @@ export async function checkWorkspaceClean(): Promise<boolean> {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const output = await new Response(proc.stdout).text();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-      core.warning(`git status exited with ${exitCode}: ${output}`);
+      core.warning(
+        `git status exited with ${exitCode}: stdout=${stdout.trim()}, stderr=${stderr.trim()}`,
+      );
       return false;
     }
-    return output.trim().length === 0;
+    return stdout.trim().length === 0;
   } catch (error) {
     core.warning(`Could not check git status: ${getErrorMessage(error)}`);
     return false;
@@ -124,13 +129,18 @@ export async function getHeadSha(): Promise<string | null> {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const output = await new Response(proc.stdout).text();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-      core.warning(`git rev-parse HEAD exited with ${exitCode}: ${output}`);
+      core.warning(
+        `git rev-parse HEAD exited with ${exitCode}: stdout=${stdout.trim()}, stderr=${stderr.trim()}`,
+      );
       return null;
     }
-    return output.trim() || null;
+    return stdout.trim() || null;
   } catch (error) {
     core.warning(`Could not get HEAD SHA: ${getErrorMessage(error)}`);
     return null;
@@ -266,10 +276,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function configureOpenCodeEnv(): void {
+export function configureOpenCodeEnv(env: NodeJS.ProcessEnv = process.env): void {
   // Preserve the auth setup that the old inline shell block performed.
-  process.env.USE_GITHUB_TOKEN = "true";
-  process.env.GITHUB_TOKEN = process.env.GH_TOKEN ?? "";
+  env.USE_GITHUB_TOKEN = "true";
+  env.GITHUB_TOKEN = env.GH_TOKEN ?? "";
 }
 
 function setRunOutputs(exitCode: number, attempt: number, reason: string): void {

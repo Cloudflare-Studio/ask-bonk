@@ -115,13 +115,15 @@ describe("classifyOpenCodeResult", () => {
   });
 
   it.each([
-    { exitCode: 1, outputTail: "some error", classification: "unknown_failure", retryable: false, label: "unknown failure" },
-    { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", classification: "transient", retryable: true, label: "stream ended" },
-    { exitCode: 1, outputTail: "Error: The operation was canceled.", classification: "transient", retryable: true, label: "provider cancellation" },
-  ])("exit %d with %s → %s", ({ exitCode, outputTail, classification, retryable }) => {
+    { exitCode: 1, outputTail: "some error", classification: "unknown_failure", retryable: false, reason: "unknown failure (exit 1, signal null)", label: "unknown failure" },
+    { exitCode: 1, outputTail: "stream ended unexpectedly (provider: openai)", classification: "transient", retryable: true, reason: "provider_stream_ended", label: "stream ended" },
+    { exitCode: 1, outputTail: "The operation was canceled.", classification: "transient", retryable: true, reason: "provider_operation_canceled", label: "provider cancellation" },
+    { exitCode: 1, outputTail: "Error: The operation was canceled.", classification: "transient", retryable: true, reason: "provider_operation_canceled", label: "provider cancellation with Error: prefix" },
+  ])("exit $exitCode with $label → $classification", ({ exitCode, outputTail, classification, retryable, reason }) => {
     const result = classifyOpenCodeResult(makeResult({ exitCode, outputTail }));
     expect(result.classification).toBe(classification);
     expect(result.retryable).toBe(retryable);
+    expect(result.reason).toBe(reason);
   });
 
   // Negative tests: every pattern must NOT match ordinary repo/test/tool output.
@@ -133,7 +135,9 @@ describe("classifyOpenCodeResult", () => {
     { outputTail: "Error: ECONNRESET", label: "exact generic ECONNRESET" },
     { outputTail: "Expected fetch failed", label: "fetch failed without Error: prefix" },
     { outputTail: "error: fetch failed in mock test", label: "lowercase error prefix" },
-    { outputTail: "The operation was canceled", label: "The operation was canceled without Error: prefix" },
+    { outputTail: "The operation was canceled", label: "The operation was canceled without trailing period" },
+    { outputTail: "Test expected \"The operation was canceled.\" somewhere in output", label: "The operation was canceled. embedded in prose" },
+    { outputTail: "##[error]The operation was canceled.", label: "GitHub Actions cancellation annotation" },
     { outputTail: "Simulated ECONNRESET in test", label: "ECONNRESET in test output" },
     { outputTail: "Simulated ETIMEDOUT in test", label: "ETIMEDOUT in test output" },
     { outputTail: "Simulated ECONNREFUSED in test", label: "ECONNREFUSED in test output" },
@@ -293,6 +297,24 @@ describe("main", () => {
     expect(core.setOutput).toHaveBeenCalledWith("exit_code", "0");
     expect(core.setOutput).toHaveBeenCalledWith("attempt_count", "2");
     expect(core.setOutput).toHaveBeenCalledWith("final_reason", "success");
+  });
+
+  it("retries provider_operation_canceled once then stops", async () => {
+    let callCount = 0;
+    const run = async () => {
+      callCount++;
+      return runOpenCode(spawnTestDouble("The operation was canceled.", "", 1));
+    };
+    const clean = () => Promise.resolve(true);
+    const headSha = () => Promise.resolve("abc1234");
+
+    const exitCode = await main(run, clean, headSha, noSleep);
+    expect(exitCode).toBe(1);
+    expect(callCount).toBe(2);
+
+    expect(core.setOutput).toHaveBeenCalledWith("exit_code", "1");
+    expect(core.setOutput).toHaveBeenCalledWith("attempt_count", "2");
+    expect(core.setOutput).toHaveBeenCalledWith("final_reason", "provider_operation_canceled");
   });
 
   it("does not retry when workspace is dirty", async () => {

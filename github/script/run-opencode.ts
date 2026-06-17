@@ -40,20 +40,32 @@ export interface ClassifiedResult {
   reason: string;
 }
 
-// Retry only on provider-owned OpenCode frames. The output tail can include
-// arbitrary repo/test/tool output, so generic strings like "Error: fetch failed"
-// are intentionally not retry signals by themselves.
+// Bounded mitigation for OpenCode provider-side stream drops / aborts.
 //
-// "Error: The operation was canceled." is retried only for unknown exit codes.
+// The wrapper has no machine-readable retry signal from OpenCode, so it looks at
+// the last lines of stderr/stdout. To avoid retrying arbitrary repo/test/tool
+// output, patterns are matched line-by-line and only for unknown exit codes.
 // Known signal/timeout codes (SIGINT 130, SIGKILL 137, SIGTERM 143, timeout 124)
 // take precedence, so real GitHub Actions cancellations are never retried.
-const TRANSIENT_PATTERNS = [
-  "stream ended unexpectedly (provider:",
-  "Error: The operation was canceled",
+//
+// TODO: replace this string parsing once OpenCode exposes a structured retry
+// signal (e.g. distinct exit code, JSON summary, or prefixed error line).
+const TRANSIENT_PATTERNS: Array<{ reason: string; re: RegExp }> = [
+  {
+    reason: "provider_stream_ended",
+    re: /^.*stream ended unexpectedly \(provider:.*$/m,
+  },
+  {
+    reason: "provider_operation_canceled",
+    re: /^(Error: )?The operation was canceled\.$/m,
+  },
 ];
 
-function matchesTransientPattern(output: string): boolean {
-  return TRANSIENT_PATTERNS.some((pattern) => output.includes(pattern));
+function matchTransientPattern(output: string): string | null {
+  for (const { reason, re } of TRANSIENT_PATTERNS) {
+    if (re.test(output)) return reason;
+  }
+  return null;
 }
 
 const EXIT_CODE_MAP: Record<number, ClassifiedResult> = {
@@ -77,11 +89,12 @@ export function classifyOpenCodeResult(result: RunResult): ClassifiedResult {
   }
 
   // For non-zero exits without a known code, look at the output tail
-  if (matchesTransientPattern(result.outputTail)) {
+  const matchedReason = matchTransientPattern(result.outputTail);
+  if (matchedReason) {
     return {
       classification: "transient",
       retryable: true,
-      reason: `transient failure (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "null"}, matched pattern)`,
+      reason: matchedReason,
     };
   }
 

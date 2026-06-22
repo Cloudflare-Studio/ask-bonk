@@ -1,3 +1,2 @@
 export { default } from "./app";
 export { RepoAgent } from "./agent";
-export { Sandbox } from "@cloudflare/sandbox";

@@ -2,11 +2,9 @@ import { createGitHubChannel, type GitHubWebhookDelivery } from "@flue/github";
 import { flue } from "@flue/runtime/routing";
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
-import { bearerAuth } from "hono/bearer-auth";
 import { ulid } from "ulid";
 import type {
   Env,
-  AskRequest,
   TrackWorkflowRequest,
   FinalizeWorkflowRequest,
   SetupWorkflowRequest,
@@ -31,7 +29,6 @@ import {
   validateOIDCAndExtractRepo,
 } from "./oidc";
 import type { RepoAgent } from "./agent";
-import { runAsk } from "./sandbox";
 import {
   emitMetric,
   queryAnalyticsEngine,
@@ -132,97 +129,9 @@ stats.get("/actors", async (c) => {
 
 app.route("/stats", stats);
 
-// Webhooks endpoint - receives GitHub events, logs them
-// Tracking is now handled by the GitHub Action calling /api/github/track
-app.post("/webhooks", async (c) => {
-  return handleWebhook(c);
-});
-
-// /ask endpoint - runs OpenCode directly in the sandbox
-// Requires bearer auth with ASK_SECRET. Returns SSE stream.
-// In future, responses may be routed to other destinations (email, Discord, etc)
-const ask = new Hono<{ Bindings: Env }>();
-
-ask.use("*", async (c, next) => {
-  const secret = c.env.ASK_SECRET;
-  // Empty or missing secret means endpoint is disabled
-  if (!secret) {
-    return c.json({ error: "Ask endpoint is disabled" }, 403);
-  }
-  const auth = bearerAuth<{ Bindings: Env }>({ token: secret });
-  return auth(c, next);
-});
-
-ask.post("/", async (c) => {
-  const startTime = Date.now();
-  const askId = ulid();
-  let rawBody: Omit<AskRequest, "id">;
-  try {
-    rawBody = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
-  }
-
-  // Validate required fields
-  if (!rawBody.owner || !rawBody.repo || !rawBody.prompt) {
-    return c.json({ error: "Missing required fields: owner, repo, prompt" }, 400);
-  }
-
-  // Build full request with ID
-  const body: AskRequest = { id: askId, ...rawBody };
-  const askLog = createLogger({
-    request_id: askId,
-    owner: body.owner,
-    repo: body.repo,
-  });
-
-  // Look up installation ID for this repo (uses cache, falls back to GitHub API)
-  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
-  if (installationResult.isErr()) {
-    askLog.error("ask_no_installation", {
-      duration_ms: Date.now() - startTime,
-      error: installationResult.error.message,
-    });
-    return c.json(
-      {
-        error: `No GitHub App installation found for ${body.owner}/${body.repo}`,
-      },
-      404,
-    );
-  }
-  const { id: installationId, source: installationSource } = installationResult.value;
-
-  try {
-    const streamResult = await runAsk(c.env, installationId, body);
-    if (streamResult.isErr()) {
-      askLog.errorWithException("ask_failed", streamResult.error, {
-        installation_id: installationId,
-        installation_source: installationSource,
-        duration_ms: Date.now() - startTime,
-      });
-      return c.json({ error: streamResult.error.message }, 500);
-    }
-
-    // duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
-    return new Response(streamResult.value, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
-  } catch (error) {
-    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
-    askLog.errorWithException("ask_unhandled_error", error, {
-      installation_id: installationId,
-      installation_source: installationSource,
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: message }, 500);
-  }
-});
-
-app.route("/ask", ask);
+// Legacy GitHub App webhook URL. Keep this as an alias so existing app
+// configuration continues to work while Flue owns the canonical channel route.
+app.post("/webhooks", async (c) => handleLegacyWebhook(c));
 
 // OIDC endpoints for OpenCode GitHub Action token exchange
 const auth = new Hono<{ Bindings: Env }>();
@@ -651,7 +560,7 @@ export default app;
 
 type GitHubChannelEnv = { Bindings: Env };
 
-async function handleWebhook(c: Context<GitHubChannelEnv>): Promise<Response> {
+async function handleLegacyWebhook(c: Context<GitHubChannelEnv>): Promise<Response> {
   const channel = createGitHubChannel<GitHubChannelEnv>({
     webhookSecret: c.env.GITHUB_WEBHOOK_SECRET,
     webhook: ({ delivery }) => handleGitHubDelivery(delivery, c.env),

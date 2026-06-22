@@ -65,17 +65,6 @@ export class GitHubAPIError extends TaggedError("GitHubAPIError")<{
   }
 }
 
-export class SandboxError extends TaggedError("SandboxError")<{
-  operation: string;
-  message: string;
-  cause: unknown;
-}>() {
-  constructor(args: { operation: string; cause: unknown }) {
-    const msg = args.cause instanceof Error ? args.cause.message : String(args.cause);
-    super({ ...args, message: `Sandbox ${args.operation} failed: ${msg}` });
-  }
-}
-
 // Analytics/metrics infrastructure errors
 export class MetricsError extends TaggedError("MetricsError")<{
   operation: string;

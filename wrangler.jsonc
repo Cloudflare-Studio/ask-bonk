@@ -23,25 +23,11 @@
     "DEFAULT_MODEL": "opencode/claude-opus-4-5",
     "BONK_VERSION": "dev",
     "BONK_COMMIT": "unknown",
-    // ASK_SECRET: Set via wrangler secret for production
-    // Empty or missing = /ask endpoint is disabled
     // Allowed orgs/users for GitHub App installation
     "ALLOWED_ORGS": ["elithrar", "cloudflare", "ask-bonk", "replicate", "emdash-cms", "Cloudflare-Studio"],
   },
-  // "containers": [
-  // 	{
-  // 		"class_name": "Sandbox",
-  // 		"image": "./Dockerfile",
-  // 		"instance_type": "standard-2",
-  // 		"max_instances": 10,
-  // 	},
-  // ],
   "durable_objects": {
     "bindings": [
-      {
-        "class_name": "Sandbox",
-        "name": "Sandbox",
-      },
       {
         "class_name": "RepoAgent",
         "name": "REPO_AGENT",
@@ -56,6 +42,10 @@
     {
       "tag": "v5",
       "new_sqlite_classes": ["FlueRegistry", "FlueControlPlaneAgent"],
+    },
+    {
+      "tag": "v6",
+      "deleted_classes": ["Sandbox"],
     },
   ],
   "kv_namespaces": [

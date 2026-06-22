@@ -664,7 +664,7 @@ async function buildCustomWorkflow(providerConfig?: ProviderConfig): Promise<Wor
       initialValue: `${BOT_COMMAND},${BOT_MENTION}`,
       validate: (v) => {
         if (!v || v.length === 0) return "At least one mention is required";
-        if (/[^a-zA-Z0-9@\/,\s._-]/.test(v))
+        if (/[^a-zA-Z0-9@/,\s._-]/.test(v))
           return "Mentions may only contain letters, numbers, @, /, -, _, .";
         return undefined;
       },

@@ -48,9 +48,7 @@ When modifying `package.json`, always run `bun install` and commit both `package
 
 ### Operation Modes
 
-**`/webhooks` - GitHub Actions Mode**: Webhook events trigger GitHub Actions workflows via the composite action in `github/`. OpenCode runs inside the workflow, not in Bonk's infrastructure. The `RepoAgent` Durable Object tracks run status and posts failure comments.
-
-**`/ask` - Direct Sandbox Mode**: Runs OpenCode directly in Cloudflare Sandbox for programmatic API access. Requires bearer auth (`ASK_SECRET`). Returns SSE stream.
+**`/channels/github/webhook` - GitHub Actions Mode**: Flue GitHub channel events trigger GitHub Actions workflows via the composite action in `github/`. OpenCode runs inside the workflow, not in Bonk's infrastructure. The `RepoAgent` Durable Object tracks run status and posts failure comments.
 
 ### Project Structure
 
@@ -58,7 +56,6 @@ When modifying `package.json`, always run `bun install` and commit both `package
 src/                     # Cloudflare Workers application
   index.ts               # Hono app entry, all route definitions, webhook handling
   github.ts              # GitHub API (Octokit with retry/throttling, GraphQL for context)
-  sandbox.ts             # Cloudflare Sandbox + OpenCode SDK integration
   agent.ts               # RepoAgent Durable Object (workflow run tracking, failure comments)
   events.ts              # Webhook event parsing and response formatting
   oidc.ts                # OIDC token validation, GitHub token exchange, cross-repo security
@@ -291,7 +288,6 @@ All domain errors are `TaggedError` subclasses in `src/errors.ts`. Use `.is()` f
 | `ValidationError` | Input validation with optional `field` |
 | `NotFoundError` | Resource not found with `resource` and `id` |
 | `GitHubAPIError` | Wraps API exceptions with `operation` and optional `statusCode` |
-| `SandboxError` | Wraps sandbox failures with `operation` |
 
 Union types: `AuthError = OIDCValidationError | AuthorizationError`, `TokenExchangeError = AuthError | InstallationNotFoundError | GitHubAPIError`.
 
@@ -347,7 +343,7 @@ requestLog.errorWithException("operation_failed", error, { additional: "context"
 ### Code Organization
 
 - Keep related code together. Do not split across too many files or over-abstract.
-- External API functions stay in their respective files (`github.ts`, `sandbox.ts`, `oidc.ts`).
+- External API functions stay in their respective files (`github.ts`, `oidc.ts`, etc.).
 - Comments explain "why", not "what". Skip comments for short (<10 line) functions.
 - Prioritize comments for I/O boundaries, external system orchestration, and stateful code.
 
@@ -384,9 +380,8 @@ Bias towards fewer, focused integration tests. More tests are not better.
 
 ### API Patterns
 
-- Hono routes grouped by feature (auth, api/github, ask, webhooks).
+- Hono routes grouped by feature (auth, api/github, webhooks).
 - OIDC validation before processing API requests from GitHub Actions.
-- Bearer auth for protected endpoints (`ASK_SECRET`).
 - Return `{ error: string }` for errors, `{ ok: true }` for success.
 
 ### GitHub Integration

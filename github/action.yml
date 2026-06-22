@@ -193,6 +193,23 @@ runs:
       id: opencode
       shell: bash
       run: |
+        set -e
+        # OpenCode's opencode provider currently picks gpt-5-nano for the hidden
+        # title agent. That model can be disabled, so default title generation to
+        # the requested Bonk model while still allowing project config to override.
+        if [[ "${MODEL}" == opencode/* && -z "${OPENCODE_CONFIG:-}" ]]; then
+          BONK_OPENCODE_CONFIG="$(mktemp)"
+          export BONK_OPENCODE_CONFIG
+          bun -e '
+            const config = {
+              "$schema": "https://opencode.ai/config.json",
+              agent: { title: { model: process.env.MODEL } },
+            };
+            await Bun.write(process.env.BONK_OPENCODE_CONFIG, JSON.stringify(config, null, 2));
+          '
+          export OPENCODE_CONFIG="${BONK_OPENCODE_CONFIG}"
+        fi
+
         set +e
         # GH_TOKEN is the App token written to GITHUB_ENV by the OIDC exchange step.
         export USE_GITHUB_TOKEN=true

@@ -192,15 +192,7 @@ runs:
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       id: opencode
       shell: bash
-      run: |
-        set +e
-        # GH_TOKEN is the App token written to GITHUB_ENV by the OIDC exchange step.
-        export USE_GITHUB_TOKEN=true
-        export GITHUB_TOKEN="${GH_TOKEN}"
-        timeout 45m opencode github run
-        EXIT_CODE=$?
-        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-        exit $EXIT_CODE
+      run: bun run ${{ github.action_path }}/script/run-opencode.ts
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}

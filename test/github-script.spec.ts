@@ -6,6 +6,7 @@ import {
   extractMentionPrompt,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
+import { isRetryableOpenCodeFailure } from "../github/script/run-opencode";
 
 describe("GitHub Action script context", () => {
   beforeEach(() => {
@@ -177,5 +178,64 @@ describe("GitHub Action script HTTP retry", () => {
 
     expect(response.status).toBe(400);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitHub Action OpenCode retry classification", () => {
+  it("retries transient OpenCode cancellation drops", () => {
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 1,
+        output: "Error: The operation was canceled.",
+      }),
+    ).toBe(true);
+  });
+
+  it("retries provider and network failures", () => {
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 1,
+        output: "provider stream terminated unexpectedly",
+      }),
+    ).toBe(true);
+
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 1,
+        output: "fetch failed: ECONNRESET",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry GitHub cancellation or timeout exits", () => {
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 143,
+        output: "Error: The operation was canceled.",
+      }),
+    ).toBe(false);
+
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 124,
+        output: "Error: The operation was canceled.",
+      }),
+    ).toBe(false);
+
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 1,
+        output: "The operation was canceled because the workflow was cancelled.",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not retry ordinary command failures", () => {
+    expect(
+      isRetryableOpenCodeFailure({
+        exitCode: 1,
+        output: "TypeScript compilation failed",
+      }),
+    ).toBe(false);
   });
 });

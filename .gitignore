@@ -106,6 +106,8 @@ out
 
 .nuxt
 dist
+.flue-vite/
+.flue-vite.wrangler.jsonc
 
 # Gatsby files
 

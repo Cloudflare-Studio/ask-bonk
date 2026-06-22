@@ -1,11 +1,13 @@
 {
   "name": "ask-bonk",
   "version": "0.2.0",
+  "type": "module",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "deploy": "wrangler deploy --define __VERSION__:\"\\\"$(git describe --tags --always)\\\"\" --define __COMMIT__:\"\\\"$(git rev-parse --short HEAD)\\\"\"",
-    "dev": "wrangler dev",
+    "build": "flue build --target cloudflare",
+    "deploy": "flue build --target cloudflare && wrangler deploy --config dist/ask_bonk/wrangler.json --var BONK_VERSION:\"$(git describe --tags --always)\" --var BONK_COMMIT:\"$(git rev-parse --short HEAD)\"",
+    "dev": "flue dev --target cloudflare",
     "test": "vitest",
     "cf-typegen": "wrangler types",
     "cli:build": "bun build cli/index.ts --compile --outfile cli/bonk",
@@ -14,31 +16,33 @@
     "format": "oxfmt ."
   },
   "dependencies": {
-    "@clack/prompts": "^1.5.1",
-    "@cloudflare/sandbox": "^0.7.21",
+    "@clack/prompts": "^1.6.0",
+    "@flue/github": "^1.0.0-beta.1",
+    "@flue/runtime": "^1.0.0-beta.2",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/plugin-retry": "^8.1.0",
     "@octokit/plugin-throttling": "^11.0.3",
     "@octokit/rest": "^22.0.1",
-    "@octokit/webhooks": "^14.2.0",
-    "@opencode-ai/plugin": "^1.17.7",
-    "@opencode-ai/sdk": "^1.17.7",
-    "agents": "^0.6.0",
-    "ai": "^6.0.205",
+    "agents": "^0.16.2",
+    "ai": "^6.0.208",
     "better-result": "^2.9.2",
-    "hono": "^4.12.25",
+    "hono": "4.12.26",
     "jose": "^6.2.3",
-    "shescape": "^2.1.13",
+    "shescape": "^3.0.0",
     "ulid": "^3.0.2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.12.21",
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@flue/cli": "^1.0.0-beta.1",
     "@octokit/webhooks-types": "^7.6.1",
-    "@types/node": "^25.9.3",
-    "oxfmt": "^0.35.0",
-    "oxlint": "^1.69.0",
-    "typescript": "^5.9.3",
-    "vitest": "~3.2.6",
-    "wrangler": "^4.100.0"
+    "@types/node": "^26.0.0",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
+    "typescript": "^6.0.3",
+    "vitest": "~4.1.9",
+    "wrangler": "^4.103.0"
+  },
+  "overrides": {
+    "hono": "4.12.26"
   }
 }

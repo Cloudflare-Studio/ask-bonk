@@ -3,7 +3,6 @@ import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { createAppAuth } from "@octokit/auth-app";
 import { RequestError } from "@octokit/request-error";
-import { Webhooks } from "@octokit/webhooks";
 import { graphql } from "@octokit/graphql";
 import { Result } from "better-result";
 import type {
@@ -96,50 +95,6 @@ export async function getInstallationToken(env: Env, installationId: number): Pr
   );
   if (result.isErr()) throw result.error;
   return result.value.token;
-}
-
-export function createWebhooks(env: Env): Webhooks {
-  return new Webhooks({
-    secret: env.GITHUB_WEBHOOK_SECRET,
-  });
-}
-
-export interface WebhookEvent {
-  id: string;
-  name: string;
-  payload: unknown;
-}
-
-// Verifies a GitHub webhook signature and parses the payload.
-// Returns Result to distinguish signature failures from parse errors.
-export async function verifyWebhook(
-  webhooks: Webhooks,
-  request: Request,
-): Promise<Result<WebhookEvent, GitHubAPIError>> {
-  const id = request.headers.get("x-github-delivery");
-  const name = request.headers.get("x-github-event");
-  const signature = request.headers.get("x-hub-signature-256");
-  const body = await request.text();
-
-  if (!id || !name || !signature) {
-    return Result.err(
-      new GitHubAPIError({
-        operation: "verifyWebhook",
-        cause: new Error("Missing required webhook headers"),
-      }),
-    );
-  }
-
-  return Result.tryPromise({
-    try: async () => {
-      const valid = await webhooks.verify(body, signature);
-      if (!valid) {
-        throw new Error("Webhook signature verification failed");
-      }
-      return { id, name, payload: JSON.parse(body) };
-    },
-    catch: (e) => new GitHubAPIError({ operation: "verifyWebhook", cause: e }),
-  });
 }
 
 // Checks if a user has write access to a repository.

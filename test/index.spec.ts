@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Hono } from "hono";
 import {
   extractPrompt,
   detectFork,
@@ -16,8 +17,12 @@ import {
 } from "../src/oidc";
 import { sanitizeSecrets } from "../src/log";
 import { queryAnalyticsEngine, emitMetric } from "../src/metrics";
-import { verifyWebhook, createWebhooks } from "../src/github";
-import { GitHubAPIError, MetricsError } from "../src/errors";
+import app from "../src/app";
+import { MetricsError } from "../src/errors";
+import {
+  channel as githubChannel,
+  createGitHubWebhookChannel,
+} from "../src/channels/github";
 import { validateOpenCodeVersion } from "../github/script/context";
 import type { Env } from "../src/types";
 import type { WorkflowRunPayload } from "../src/types";
@@ -34,8 +39,9 @@ function createMockEnv(overrides: Partial<Env> = {}): Env {
     GITHUB_APP_ID: "123",
     GITHUB_APP_PRIVATE_KEY: "test-key",
     GITHUB_WEBHOOK_SECRET: "test-secret",
-    OPENCODE_API_KEY: "test-api-key",
     DEFAULT_MODEL: "anthropic/claude-opus-4-5",
+    BONK_VERSION: "dev",
+    BONK_COMMIT: "unknown",
     ALLOWED_ORGS: [],
     ...overrides,
   };
@@ -51,11 +57,12 @@ function createMockEnv(overrides: Partial<Env> = {}): Env {
       }
       // Optional Env fields (marked with `?` in the Env interface) don't need stubs
       if (
-        prop === "ASK_SECRET" ||
         prop === "CLOUDFLARE_ACCOUNT_ID" ||
         prop === "ANALYTICS_TOKEN" ||
         prop === "ENABLE_PAT_EXCHANGE" ||
-        prop === "BONK_MAX_TRACK_SECS"
+        prop === "BONK_MAX_TRACK_SECS" ||
+        prop === "BONK_VERSION" ||
+        prop === "BONK_COMMIT"
       ) {
         return undefined;
       }
@@ -64,6 +71,29 @@ function createMockEnv(overrides: Partial<Env> = {}): Env {
       );
     },
   });
+}
+
+async function signGitHubWebhook(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return `sha256=${Array.from(new Uint8Array(signature))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function createGitHubChannelApp(webhookSecret?: string): Hono<{ Bindings: Env }> {
+  const channelApp = new Hono<{ Bindings: Env }>();
+  const channel = webhookSecret ? createGitHubWebhookChannel(webhookSecret) : githubChannel;
+  const webhookRoute = channel.routes[0];
+  expect(webhookRoute).toBeDefined();
+  channelApp.on("POST", "/channels/github/webhook", webhookRoute.handler);
+  return channelApp;
 }
 
 // ---------------------------------------------------------------------------
@@ -506,33 +536,27 @@ describe("PAT Exchange Security", () => {
 // ---------------------------------------------------------------------------
 
 describe("Webhook Verification", () => {
-  it("returns error Result for missing webhook headers", async () => {
+  it("rejects requests without the JSON webhook content type", async () => {
     const env = createMockEnv();
-    const webhooks = createWebhooks(env);
+    const channelApp = createGitHubChannelApp(env.GITHUB_WEBHOOK_SECRET);
 
-    // Request with no GitHub webhook headers
-    const request = new Request("https://example.com/webhooks", {
+    const request = new Request("https://example.com/channels/github/webhook", {
       method: "POST",
       body: "{}",
     });
 
-    const result = await verifyWebhook(webhooks, request);
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(GitHubAPIError.is(result.error)).toBe(true);
-      expect(result.error.message).toContain("Missing required webhook headers");
-      expect(result.error.operation).toBe("verifyWebhook");
-    }
+    const response = await channelApp.fetch(request, env);
+    expect(response.status).toBe(415);
   });
 
-  it("returns error Result for invalid signature", async () => {
+  it("rejects requests with an invalid signature", async () => {
     const env = createMockEnv();
-    const webhooks = createWebhooks(env);
+    const channelApp = createGitHubChannelApp(env.GITHUB_WEBHOOK_SECRET);
 
-    // Request with headers but bad signature
-    const request = new Request("https://example.com/webhooks", {
+    const request = new Request("https://example.com/channels/github/webhook", {
       method: "POST",
       headers: {
+        "content-type": "application/json",
         "x-github-delivery": "test-delivery-id",
         "x-github-event": "issue_comment",
         "x-hub-signature-256": "sha256=invalid",
@@ -540,12 +564,114 @@ describe("Webhook Verification", () => {
       body: JSON.stringify({ action: "created" }),
     });
 
-    const result = await verifyWebhook(webhooks, request);
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(GitHubAPIError.is(result.error)).toBe(true);
-      expect(result.error.operation).toBe("verifyWebhook");
-    }
+    const response = await channelApp.fetch(request, env);
+    expect(response.status).toBe(401);
+  });
+
+  it("delivers signed issue comments through the Flue GitHub channel", async () => {
+    const env = createMockEnv();
+    const channelApp = createGitHubChannelApp(env.GITHUB_WEBHOOK_SECRET);
+    const body = JSON.stringify({
+      action: "created",
+      repository: {
+        name: "test-repo",
+        private: false,
+        owner: { login: "test-org" },
+      },
+      sender: { login: "octocat" },
+      issue: { number: 123 },
+      comment: { body: "hello" },
+    });
+    const request = new Request("https://example.com/channels/github/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-delivery": "test-delivery-id",
+        "x-github-event": "issue_comment",
+        "x-hub-signature-256": await signGitHubWebhook(body, env.GITHUB_WEBHOOK_SECRET),
+      },
+      body,
+    });
+
+    const response = await channelApp.fetch(request, env);
+    expect(response.status).toBe(200);
+  });
+
+  it("does not accept the old public fallback secret on the generated Flue channel", async () => {
+    const env = createMockEnv();
+    const channelApp = createGitHubChannelApp();
+
+    const body = JSON.stringify({ zen: "Keep it logically awesome." });
+    const request = new Request("https://example.com/channels/github/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-delivery": "test-delivery-id",
+        "x-github-event": "ping",
+        "x-hub-signature-256": await signGitHubWebhook(body, "__missing_github_webhook_secret__"),
+      },
+      body,
+    });
+
+    const response = await channelApp.fetch(request, env);
+    expect(response.status).toBe(401);
+  });
+
+  it("keeps the legacy /webhooks URL working", async () => {
+    const env = createMockEnv();
+    const body = JSON.stringify({
+      action: "created",
+      repository: {
+        name: "test-repo",
+        private: false,
+        owner: { login: "test-org" },
+      },
+      sender: { login: "octocat" },
+      issue: { number: 123 },
+      comment: { body: "hello" },
+    });
+    const response = await app.fetch(
+      new Request("https://example.com/webhooks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": "test-delivery-id",
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": await signGitHubWebhook(body, env.GITHUB_WEBHOOK_SECRET),
+        },
+        body,
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// App Metadata
+// ---------------------------------------------------------------------------
+
+describe("App Metadata", () => {
+  it("returns configured version metadata", async () => {
+    const env = createMockEnv({ BONK_VERSION: "v1.2.3", BONK_COMMIT: "abc123" });
+
+    const response = await app.fetch(new Request("https://example.com/version"), env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ version: "v1.2.3", commit: "abc123" });
+  });
+
+  it("returns safe version metadata defaults", async () => {
+    const env = createMockEnv({
+      BONK_VERSION: undefined as unknown as string,
+      BONK_COMMIT: undefined as unknown as string,
+    });
+
+    const response = await app.fetch(new Request("https://example.com/version"), env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ version: "dev", commit: "unknown" });
   });
 });
 

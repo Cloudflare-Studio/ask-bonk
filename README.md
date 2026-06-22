@@ -267,40 +267,6 @@ sst/ion (webhook)             | ████████████████
 ask-bonk/ask-bonk (finalize)  | ████████████                             | 45
 ```
 
-## `/ask` Sandbox Mode
-
-> :warning: **Experimental and work-in-progress.** Uses the [Cloudflare Sandbox SDK](https://sandbox.cloudflare.com/) to run off-GitHub tasks.
-
-For programmatic access, Bonk exposes an `/ask` endpoint that runs OpenCode directly in a Cloudflare Sandbox. This allows you to integrate Bonk into your own workflows, scripts, or applications without going through GitHub issues and PRs.
-
-**Requirements:**
-
-- The [ask-bonk GitHub App](https://github.com/apps/ask-bonk) must be installed on the target repository
-- Set a secret for bearer auth: `openssl rand -hex 32 | tee >(npx wrangler@latest secret put ASK_SECRET)`
-
-When you make a request to `/ask`:
-
-1. Bonk clones your repository into an isolated sandbox
-2. Runs OpenCode with your prompt against the codebase
-3. Returns the response as a Server-Sent Events (SSE) stream
-
-```bash
-curl -N https://ask-bonk.silverlock.workers.dev/ask \
-  -H "Authorization: Bearer $ASK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "owner": "your-org",
-    "repo": "your-repo",
-    "prompt": "Explain how the authentication system works"
-  }'
-```
-
-Optional fields:
-
-- `model` - Override the default model (e.g., `"anthropic/claude-sonnet-4-20250514"`)
-- `agent` - Use a specific OpenCode agent
-- `config` - Pass custom OpenCode configuration
-
 ## Config
 
 Bonk is configured via your workflow file and OpenCode's config. There are no built-in defaults beyond what you specify.

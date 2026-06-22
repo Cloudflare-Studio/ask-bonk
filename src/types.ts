@@ -1,6 +1,4 @@
-import type { Sandbox } from "@cloudflare/sandbox";
 import type { AgentNamespace } from "agents";
-import type { Config } from "@opencode-ai/sdk";
 import type { RepoAgent } from "./agent";
 
 // Default model used across the application when no model is specified
@@ -8,7 +6,6 @@ export const DEFAULT_MODEL = "opencode/claude-opus-4-5";
 
 // Environment bindings
 export interface Env {
-  Sandbox: DurableObjectNamespace<Sandbox>;
   REPO_AGENT: AgentNamespace<RepoAgent>;
   APP_INSTALLATIONS: KVNamespace;
   RATE_LIMITER: RateLimit;
@@ -17,12 +14,9 @@ export interface Env {
   GITHUB_APP_ID: string;
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
-  OPENCODE_API_KEY: string;
-  DEFAULT_MODEL: string;
-  // Shared secret for /ask endpoint - empty means endpoint is disabled
-  ASK_SECRET?: string;
+  DEFAULT_MODEL: Cloudflare.Env["DEFAULT_MODEL"];
   // Allowed orgs/users for GitHub App installation - JSON array binding
-  ALLOWED_ORGS: string[];
+  ALLOWED_ORGS: Cloudflare.Env["ALLOWED_ORGS"];
   // Analytics Engine query API credentials (for /stats endpoint)
   CLOUDFLARE_ACCOUNT_ID?: string;
   ANALYTICS_TOKEN?: string;
@@ -33,23 +27,9 @@ export interface Env {
   // the GitHub Actions workflow-level maximum). You're unlikely to need to
   // reduce this; set it higher only for self-hosted runners with custom limits.
   BONK_MAX_TRACK_SECS?: string;
-}
-
-// Request body for /ask endpoint
-// Runs OpenCode in the sandbox and returns SSE response
-export interface AskRequest {
-  // ULID assigned when request is received - used for tracing
-  id: string;
-  owner: string;
-  repo: string;
-  prompt: string;
-  agent?: string;
-  model?: string;
-  // Provider-specific reasoning effort level (e.g., "high", "max", "minimal").
-  // Maps to OpenCode's variant parameter on session.prompt().
-  variant?: string;
-  // Valid opencode.json/jsonc config to pass into the OpenCode session
-  config?: Config;
+  // Version metadata exposed by /version.
+  BONK_VERSION: Cloudflare.Env["BONK_VERSION"];
+  BONK_COMMIT: Cloudflare.Env["BONK_COMMIT"];
 }
 
 // Image data extracted from comments

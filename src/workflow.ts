@@ -9,7 +9,7 @@ import {
   createPullRequest,
   findOpenPR,
 } from "./github";
-import workflowTemplate from "../cli/templates/bonk.yml.hbs";
+import workflowTemplate from "../cli/templates/bonk.yml.hbs?raw";
 import { createLogger } from "./log";
 
 const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";

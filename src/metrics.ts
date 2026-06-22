@@ -1,9 +1,9 @@
 import { Result } from "better-result";
 import type { Env } from "./types";
 import { MetricsError } from "./errors";
-import eventsPerRepoQuery from "../ae_queries/events_per_repo.sql";
-import errorsByRepoQuery from "../ae_queries/errors_by_repo.sql";
-import eventsByActorQuery from "../ae_queries/events_by_actor.sql";
+import eventsPerRepoQuery from "../ae_queries/events_per_repo.sql?raw";
+import errorsByRepoQuery from "../ae_queries/errors_by_repo.sql?raw";
+import eventsByActorQuery from "../ae_queries/events_by_actor.sql?raw";
 
 // Event types for categorizing metrics
 export type EventType =

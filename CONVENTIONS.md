@@ -10,7 +10,7 @@
 - Don't break code up into too many functions unless there is a need to make it composable or reusable.
 - Avoid splitting code across multiple directories or too many files.
 - Do not worry about optimizing for code reuse until there are clear examples - e.g. at least 2+, or where code is interacting with external systems.
-- Keep functions related to external APIs (GitHub, Sandbox SDK) in their respective files (`github.ts`, `sandbox.ts`).
+- Keep functions related to external APIs in their respective files (for example, GitHub code belongs in `github.ts`).
 
 ### Comments
 

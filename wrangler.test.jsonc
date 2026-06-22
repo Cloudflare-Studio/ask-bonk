@@ -2,34 +2,16 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ask-bonk",
   "main": "src/index.ts",
-  "compatibility_date": "2026-02-14",
+  "compatibility_date": "2026-06-16",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.hbs", "**/*.hbs?raw", "**/*.sql", "**/*.sql?raw"],
+      "fallthrough": true,
+    },
+  ],
   "compatibility_flags": ["nodejs_compat"],
-  "define": {
-    "__VERSION__": "\"test\"",
-    "__COMMIT__": "\"abc1234\"",
-  },
   "observability": {
     "enabled": true,
   },
-  "containers": [
-    {
-      "class_name": "Sandbox",
-      "image": "./Dockerfile",
-      "instance_type": "standard-1",
-    },
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "Sandbox",
-        "name": "Sandbox",
-      },
-    ],
-  },
-  "migrations": [
-    {
-      "new_sqlite_classes": ["Sandbox"],
-      "tag": "v1",
-    },
-  ],
 }

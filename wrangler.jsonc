@@ -47,6 +47,14 @@
       "tag": "v6",
       "deleted_classes": ["Sandbox"],
     },
+    {
+      "tag": "v7",
+      "new_sqlite_classes": [
+        "FlueGithubSetupWorkflow",
+        "FlueGithubTrackWorkflow",
+        "FlueGithubFinalizeWorkflow",
+      ],
+    },
   ],
   "kv_namespaces": [
     {

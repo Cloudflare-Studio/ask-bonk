@@ -1,4 +1,4 @@
-import { createGitHubChannel, type GitHubWebhookDelivery } from "@flue/github";
+import type { GitHubWebhookDelivery } from "@flue/github";
 import { flue } from "@flue/runtime/routing";
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
@@ -10,21 +10,14 @@ import type {
   SetupWorkflowRequest,
   WorkflowRunPayload,
 } from "./types";
-import {
-  createReaction,
-  deleteInstallation,
-  type ReactionTarget,
-} from "./github";
+import { deleteInstallation } from "./github";
 import { parseWorkflowRunEvent } from "./events";
-import { ensureWorkflowFile } from "./workflow";
 import type { GitHubActionsJWTClaims } from "./oidc";
 import {
   handleGetInstallation,
   handleExchangeToken,
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
-  getInstallationId,
-  createOctokitForRepo,
   extractBearerToken,
   validateOIDCAndExtractRepo,
 } from "./oidc";
@@ -38,6 +31,9 @@ import {
   eventsByActorQuery,
 } from "./metrics";
 import { log, createLogger, sanitizeSecrets } from "./log";
+import { createBonkGitHubChannel, type GitHubChannelEnv } from "./github-channel";
+import { internalWorkflowHeaders } from "./internal-workflows";
+import type { WorkflowJobResult } from "./github-workflow-jobs";
 
 const GITHUB_REPO_URL = "https://github.com/ask-bonk/ask-bonk";
 
@@ -61,22 +57,22 @@ const SUPPORTED_EVENTS = [
   ...META_EVENTS,
 ] as const;
 
-// Determines the reaction target type and ID from a TrackWorkflowRequest.
-// Returns null if no reaction target ID is present.
-function getReactionTarget(
-  body: TrackWorkflowRequest,
-): { targetId: number; targetType: ReactionTarget } | null {
-  if (body.comment_id) return { targetId: body.comment_id, targetType: "issue_comment" };
-  if (body.review_comment_id)
-    return {
-      targetId: body.review_comment_id,
-      targetType: "pull_request_review_comment",
-    };
-  if (body.issue_id) return { targetId: body.issue_id, targetType: "issue" };
-  return null;
+function getDeliveryRepository(delivery: GitHubWebhookDelivery) {
+  return "repository" in delivery.payload ? delivery.payload.repository : undefined;
+}
+
+function getDeliveryIssueNumber(delivery: GitHubWebhookDelivery): number | undefined {
+  if ("issue" in delivery.payload) return delivery.payload.issue.number;
+  if ("pull_request" in delivery.payload) return delivery.payload.pull_request.number;
+  return undefined;
+}
+
+function isPullRequestDelivery(delivery: GitHubWebhookDelivery): boolean {
+  return "pull_request" in delivery.payload;
 }
 
 const app = new Hono<{ Bindings: Env }>();
+const flueApp = flue() as unknown as Hono<{ Bindings: Env }>;
 
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get("/health", (c) => c.text("OK"));
@@ -238,11 +234,42 @@ function requireRepoMatch(
   return null;
 }
 
+async function runInternalWorkflow<TBody>(
+  requestUrl: string,
+  env: Env,
+  name: string,
+  payload: unknown,
+): Promise<WorkflowJobResult<TBody>> {
+  const url = new URL(requestUrl);
+  url.pathname = `/workflows/${name}`;
+  url.search = "?wait=result";
+
+  const response = await flueApp.fetch(
+    new Request(url, {
+      method: "POST",
+      headers: internalWorkflowHeaders(),
+      body: JSON.stringify(payload),
+    }),
+    env,
+  );
+
+  if (!response.ok) {
+    const message = sanitizeSecrets(await response.text());
+    return { status: 500, body: { error: message } as TBody };
+  }
+
+  const envelope = (await response.json()) as { result?: WorkflowJobResult<TBody> };
+  if (!envelope.result) {
+    return {
+      status: 500,
+      body: { error: "Workflow completed without a result" } as TBody,
+    };
+  }
+  return envelope.result;
+}
+
 // POST /api/github/setup - Check if workflow file exists, create PR if not
 apiGithub.post("/setup", async (c) => {
-  const startTime = Date.now();
-  const requestId = ulid();
-
   let body: SetupWorkflowRequest;
   try {
     body = await c.req.json();
@@ -262,84 +289,12 @@ apiGithub.post("/setup", async (c) => {
   const mismatch = requireRepoMatch(c.get("oidc"), body.owner, body.repo);
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
-  const setupLog = createLogger({
-    request_id: requestId,
-    owner: body.owner,
-    repo: body.repo,
-    issue_number: body.issue_number,
-  });
-
-  // Look up installation ID
-  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
-  if (installationResult.isErr()) {
-    setupLog.error("setup_no_installation", {
-      duration_ms: Date.now() - startTime,
-      error: installationResult.error.message,
-    });
-    return c.json(
-      {
-        error: `No GitHub App installation found for ${body.owner}/${body.repo}`,
-      },
-      404,
-    );
-  }
-  let { id: installationId, source: installationSource } = installationResult.value;
-
-  try {
-    const { octokit, installation } = await createOctokitForRepo(
-      c.env,
-      body.owner,
-      body.repo,
-      installationResult.value,
-    );
-    installationId = installation.id;
-    installationSource = installation.source;
-
-    const result = await ensureWorkflowFile(
-      octokit,
-      body.owner,
-      body.repo,
-      body.issue_number,
-      body.default_branch,
-    );
-
-    setupLog.info("setup_completed", {
-      installation_id: installationId,
-      installation_source: installationSource,
-      exists: result.exists,
-      pr_url: result.prUrl ?? null,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "setup",
-      status: "success",
-      issueNumber: body.issue_number,
-    });
-    return c.json(result);
-  } catch (error) {
-    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
-    setupLog.errorWithException("setup_failed", error, {
-      installation_id: installationId,
-      installation_source: installationSource,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "setup",
-      status: "error",
-      errorCode: message.slice(0, 100),
-      issueNumber: body.issue_number,
-    });
-    return c.json({ error: message }, 500);
-  }
+  const result = await runInternalWorkflow(c.req.url, c.env, "github-setup", body);
+  return c.json(result.body, result.status);
 });
 
 // POST /api/github/track - Start tracking a workflow run
 apiGithub.post("/track", async (c) => {
-  const startTime = Date.now();
-  const requestId = ulid();
-
   let body: TrackWorkflowRequest;
   try {
     body = await c.req.json();
@@ -367,109 +322,12 @@ apiGithub.post("/track", async (c) => {
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
   const actor = c.get("oidc").claims.actor;
-  const trackLog = createLogger({
-    request_id: requestId,
-    owner: body.owner,
-    repo: body.repo,
-    issue_number: body.issue_number,
-    run_id: body.run_id,
-    actor,
-  });
-
-  // Look up installation ID
-  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
-  if (installationResult.isErr()) {
-    trackLog.error("track_no_installation", {
-      duration_ms: Date.now() - startTime,
-      error: installationResult.error.message,
-    });
-    return c.json(
-      {
-        error: `No GitHub App installation found for ${body.owner}/${body.repo}`,
-      },
-      404,
-    );
-  }
-  let { id: installationId, source: installationSource } = installationResult.value;
-
-  try {
-    // Create reaction if comment/issue ID provided
-    const reactionTarget = getReactionTarget(body);
-    if (reactionTarget) {
-      const { octokit, installation } = await createOctokitForRepo(c.env, body.owner, body.repo, {
-        id: installationId,
-        source: installationSource,
-      });
-      installationId = installation.id;
-      installationSource = installation.source;
-      await createReaction(
-        octokit,
-        body.owner,
-        body.repo,
-        reactionTarget.targetId,
-        "+1",
-        reactionTarget.targetType,
-      );
-      trackLog.info("reaction_created", {
-        target_type: reactionTarget.targetType,
-        target_id: reactionTarget.targetId,
-      });
-    }
-
-    // Get/create RepoAgent and start tracking
-    const agent = await getAgentByName<Env, RepoAgent>(
-      c.env.REPO_AGENT,
-      `${body.owner}/${body.repo}`,
-    );
-    await agent.setInstallationId(installationId, installationSource);
-    await agent.trackRun(
-      body.run_id,
-      body.run_url,
-      body.issue_number,
-      reactionTarget ? { id: reactionTarget.targetId, type: reactionTarget.targetType } : undefined,
-      actor,
-    );
-
-    trackLog.info("track_completed", {
-      installation_id: installationId,
-      installation_source: installationSource,
-      run_url: body.run_url,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "track",
-      status: "success",
-      actor,
-      issueNumber: body.issue_number,
-      runId: body.run_id,
-    });
-    return c.json({ ok: true });
-  } catch (error) {
-    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
-    trackLog.errorWithException("track_failed", error, {
-      installation_id: installationId,
-      installation_source: installationSource,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "track",
-      status: "error",
-      actor,
-      errorCode: message.slice(0, 100),
-      issueNumber: body.issue_number,
-      runId: body.run_id,
-    });
-    return c.json({ error: message }, 500);
-  }
+  const result = await runInternalWorkflow(c.req.url, c.env, "github-track", { ...body, actor });
+  return c.json(result.body, result.status);
 });
 
 // PUT /api/github/track - Finalize tracking a workflow run
 apiGithub.put("/track", async (c) => {
-  const startTime = Date.now();
-  const requestId = ulid();
-
   let body: FinalizeWorkflowRequest;
   try {
     body = await c.req.json();
@@ -485,86 +343,20 @@ apiGithub.put("/track", async (c) => {
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
   const actor = c.get("oidc").claims.actor;
-  const finalizeLog = createLogger({
-    request_id: requestId,
-    owner: body.owner,
-    repo: body.repo,
-    run_id: body.run_id,
-    actor,
-  });
-
-  // Look up installation ID
-  const installationResult = await getInstallationId(c.env, body.owner, body.repo);
-  if (installationResult.isErr()) {
-    finalizeLog.error("finalize_no_installation", {
-      duration_ms: Date.now() - startTime,
-      error: installationResult.error.message,
-    });
-    return c.json(
-      {
-        error: `No GitHub App installation found for ${body.owner}/${body.repo}`,
-      },
-      404,
-    );
-  }
-  const { id: installationId, source: installationSource } = installationResult.value;
-
-  try {
-    // Get RepoAgent and finalize
-    const agent = await getAgentByName<Env, RepoAgent>(
-      c.env.REPO_AGENT,
-      `${body.owner}/${body.repo}`,
-    );
-    await agent.setInstallationId(installationId, installationSource);
-    await agent.finalizeRun(body.run_id, body.status, body.issue_number, body.run_url, actor);
-
-    finalizeLog.info("finalize_completed", {
-      installation_id: installationId,
-      installation_source: installationSource,
-      status: body.status,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "finalize",
-      status: body.status,
-      actor,
-      runId: body.run_id,
-    });
-    return c.json({ ok: true });
-  } catch (error) {
-    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
-    finalizeLog.errorWithException("finalize_failed", error, {
-      installation_id: installationId,
-      installation_source: installationSource,
-      duration_ms: Date.now() - startTime,
-    });
-    emitMetric(c.env, {
-      repo: `${body.owner}/${body.repo}`,
-      eventType: "finalize",
-      status: "error",
-      actor,
-      errorCode: message.slice(0, 100),
-      runId: body.run_id,
-    });
-    // Always return 200 for finalize - errors are logged but don't fail the action
-    return c.json({ ok: true, warning: message });
-  }
+  const result = await runInternalWorkflow(c.req.url, c.env, "github-finalize", { ...body, actor });
+  return c.json(result.body, result.status);
 });
 
 app.route("/api/github", apiGithub);
 // Flue ships its own Hono dependency; the runtime route is structurally compatible at runtime.
-app.route("/", flue() as unknown as Hono<{ Bindings: Env }>);
+app.route("/", flueApp);
 
 export default app;
 
-type GitHubChannelEnv = { Bindings: Env };
-
 async function handleLegacyWebhook(c: Context<GitHubChannelEnv>): Promise<Response> {
-  const channel = createGitHubChannel<GitHubChannelEnv>({
-    webhookSecret: c.env.GITHUB_WEBHOOK_SECRET,
-    webhook: ({ delivery }) => handleGitHubDelivery(delivery, c.env),
-  });
+  const channel = createBonkGitHubChannel(c.env.GITHUB_WEBHOOK_SECRET, ({ delivery }) =>
+    handleGitHubDelivery(delivery, c.env),
+  );
   const webhookRoute = channel.routes[0];
   if (!webhookRoute) return new Response("GitHub webhook route is unavailable", { status: 500 });
   return webhookRoute.handler(c, async () => undefined);
@@ -579,19 +371,14 @@ export async function handleGitHubDelivery(
 
   // Installation ID caching is handled by getInstallationId() in oidc.ts on cache miss.
   // This avoids redundant KV writes on every webhook (see issue #52).
-  const payload = event.payload as Record<string, unknown>;
-  const repository = payload.repository as
-    | { owner?: { login?: string }; name?: string }
-    | undefined;
-  const owner = repository?.owner?.login;
+  const repository = getDeliveryRepository(event);
+  const owner = repository?.owner.login;
   const repoName = repository?.name;
   const repoKey = owner && repoName ? `${owner}/${repoName}` : "unknown/unknown";
-  const sender = (payload.sender as { login?: string })?.login;
-  const issue = payload.issue as { number?: number } | undefined;
-  const pr = payload.pull_request as { number?: number } | undefined;
-  const issueNumber = issue?.number ?? pr?.number;
-  const isPrivate = (repository as { private?: boolean })?.private;
-  const isPullRequest = !!pr;
+  const sender = "sender" in event.payload ? event.payload.sender?.login : undefined;
+  const issueNumber = getDeliveryIssueNumber(event);
+  const isPrivate = repository?.private;
+  const isPullRequest = isPullRequestDelivery(event);
 
   const webhookLog = createLogger({
     request_id: requestId,
@@ -608,6 +395,9 @@ export async function handleGitHubDelivery(
       await handleMetaEvent(event.name, event.payload, env);
       webhookLog.info("webhook_completed", {
         event_type: event.name,
+        delivery_id: event.deliveryId,
+        hook_id: event.hookId,
+        installation_target: event.installationTarget,
         is_private: isPrivate,
         is_pull_request: isPullRequest,
         duration_ms: Date.now() - startTime,
@@ -626,6 +416,7 @@ export async function handleGitHubDelivery(
     if (owner && !isAllowedOrg(owner, env)) {
       webhookLog.info("webhook_skipped_not_allowed", {
         event_type: event.name,
+        delivery_id: event.deliveryId,
         duration_ms: Date.now() - startTime,
       });
       emitMetric(env, {
@@ -641,6 +432,7 @@ export async function handleGitHubDelivery(
     if (!SUPPORTED_EVENTS.includes(event.name as (typeof SUPPORTED_EVENTS)[number])) {
       webhookLog.info("webhook_unsupported_event", {
         event_type: event.name,
+        delivery_id: event.deliveryId,
         duration_ms: Date.now() - startTime,
       });
       return new Response("OK", { status: 200 });
@@ -649,11 +441,14 @@ export async function handleGitHubDelivery(
     // Route to handlers that do real work; everything else is log-only
     // (tracking is handled by the GitHub Action calling /api/github/track).
     if (event.name === "workflow_run") {
-      await handleWorkflowRunEvent(event.payload as WorkflowRunPayload, env);
+      await handleWorkflowRunEvent(event.payload, env);
     }
 
     webhookLog.info("webhook_completed", {
       event_type: event.name,
+      delivery_id: event.deliveryId,
+      hook_id: event.hookId,
+      installation_target: event.installationTarget,
       is_private: isPrivate,
       is_pull_request: isPullRequest,
       duration_ms: Date.now() - startTime,
@@ -672,6 +467,7 @@ export async function handleGitHubDelivery(
   } catch (error) {
     webhookLog.errorWithException("webhook_error", error, {
       event_type: event.name,
+      delivery_id: event.deliveryId,
       duration_ms: Date.now() - startTime,
     });
     emitMetric(env, {

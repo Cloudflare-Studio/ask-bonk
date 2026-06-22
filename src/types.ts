@@ -1,4 +1,5 @@
 import type { AgentNamespace } from "agents";
+import type { EventPayloadMap } from "@flue/github";
 import type { RepoAgent } from "./agent";
 
 // Default model used across the application when no model is specified
@@ -158,31 +159,7 @@ export interface ReviewCommentContext {
   originalCommitId: string;
 }
 
-// GitHub workflow_run event payload structure (minimal type: only fields we use)
-export interface WorkflowRunPayload {
-  action: string;
-  workflow_run: {
-    id: number;
-    name: string;
-    // Workflow file path relative to repo root, e.g. ".github/workflows/bonk.yml"
-    path: string;
-    status: string;
-    conclusion: string | null;
-    html_url: string;
-    event: string;
-    head_branch: string;
-    triggering_actor?: { login: string };
-    // Associated PRs - populated for same-repo PRs, empty for fork PRs.
-    pull_requests?: Array<{ number: number }>;
-  };
-  repository: {
-    owner: { login: string };
-    name: string;
-    full_name: string;
-    private: boolean;
-  };
-  sender: { login: string };
-}
+export type WorkflowRunPayload = EventPayloadMap["workflow_run"];
 
 // Parsed context from a workflow_run webhook event
 export interface WorkflowRunContext {

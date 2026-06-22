@@ -1,4 +1,4 @@
-import type { GitHubWebhookDelivery } from "@flue/github";
+import { createGitHubChannel, type GitHubWebhookDelivery } from "@flue/github";
 import { flue } from "@flue/runtime/routing";
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
@@ -31,7 +31,6 @@ import {
   eventsByActorQuery,
 } from "./metrics";
 import { log, createLogger, sanitizeSecrets } from "./log";
-import { createBonkGitHubChannel, type GitHubChannelEnv } from "./github-channel";
 import { internalWorkflowHeaders } from "./internal-workflows";
 import type { WorkflowJobResult } from "./github-workflow-jobs";
 
@@ -73,6 +72,7 @@ function isPullRequestDelivery(delivery: GitHubWebhookDelivery): boolean {
 
 const app = new Hono<{ Bindings: Env }>();
 const flueApp = flue() as unknown as Hono<{ Bindings: Env }>;
+type GitHubChannelEnv = { Bindings: Env };
 
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get("/health", (c) => c.text("OK"));
@@ -354,9 +354,10 @@ app.route("/", flueApp);
 export default app;
 
 async function handleLegacyWebhook(c: Context<GitHubChannelEnv>): Promise<Response> {
-  const channel = createBonkGitHubChannel(c.env.GITHUB_WEBHOOK_SECRET, ({ delivery }) =>
-    handleGitHubDelivery(delivery, c.env),
-  );
+  const channel = createGitHubChannel<GitHubChannelEnv>({
+    webhookSecret: c.env.GITHUB_WEBHOOK_SECRET,
+    webhook: ({ delivery }) => handleGitHubDelivery(delivery, c.env),
+  });
   const webhookRoute = channel.routes[0];
   if (!webhookRoute) return new Response("GitHub webhook route is unavailable", { status: 500 });
   return webhookRoute.handler(c, async () => undefined);

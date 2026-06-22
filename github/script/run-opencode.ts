@@ -137,9 +137,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
   const maxAttempts = retries + 1;
   const startedAt = Date.now();
 
-  let lastExitCode = 1;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; ; attempt++) {
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
       writeExitCode(124);
@@ -151,7 +149,6 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     }
 
     const result = await runOpenCodeAttempt(remainingMs);
-    lastExitCode = result.exitCode;
 
     if (result.exitCode === 0) {
       writeExitCode(result.exitCode);
@@ -180,9 +177,6 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     );
     await sleep(delayMs);
   }
-
-  writeExitCode(lastExitCode);
-  return lastExitCode;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

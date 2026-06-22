@@ -8,8 +8,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "flue build --target cloudflare",
-    "deploy": "flue build --target cloudflare && wrangler deploy --config dist/ask_bonk/wrangler.json --var BONK_VERSION:\"$(git describe --tags --always)\" --var BONK_COMMIT:\"$(git rev-parse --short HEAD)\"",
+    "build": "npm exec --yes --package=node@22.19.0 -- node ./node_modules/@flue/cli/bin/flue.mjs build --target cloudflare",
+    "deploy": "bun run build && wrangler deploy --config dist/ask_bonk/wrangler.json --var BONK_VERSION:\"$(git describe --tags --always)\" --var BONK_COMMIT:\"$(git rev-parse --short HEAD)\"",
     "dev": "flue dev --target cloudflare",
     "test": "vitest",
     "cf-typegen": "wrangler types",

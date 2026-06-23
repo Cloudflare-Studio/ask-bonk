@@ -39,7 +39,7 @@ function parseRetryAfterMs(response: Response): number {
   return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
 }
 
-export async function fetchWithTimeout(
+async function fetchWithTimeout(
   url: string,
   options: RequestInit,
   timeoutMs: number,

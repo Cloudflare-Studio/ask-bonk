@@ -4,6 +4,9 @@
 import { appendFileSync } from "fs";
 import { fetchWithRetry } from "./http";
 
+const DEFAULT_OIDC_AUDIENCE = "opencode-github-action";
+const oidcTokenCache = new Map<string, Promise<string>>();
+
 export interface Repo {
   owner: string;
   repo: string;
@@ -138,7 +141,10 @@ export const core: Core = {
 };
 
 // Get OIDC token from GitHub Actions
-export async function getOidcToken(audience: string = "opencode-github-action"): Promise<string> {
+export async function getOidcToken(audience: string = DEFAULT_OIDC_AUDIENCE): Promise<string> {
+  const cached = oidcTokenCache.get(audience);
+  if (cached) return cached;
+
   const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
@@ -146,20 +152,33 @@ export async function getOidcToken(audience: string = "opencode-github-action"):
     throw new Error("OIDC token request credentials not available");
   }
 
-  const response = await fetchWithRetry(`${requestUrl}&audience=${audience}`, {
-    headers: { Authorization: `bearer ${requestToken}` },
-  });
+  const tokenPromise = (async () => {
+    const url = new URL(requestUrl);
+    url.searchParams.set("audience", audience);
 
-  if (!response.ok) {
-    throw new Error(`Failed to get OIDC token: ${response.status}`);
+    const response = await fetchWithRetry(url.toString(), {
+      headers: { Authorization: `bearer ${requestToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get OIDC token: ${response.status}`);
+    }
+
+    const data = (await response.json()) as { value?: string };
+    if (!data.value) {
+      throw new Error("OIDC token response missing value");
+    }
+
+    return data.value;
+  })();
+
+  oidcTokenCache.set(audience, tokenPromise);
+  try {
+    return await tokenPromise;
+  } catch (error) {
+    oidcTokenCache.delete(audience);
+    throw error;
   }
-
-  const data = (await response.json()) as { value?: string };
-  if (!data.value) {
-    throw new Error("OIDC token response missing value");
-  }
-
-  return data.value;
 }
 
 // Get API base URL from OIDC base URL
@@ -168,10 +187,22 @@ export function getApiBaseUrl(): string {
   if (!oidcBaseUrl) {
     throw new Error("OIDC_BASE_URL not set");
   }
-  const normalized = oidcBaseUrl.replace(/\/+$/, "");
-  if (!normalized.startsWith("https://")) {
+  if (oidcBaseUrl.includes("?") || oidcBaseUrl.includes("#")) {
+    throw new Error("OIDC_BASE_URL must not include credentials, query, or fragment");
+  }
+  let url: URL;
+  try {
+    url = new URL(oidcBaseUrl);
+  } catch {
+    throw new Error("OIDC_BASE_URL must be a valid URL");
+  }
+  if (url.protocol !== "https:") {
     throw new Error("OIDC_BASE_URL must use https");
   }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("OIDC_BASE_URL must not include credentials, query, or fragment");
+  }
+  const normalized = url.toString().replace(/\/+$/, "");
   return normalized.replace(/\/auth$/, "");
 }
 

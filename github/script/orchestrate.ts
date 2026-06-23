@@ -10,6 +10,7 @@
 
 import { readFileSync } from "fs";
 import { join } from "path";
+import { pathToFileURL } from "url";
 import {
   getContext,
   getOidcToken,
@@ -19,7 +20,6 @@ import {
   validateOpenCodeVersion,
   checkPermissionLevel,
   extractMentionPrompt,
-  appendGitHubValue,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
@@ -29,13 +29,40 @@ import { fetchWithRetry } from "./http";
 // ---------------------------------------------------------------------------
 
 const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+const ESCAPED_CODEOWNERS_CHAR = "\u0000";
 
 interface ContentResponse {
   content: string;
 }
 
-interface TeamMembershipResponse {
-  state?: string;
+interface PullRequestFileResponse {
+  filename: string;
+  previous_filename?: string;
+}
+
+interface ChangedFilesResult {
+  paths: string[];
+  recordCount: number;
+}
+
+interface CodeownersCheckResult {
+  teamGroups: string[][];
+}
+
+interface PullRequestResponse {
+  changed_files?: number;
+  base?: {
+    ref?: string;
+    sha?: string;
+  };
+}
+
+interface CodeownersRule {
+  pattern: string;
+  owners: string[];
+  teams: string[];
+  unsupportedOwners: string[];
+  unsupportedPattern: boolean;
 }
 
 async function githubApi<T>(path: string, token: string): Promise<T | null> {
@@ -52,92 +79,305 @@ async function githubApi<T>(path: string, token: string): Promise<T | null> {
   return (await resp.json()) as T;
 }
 
-function parseCodeowners(content: string): {
-  owners: Set<string>;
-  teamPatterns: string[];
-} {
-  const owners = new Set<string>();
-  const teamPatterns: string[] = [];
+export function parseCodeowners(content: string): CodeownersRule[] {
+  const rules: CodeownersRule[] = [];
 
   for (const line of content.split("\n")) {
-    const trimmed = (line.split("#", 1)[0] || "").trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
+    const fields = splitCodeownersLine(line);
+    if (fields.length < 1) continue;
 
-    const fields = trimmed.split(/\s+/);
-    if (fields.length < 2) continue;
-
-    const mentions = fields.slice(1).filter((field) => /^@[\w-]+(?:\/[\w-]+)?$/.test(field));
-    for (const mention of mentions) {
-      if (mention.includes("/")) {
-        teamPatterns.push(mention.substring(1));
+    const owners: string[] = [];
+    const teams: string[] = [];
+    const unsupportedOwners: string[] = [];
+    for (const ownerField of fields.slice(1)) {
+      if (/^@[\w-]+(?:\/[\w-]+)?$/.test(ownerField)) {
+        if (ownerField.includes("/")) {
+          teams.push(ownerField.substring(1).toLowerCase());
+        } else {
+          owners.push(ownerField.substring(1).toLowerCase());
+        }
       } else {
-        owners.add(mention.substring(1).toLowerCase());
+        unsupportedOwners.push(ownerField);
       }
+    }
+
+    rules.push({
+      pattern: fields[0],
+      owners,
+      teams,
+      unsupportedOwners,
+      unsupportedPattern: hasUnsupportedCodeownersPattern(fields[0]),
+    });
+  }
+
+  return rules;
+}
+
+function splitCodeownersLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let escaped = false;
+
+  for (const char of line.trim()) {
+    if (escaped) {
+      current += `${ESCAPED_CODEOWNERS_CHAR}${char}`;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "#" && !current) break;
+    if (/\s/.test(char)) {
+      if (current) {
+        fields.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) current += "\\";
+  if (current) fields.push(current);
+  return fields;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.*]/g, "\\$&");
+}
+
+function hasUnsupportedCodeownersPattern(pattern: string): boolean {
+  if (pattern.startsWith("!")) return true;
+  if (pattern.startsWith(`${ESCAPED_CODEOWNERS_CHAR}#`)) return true;
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (pattern[index] === ESCAPED_CODEOWNERS_CHAR) {
+      index += 1;
+      continue;
+    }
+    if (pattern[index] === "[" || pattern[index] === "]") return true;
+  }
+  return false;
+}
+
+function hasLiteralDirectoryChars(segment: string): boolean {
+  for (let index = 0; index < segment.length; index += 1) {
+    if (segment[index] === ESCAPED_CODEOWNERS_CHAR) {
+      index += 1;
+      continue;
+    }
+    if (segment[index] !== "*" && segment[index] !== "?") return true;
+  }
+  return false;
+}
+
+function codeownersPatternToRegex(pattern: string): RegExp | null {
+  if (!pattern || pattern.startsWith("!")) return null;
+
+  const anchored = pattern.startsWith("/");
+  const directoryPattern = pattern.endsWith("/");
+  let normalized = pattern.replace(/^\/+/, "");
+  if (!normalized) return null;
+  const slashlessPattern = !normalized.replace(/\/+$/, "").includes("/");
+  if (directoryPattern) normalized += "**";
+  const finalSegment = normalized.split("/").at(-1) || "";
+  const finalSegmentCanBeDirectory = hasLiteralDirectoryChars(finalSegment);
+  const descendantMatch =
+    !directoryPattern && (!/[*?]/.test(finalSegment) || finalSegmentCanBeDirectory);
+  const anyParentPrefix =
+    !anchored && (slashlessPattern || normalized.startsWith("**/"));
+
+  let source = "";
+  for (let index = 0; index < normalized.length; ) {
+    if (normalized[index] === ESCAPED_CODEOWNERS_CHAR) {
+      const escapedChar = normalized[index + 1] || "";
+      source += escapeRegex(escapedChar);
+      index += escapedChar ? 2 : 1;
+      continue;
+    }
+    if (normalized.startsWith("**/", index)) {
+      source += "(?:.*/)?";
+      index += 3;
+      continue;
+    }
+    if (normalized.startsWith("**", index) && index + 2 === normalized.length && normalized[index - 1] === "/") {
+      source += ".*";
+      index += 2;
+      continue;
+    }
+    const char = normalized[index];
+    if (char === "*") {
+      source += "[^/]*";
+      index += 1;
+    } else if (char === "?") {
+      source += "[^/]";
+      index += 1;
+    } else {
+      source += escapeRegex(char);
+      index += 1;
     }
   }
 
-  return { owners, teamPatterns };
+  source = anyParentPrefix ? `(?:^|.*/)${source}` : `^${source}`;
+  if (descendantMatch) source += "(?:/.*)?";
+  return new RegExp(`${source}$`);
 }
 
-async function checkCodeowners(
+export function findMatchingCodeownersRule(
+  rules: CodeownersRule[],
+  filename: string,
+): CodeownersRule | null {
+  let matched: CodeownersRule | null = null;
+  for (const rule of rules) {
+    const regex = codeownersPatternToRegex(rule.pattern);
+    if (regex?.test(filename)) {
+      matched = rule;
+    }
+  }
+  return matched;
+}
+
+async function listChangedFiles(
+  owner: string,
+  repo: string,
+  prNumber: string,
+  token: string,
+): Promise<ChangedFilesResult> {
+  const filenames = new Set<string>();
+  let recordCount = 0;
+  for (let page = 1; ; page += 1) {
+    const files = await githubApi<PullRequestFileResponse[]>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+      token,
+    );
+    if (!files) return { paths: [], recordCount: 0 };
+    recordCount += files.length;
+    for (const file of files) {
+      if (file.filename) filenames.add(file.filename);
+      if (file.previous_filename) filenames.add(file.previous_filename);
+    }
+    if (files.length < 100) break;
+  }
+  return { paths: Array.from(filenames), recordCount };
+}
+
+async function actorHasWritePermission(
+  owner: string,
+  repo: string,
+  actor: string,
+  token: string,
+): Promise<boolean> {
+  const data = await githubApi<{ permission: string }>(
+    `/repos/${owner}/${repo}/collaborators/${actor}/permission`,
+    token,
+  );
+  return Boolean(data && !checkPermissionLevel(data.permission, "write", actor));
+}
+
+function actorOwnsRule(rule: CodeownersRule, actor: string): boolean {
+  const actorLower = actor.toLowerCase();
+  return rule.owners.includes(actorLower);
+}
+
+export async function checkCodeowners(
   owner: string,
   repo: string,
   ref: string,
   actor: string,
   token: string,
-): Promise<void> {
+): Promise<CodeownersCheckResult> {
+  const prNumber = process.env.PR_NUMBER || process.env.ISSUE_NUMBER || "";
+  if (!prNumber) {
+    return core.setFailed("CODEOWNERS permission requires pull request context");
+  }
+
+  const pr = await githubApi<PullRequestResponse>(`/repos/${owner}/${repo}/pulls/${prNumber}`, token);
+  const codeownersRef = pr?.base?.sha || pr?.base?.ref;
+  if (!pr || !codeownersRef) {
+    return core.setFailed("CODEOWNERS permission could not determine PR base ref");
+  }
+
   let codeownersContent = "";
+  let codeownersFound = false;
 
   for (const path of CODEOWNERS_PATHS) {
     const data = await githubApi<ContentResponse>(
-      `/repos/${owner}/${repo}/contents/${path}?ref=${ref || "HEAD"}`,
+      `/repos/${owner}/${repo}/contents/${path}?ref=${codeownersRef || ref || "HEAD"}`,
       token,
     );
-    if (data?.content) {
-      codeownersContent = Buffer.from(data.content, "base64").toString("utf8");
+    if (data) {
+      codeownersFound = true;
+      codeownersContent = data.content
+        ? Buffer.from(data.content, "base64").toString("utf8")
+        : "";
       core.info(`Found CODEOWNERS at ${path}`);
       break;
     }
   }
 
-  if (!codeownersContent) {
+  if (!codeownersFound) {
     return core.setFailed("CODEOWNERS file not found in .github/, root, or docs/ directory");
   }
 
-  const { owners, teamPatterns } = parseCodeowners(codeownersContent);
-  const actorLower = actor.toLowerCase();
-
-  if (owners.has(actorLower)) {
-    core.info(`User ${actor} is a code owner`);
-    return;
+  const rules = parseCodeowners(codeownersContent);
+  if (rules.some((rule) => rule.unsupportedPattern)) {
+    return core.setFailed("CODEOWNERS file contains unsupported pattern syntax");
+  }
+  const changedFiles = await listChangedFiles(owner, repo, prNumber, token);
+  if (changedFiles.paths.length === 0) {
+    return core.setFailed("CODEOWNERS permission could not determine changed PR files");
+  }
+  if (pr.changed_files !== undefined && pr.changed_files > changedFiles.recordCount) {
+    return core.setFailed("CODEOWNERS permission could not inspect every changed PR file");
   }
 
-  for (const teamPath of teamPatterns) {
-    const [org, team] = teamPath.split("/");
-    try {
-      const membership = await githubApi<TeamMembershipResponse>(
-        `/orgs/${org}/teams/${team}/memberships/${actor}`,
-        token,
-      );
-      if (membership?.state === "active") {
-        core.info(`User ${actor} is a member of team @${teamPath}`);
-        return;
+  let hasWritePermission: boolean | undefined;
+  const teamGroups: string[][] = [];
+  for (const filename of changedFiles.paths) {
+    const rule = findMatchingCodeownersRule(rules, filename);
+    if (!rule) {
+      return core.setFailed(`No CODEOWNERS rule matched changed file ${filename}`);
+    }
+    if (rule.unsupportedOwners.length > 0) {
+      return core.setFailed(`Unsupported CODEOWNERS owner for changed file ${filename}`);
+    }
+    hasWritePermission ??= await actorHasWritePermission(owner, repo, actor, token);
+    if (rule.owners.length === 0 && rule.teams.length === 0) {
+      if (!hasWritePermission) {
+        return core.setFailed(`Ownerless CODEOWNERS rule for ${filename} requires write permission`);
       }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      core.warning(`Could not check team membership for @${teamPath}: ${message}`);
+      continue;
+    }
+    if (!hasWritePermission) {
+      return core.setFailed(`User ${actor} must have write permission to satisfy CODEOWNERS`);
+    }
+    if (actorOwnsRule(rule, actor)) {
+      continue;
+    }
+    if (rule.teams.length > 0) {
+      teamGroups.push(rule.teams);
+      continue;
+    }
+    if (!actorOwnsRule(rule, actor)) {
+      return core.setFailed(`User ${actor} is not a CODEOWNER for changed file ${filename}`);
     }
   }
 
-  core.setFailed(`User ${actor} is not listed in CODEOWNERS`);
+  if (teamGroups.length > 0) {
+    core.info(`User ${actor} requires server-side CODEOWNERS team verification`);
+  } else {
+    core.info(`User ${actor} is a code owner for all changed files`);
+  }
+  return { teamGroups };
 }
 
-async function checkPermissions(): Promise<void> {
+async function checkPermissions(): Promise<CodeownersCheckResult | null> {
   const requiredPermission = process.env.REQUIRED_PERMISSION;
   if (!requiredPermission) {
     return core.setFailed("REQUIRED_PERMISSION not set");
   }
-  if (requiredPermission === "any") return;
+  if (requiredPermission === "any") return null;
 
   const token = process.env.GH_TOKEN;
   if (!token) {
@@ -155,8 +395,7 @@ async function checkPermissions(): Promise<void> {
   }
 
   if (requiredPermission === "CODEOWNERS") {
-    await checkCodeowners(owner, repo, ref, actor, token);
-    return;
+    return checkCodeowners(owner, repo, ref, actor, token);
   }
 
   const data = await githubApi<{ permission: string }>(
@@ -172,6 +411,7 @@ async function checkPermissions(): Promise<void> {
   if (error) {
     core.setFailed(error);
   }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,9 +439,7 @@ async function checkSetup(): Promise<boolean> {
       eventName === "issue_comment" ||
       eventName === "issues"
     ) {
-      core.setFailed("No issue number found for PR/issue event; cannot run setup check");
-      // core.setFailed calls process.exit(1), but TypeScript doesn't know that
-      return true;
+      return core.setFailed("No issue number found for PR/issue event; cannot run setup check");
     }
     core.info("No issue number found, skipping setup check");
     core.setOutput("skip", "false");
@@ -215,8 +453,7 @@ async function checkSetup(): Promise<boolean> {
     const oidcAvailable =
       !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL && !!process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
     if (oidcAvailable) {
-      core.setFailed(`OIDC token exchange failed unexpectedly: ${error}`);
-      return true;
+      return core.setFailed(`OIDC token exchange failed unexpectedly: ${error}`);
     }
     core.warning("OIDC not available, skipping setup check");
     core.setOutput("skip", "false");
@@ -261,23 +498,20 @@ async function checkSetup(): Promise<boolean> {
       },
     );
   } catch (error) {
-    core.setFailed(`Setup request failed after ${setupRetries + 1} attempts: ${error}`);
-    return true;
+    return core.setFailed(`Setup request failed after ${setupRetries + 1} attempts: ${error}`);
   }
 
   core.info(`Setup check completed with status ${response.status}`);
 
   if (!response.ok) {
     const text = await response.text();
-    core.setFailed(`Setup request failed: ${text}`);
-    return true;
+    return core.setFailed(`Setup request failed: ${text}`);
   }
 
   const data = (await response.json()) as SetupResponse;
 
   if (data.error) {
-    core.setFailed(`Setup failed: ${data.error}`);
-    return true;
+    return core.setFailed(`Setup failed: ${data.error}`);
   }
 
   if (data.exists) {
@@ -430,7 +664,7 @@ interface PromptResult {
   value: string;
 }
 
-async function buildPrompt(): Promise<PromptResult> {
+export async function buildPrompt(): Promise<PromptResult> {
   const detection = await detectFork();
 
   const parts: string[] = [];
@@ -464,7 +698,7 @@ async function buildPrompt(): Promise<PromptResult> {
   const userPrompt = process.env.USER_PROMPT?.trim();
   if (userPrompt) {
     parts.push(userPrompt);
-  } else if (parts.length > 0) {
+  } else {
     const commentPrompt = extractMentionPrompt(
       process.env.COMMENT_BODY || process.env.REVIEW_BODY,
       process.env.MENTIONS,
@@ -487,6 +721,12 @@ async function buildPrompt(): Promise<PromptResult> {
 
 interface OidcResult {
   failed: boolean;
+  token?: string;
+}
+
+interface OidcExchangeOptions {
+  forceNoPush: boolean;
+  codeownersTeamGroups?: string[][];
 }
 
 function maskValue(value: string): void {
@@ -495,21 +735,12 @@ function maskValue(value: string): void {
   }
 }
 
-function appendToGithubEnv(name: string, value: string): void {
-  const envFile = process.env.GITHUB_ENV;
-  if (!envFile) {
-    core.warning("GITHUB_ENV not set; cannot export environment variable");
-    return;
-  }
-  appendGitHubValue(envFile, name, value);
-}
-
 function oidcFailClosed(reason: string): OidcResult {
   core.warning(`OIDC exchange failed: ${reason}`);
   return { failed: true };
 }
 
-async function exchangeOidc(): Promise<OidcResult> {
+async function exchangeOidc(options: OidcExchangeOptions): Promise<OidcResult> {
   const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
@@ -535,7 +766,9 @@ async function exchangeOidc(): Promise<OidcResult> {
   // Accepts a preset name (e.g., "NO_PUSH") or a JSON permissions object.
   const exchangeBody: Record<string, unknown> = {};
   const rawPermissions = process.env.TOKEN_PERMISSIONS;
-  if (rawPermissions?.trim()) {
+  if (options.forceNoPush) {
+    exchangeBody.permissions = "NO_PUSH";
+  } else if (rawPermissions?.trim()) {
     const parsed = parseTokenPermissions(rawPermissions);
     if (parsed !== undefined) {
       exchangeBody.permissions = parsed;
@@ -545,6 +778,14 @@ async function exchangeOidc(): Promise<OidcResult> {
       // Fail closed: send NO_PUSH so the server doesn't grant full defaults.
       core.warning(`Invalid TOKEN_PERMISSIONS JSON, falling back to NO_PUSH: ${rawPermissions}`);
       exchangeBody.permissions = "NO_PUSH";
+    }
+  }
+
+  if (options.codeownersTeamGroups && options.codeownersTeamGroups.length > 0) {
+    exchangeBody.codeowners_team_groups = options.codeownersTeamGroups;
+    const actor = process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR;
+    if (actor) {
+      exchangeBody.actor = actor;
     }
   }
 
@@ -585,8 +826,7 @@ async function exchangeOidc(): Promise<OidcResult> {
   }
 
   maskValue(appToken);
-  appendToGithubEnv("GH_TOKEN", appToken);
-  return { failed: false };
+  return { failed: false, token: appToken };
 }
 
 // ---------------------------------------------------------------------------
@@ -723,26 +963,12 @@ async function trackRun(): Promise<void> {
     created_at: context.createdAt,
   };
 
-  switch (context.eventName) {
-    case "issue_comment":
-      if (context.comment?.id) {
-        payload.comment_id = context.comment.id;
-      }
-      break;
-    case "pull_request_review_comment":
-      if (context.comment?.id) {
-        payload.review_comment_id = context.comment.id;
-      }
-      break;
-    case "issues":
-      if (context.issue?.number) {
-        payload.issue_id = context.issue.number;
-      }
-      break;
-    case "pull_request":
-      break;
-    case "pull_request_review":
-      break;
+  if (context.eventName === "issue_comment" && context.comment?.id) {
+    payload.comment_id = context.comment.id;
+  } else if (context.eventName === "pull_request_review_comment" && context.comment?.id) {
+    payload.review_comment_id = context.comment.id;
+  } else if (context.eventName === "issues") {
+    payload.issue_id = context.issue.number;
   }
 
   let response: Response;
@@ -782,26 +1008,35 @@ async function trackRun(): Promise<void> {
 
 async function main() {
   // Step 1: Check permissions (must pass before anything else)
-  await checkPermissions();
+  const codeownersCheck = await checkPermissions();
 
   // Step 2: Check setup (may skip remaining steps)
   const shouldSkip = await checkSetup();
   if (shouldSkip) return;
 
-  // Step 3: Resolve version (synchronous), then run prompt and OIDC exchange
-  // in parallel (they are independent of each other).
+  // Step 3: Resolve version, then build the prompt before exchanging the token
+  // so fork runs can request a comment-only installation token.
   resolveVersion();
 
-  const [promptResult, oidcResult] = await Promise.all([buildPrompt(), exchangeOidc()]);
+  const promptResult = await buildPrompt();
+
+  if (promptResult.detectionFailed) {
+    core.setOutput("is_fork", String(promptResult.isFork));
+    core.setOutput("value", promptResult.value);
+    return core.setFailed("Fork status could not be verified; refusing to proceed.");
+  }
+
+  const oidcResult = await exchangeOidc({
+    forceNoPush: promptResult.isFork,
+    codeownersTeamGroups: codeownersCheck?.teamGroups,
+  });
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("value", promptResult.value);
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
-
-  if (promptResult.detectionFailed) {
-    core.setFailed("Fork status could not be verified; refusing to proceed.");
-    return;
+  if (oidcResult.token) {
+    core.setOutput("gh_token", oidcResult.token);
   }
 
   // Step 4: Handle fork PRs
@@ -812,14 +1047,15 @@ async function main() {
 
   // Step 5: Require OIDC for non-fork runs
   if (oidcResult.failed) {
-    core.setFailed("OIDC token exchange failed. Ensure id-token: write is configured.");
-    return;
+    return core.setFailed("OIDC token exchange failed. Ensure id-token: write is configured.");
   }
 
   // Step 6: Track the run
   await trackRun();
 }
 
-main().catch((error) => {
-  core.setFailed(`Orchestrator failed: ${error}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    core.setFailed(`Orchestrator failed: ${error}`);
+  });
+}

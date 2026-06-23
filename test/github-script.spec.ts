@@ -4,9 +4,40 @@ import {
   parseTokenPermissions,
   checkPermissionLevel,
   extractMentionPrompt,
+  getApiBaseUrl,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
+import {
+  buildPrompt,
+  checkCodeowners,
+  findMatchingCodeownersRule,
+  parseCodeowners,
+} from "../github/script/orchestrate";
 import { isRetryableOpenCodeFailure } from "../github/script/run-opencode";
+
+async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 describe("GitHub Action script context", () => {
   beforeEach(() => {
@@ -86,6 +117,308 @@ describe("GitHub Action mention prompt extraction", () => {
 
   it("ignores comments without a configured mention", () => {
     expect(extractMentionPrompt("please fix this", "/bonk,@ask-bonk")).toBeNull();
+  });
+});
+
+describe("GitHub Action preflight prompt", () => {
+  it("preserves plain issue comment prompts", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "issue_comment",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: "/bonk summarize this issue",
+        REVIEW_BODY: undefined,
+        MENTIONS: "/bonk,@ask-bonk",
+        PR_NUMBER: undefined,
+        ISSUE_NUMBER: "42",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: undefined,
+        PR_BASE_REPO: undefined,
+        PR_URL: undefined,
+        GH_TOKEN: undefined,
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result).toEqual({
+      isFork: false,
+      detectionFailed: false,
+      value: "/bonk summarize this issue",
+    });
+  });
+});
+
+describe("GitHub Action CODEOWNERS matching", () => {
+  it("uses the last matching rule for changed files", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+/src/** @org/source-team
+/src/generated/** @generated-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "README.md")?.owners).toEqual(["global-owner"]);
+    expect(findMatchingCodeownersRule(rules, "src/index.ts")?.teams).toEqual(["org/source-team"]);
+    expect(findMatchingCodeownersRule(rules, "src/generated/client.ts")?.owners).toEqual([
+      "generated-owner",
+    ]);
+  });
+
+  it("preserves ownerless override rules", () => {
+    const rules = parseCodeowners(`
+/apps/ @alice
+/apps/github
+`);
+
+    expect(findMatchingCodeownersRule(rules, "apps/github/action.ts")).toEqual({
+      pattern: "/apps/github",
+      owners: [],
+      teams: [],
+      unsupportedOwners: [],
+      unsupportedPattern: false,
+    });
+  });
+
+  it("matches unanchored directory patterns below any parent", () => {
+    const rules = parseCodeowners("apps/ @alice");
+
+    expect(findMatchingCodeownersRule(rules, "apps/index.ts")?.owners).toEqual(["alice"]);
+    expect(findMatchingCodeownersRule(rules, "packages/apps/index.ts")?.owners).toEqual([
+      "alice",
+    ]);
+  });
+
+  it("keeps middle-slash directory patterns root-relative", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+build/logs/ @logs-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "build/logs/a.txt")?.owners).toEqual([
+      "logs-owner",
+    ]);
+    expect(findMatchingCodeownersRule(rules, "src/build/logs/a.txt")?.owners).toEqual([
+      "global-owner",
+    ]);
+  });
+
+  it("matches glob directory patterns below descendants", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+**/logs @logs-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "logs/app.log")?.owners).toEqual(["logs-owner"]);
+    expect(findMatchingCodeownersRule(rules, "build/logs/app.log")?.owners).toEqual([
+      "logs-owner",
+    ]);
+  });
+
+  it("keeps middle-slash patterns root-relative unless they use globstar", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+docs/* @docs-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "docs/readme.md")?.owners).toEqual([
+      "docs-owner",
+    ]);
+    expect(findMatchingCodeownersRule(rules, "packages/docs/readme.md")?.owners).toEqual([
+      "global-owner",
+    ]);
+    expect(findMatchingCodeownersRule(rules, "docs/build-app/troubleshooting.md")?.owners).toEqual([
+      "global-owner",
+    ]);
+  });
+
+  it("matches globstar slash as zero or more directories", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+src/**/secrets.yml @security-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "src/secrets.yml")?.owners).toEqual([
+      "security-owner",
+    ]);
+    expect(findMatchingCodeownersRule(rules, "src/config/secrets.yml")?.owners).toEqual([
+      "security-owner",
+    ]);
+  });
+
+  it("keeps non-special double stars within a path segment", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+foo**bar @literal-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "fooXXbar")?.owners).toEqual(["literal-owner"]);
+    expect(findMatchingCodeownersRule(rules, "foo/x/bar")?.owners).toEqual(["global-owner"]);
+  });
+
+  it("parses escaped spaces in patterns", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+/docs/My\\ File.md @docs-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "docs/My File.md")?.owners).toEqual([
+      "docs-owner",
+    ]);
+  });
+
+  it("parses escaped glob metacharacters as literals", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+/secrets/\\*.yml @literal-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "secrets/*.yml")?.owners).toEqual([
+      "literal-owner",
+    ]);
+    expect(findMatchingCodeownersRule(rules, "secrets/prod.yml")?.owners).toEqual([
+      "global-owner",
+    ]);
+  });
+
+  it("marks escaped leading hash rules unsupported", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+\\#secrets.yml @hash-owner
+`);
+
+    expect(rules[1]?.unsupportedPattern).toBe(true);
+  });
+
+  it("preserves unsupported owner tokens for fail-closed authorization", () => {
+    const rules = parseCodeowners("src/** security@example.com");
+
+    expect(findMatchingCodeownersRule(rules, "src/app.ts")?.unsupportedOwners).toEqual([
+      "security@example.com",
+    ]);
+  });
+
+  it("matches slashless literal directory patterns below descendants", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+src @src-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "src/app.ts")?.owners).toEqual(["src-owner"]);
+  });
+
+  it("marks unescaped bracket patterns unsupported", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+/src/[ab].ts @src-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "src/[ab].ts")?.unsupportedPattern).toBe(true);
+  });
+
+  it("keeps hash characters inside pattern fields", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+/docs/#private @private-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "docs/#private")?.owners).toEqual([
+      "private-owner",
+    ]);
+  });
+
+  it("marks leading bang patterns unsupported", () => {
+    const rules = parseCodeowners("!/secrets @security-owner");
+
+    expect(rules[0]?.unsupportedPattern).toBe(true);
+  });
+
+  it("matches wildcard directory-like patterns below descendants", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+**/secret* @security-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "src/secret-prod/key.yml")?.owners).toEqual([
+      "security-owner",
+    ]);
+  });
+
+  it("matches dotted wildcard directory-like patterns below descendants", () => {
+    const rules = parseCodeowners(`
+* @global-owner
+**/config.* @security-owner
+`);
+
+    expect(findMatchingCodeownersRule(rules, "src/config.prod/key.yml")?.owners).toEqual([
+      "security-owner",
+    ]);
+  });
+
+  it("does not fall through empty higher-priority CODEOWNERS files", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 1, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: "" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ filename: "README.md" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).rejects.toThrow(
+      "exit:1",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(exit).toHaveBeenCalledWith(1);
+    fetchMock.mockRestore();
+    exit.mockRestore();
+  });
+});
+
+describe("GitHub Action OIDC base URL", () => {
+  it("normalizes the auth endpoint to the API base", () => {
+    return withEnv({ OIDC_BASE_URL: "https://ask-bonk.example/auth/" }, () => {
+      expect(getApiBaseUrl()).toBe("https://ask-bonk.example");
+    });
+  });
+
+  it("rejects credentials, query strings, and fragments", async () => {
+    await expect(
+      withEnv({ OIDC_BASE_URL: "https://user:pass@ask-bonk.example/auth" }, () => getApiBaseUrl()),
+    ).rejects.toThrow("must not include credentials");
+
+    await expect(
+      withEnv({ OIDC_BASE_URL: "https://ask-bonk.example/auth?token=1" }, () => getApiBaseUrl()),
+    ).rejects.toThrow("must not include credentials");
+
+    await expect(
+      withEnv({ OIDC_BASE_URL: "https://ask-bonk.example/auth#frag" }, () => getApiBaseUrl()),
+    ).rejects.toThrow("must not include credentials");
+
+    await expect(
+      withEnv({ OIDC_BASE_URL: "https://ask-bonk.example/auth?" }, () => getApiBaseUrl()),
+    ).rejects.toThrow("must not include credentials");
+
+    await expect(
+      withEnv({ OIDC_BASE_URL: "https://ask-bonk.example/auth#" }, () => getApiBaseUrl()),
+    ).rejects.toThrow("must not include credentials");
   });
 });
 

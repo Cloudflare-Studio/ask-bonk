@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import {
   extractPrompt,
@@ -13,6 +13,8 @@ import {
   extractBearerToken,
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
+  checkTeamMembership,
+  normalizeCodeownersTeamGroups,
   resolvePermissions,
 } from "../src/oidc";
 import { sanitizeSecrets } from "../src/log";
@@ -26,6 +28,19 @@ import {
 import { validateOpenCodeVersion } from "../github/script/context";
 import type { Env } from "../src/types";
 import type { WorkflowRunPayload } from "../src/types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const testLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  errorWithException: vi.fn(),
+  child: vi.fn(),
+};
 
 // Proxy-based mock Env that throws on unexpected property access.
 // Ensures tests only touch properties they explicitly provide, preventing
@@ -424,6 +439,129 @@ describe("Authorization Header Parsing", () => {
     expect(extractBearerToken("Basic token123")).toBeNull();
     expect(extractBearerToken(null)).toBeNull();
     expect(extractBearerToken(undefined)).toBeNull();
+  });
+});
+
+describe("CODEOWNERS team verification", () => {
+  it("rejects legacy flat team lists", () => {
+    expect(normalizeCodeownersTeamGroups({ codeowners_teams: ["org/team"] } as any)).toBeNull();
+  });
+
+  it("rejects malformed team group shapes", () => {
+    expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [] })).toBeNull();
+    expect(
+      normalizeCodeownersTeamGroups({ codeowners_team_groups: null } as any),
+    ).toBeNull();
+    expect(
+      normalizeCodeownersTeamGroups({ codeowners_team_groups: "org/team" } as any),
+    ).toBeNull();
+    expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: 1 } as any)).toBeNull();
+    expect(
+      normalizeCodeownersTeamGroups({ codeowners_team_groups: { team: "org/team" } as any }),
+    ).toBeNull();
+    expect(
+      normalizeCodeownersTeamGroups({ codeowners_team_groups: ["org/team"] as any }),
+    ).toBeNull();
+    expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [[]] })).toBeNull();
+    expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [[""]] })).toBeNull();
+  });
+
+  it("rejects secret teams", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ privacy: "secret" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      checkTeamMembership("token", "org", "repo", "org/security", "alice", testLogger as any),
+    ).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts visible active teams with write repo permissions", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ privacy: "closed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ permission: "push" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await expect(
+      checkTeamMembership("token", "org", "repo", "org/security", "alice", testLogger as any),
+    ).resolves.toBe(true);
+  });
+
+  it("handles 204 team-repo checks through explicit repo team permissions", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ privacy: "closed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { slug: "security", organization: { login: "org" }, permission: "push" },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+    await expect(
+      checkTeamMembership("token", "org", "repo", "org/security", "alice", testLogger as any),
+    ).resolves.toBe(true);
+  });
+
+  it("fails closed when 204 fallback only finds read team permissions", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ privacy: "closed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { slug: "security", organization: { login: "org" }, permission: "pull" },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+    await expect(
+      checkTeamMembership("token", "org", "repo", "org/security", "alice", testLogger as any),
+    ).resolves.toBe(false);
   });
 });
 

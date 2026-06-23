@@ -5,7 +5,7 @@ import { jwtVerify, createRemoteJWKSet } from "jose";
 import { Result } from "better-result";
 import type { Env } from "./types";
 import { createOctokit, hasWriteAccess, getRepository } from "./github";
-import { createLogger } from "./log";
+import { createLogger, type Logger } from "./log";
 import {
   OIDCValidationError,
   AuthorizationError,
@@ -363,6 +363,244 @@ export interface ExchangeTokenResponse {
   token: string;
 }
 
+export interface ExchangeTokenRequestBody {
+  permissions?: TokenPermissionsInput;
+  codeowners_team_groups?: string[][];
+  actor?: string;
+}
+
+interface TeamResponse {
+  privacy?: string;
+}
+
+interface TeamMembershipResponse {
+  state?: string;
+}
+
+interface TeamRepoResponse {
+  permission?: string;
+  permissions?: {
+    admin?: boolean;
+    push?: boolean;
+    maintain?: boolean;
+  };
+}
+
+interface RepoTeamResponse extends TeamRepoResponse {
+  slug?: string;
+  organization?: {
+    login?: string;
+  };
+}
+
+function teamRepoHasWriteAccess(teamRepo: TeamRepoResponse | undefined): boolean {
+  return Boolean(
+    teamRepo?.permission === "admin" ||
+      teamRepo?.permission === "push" ||
+      teamRepo?.permissions?.admin ||
+      teamRepo?.permissions?.push ||
+      teamRepo?.permissions?.maintain,
+  );
+}
+
+export function normalizeCodeownersTeamGroups(body?: ExchangeTokenRequestBody): string[][] | null {
+  if (body && "codeowners_team_groups" in body) {
+    const rawGroups = body.codeowners_team_groups;
+    if (!Array.isArray(rawGroups) || rawGroups.length === 0) return null;
+    const groups: string[][] = [];
+    for (const group of rawGroups) {
+      if (!Array.isArray(group) || group.length === 0) return null;
+      if (group.some((teamPath) => typeof teamPath !== "string" || !teamPath.trim())) {
+        return null;
+      }
+      groups.push(group);
+    }
+    return groups;
+  }
+  if (body && "codeowners_teams" in body) return null;
+  return [];
+}
+
+function parseTeamPath(teamPath: string): { org: string; slug: string } | null {
+  const [org, slug, extra] = teamPath.split("/");
+  if (!org || !slug || extra) return null;
+  return { org, slug };
+}
+
+export async function checkTeamMembership(
+  token: string,
+  repoOwner: string,
+  repo: string,
+  teamPath: string,
+  actor: string,
+  logger: Logger,
+): Promise<boolean> {
+  const parsed = parseTeamPath(teamPath);
+  if (!parsed) {
+    logger.warn("codeowners_team_invalid", { team_path: teamPath });
+    return false;
+  }
+
+  if (parsed.org.toLowerCase() !== repoOwner.toLowerCase()) {
+    logger.warn("codeowners_team_cross_org", { team_path: teamPath, team_org: parsed.org });
+    return false;
+  }
+
+  const baseUrl = `https://api.github.com/orgs/${encodeURIComponent(parsed.org)}/teams/${encodeURIComponent(parsed.slug)}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  try {
+    const teamResp = await fetch(baseUrl, { headers });
+    if (teamResp.status !== 200) {
+      if (teamResp.status !== 404) {
+        logger.warn("codeowners_team_api_error", {
+          team_path: teamPath,
+          status: teamResp.status,
+          body: (await teamResp.text()).slice(0, 200),
+        });
+      }
+      return false;
+    }
+
+    const team = (await teamResp.json()) as TeamResponse;
+    if (team.privacy === "secret") {
+      logger.warn("codeowners_team_secret", { team_path: teamPath });
+      return false;
+    }
+
+    const membershipResp = await fetch(
+      `${baseUrl}/memberships/${encodeURIComponent(actor)}`,
+      { headers },
+    );
+    if (membershipResp.status !== 200) {
+      if (membershipResp.status !== 404) {
+        logger.warn("codeowners_team_membership_api_error", {
+          team_path: teamPath,
+          status: membershipResp.status,
+          body: (await membershipResp.text()).slice(0, 200),
+        });
+      }
+      return false;
+    }
+
+    const membership = (await membershipResp.json()) as TeamMembershipResponse;
+    if (membership.state !== "active") return false;
+
+    const repoResp = await fetch(
+      `${baseUrl}/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repo)}`,
+      {
+        headers: {
+          ...headers,
+          Accept: "application/vnd.github.v3.repository+json",
+        },
+      },
+    );
+    if (repoResp.status === 204) {
+      return findTeamRepoAccess(token, repoOwner, repo, parsed.org, parsed.slug, logger);
+    }
+    if (repoResp.status !== 200) {
+      if (repoResp.status !== 404) {
+        logger.warn("codeowners_team_repo_api_error", {
+          team_path: teamPath,
+          status: repoResp.status,
+          body: (await repoResp.text()).slice(0, 200),
+        });
+      }
+      return false;
+    }
+
+    const teamRepo = (await repoResp.json()) as TeamRepoResponse;
+    return teamRepoHasWriteAccess(teamRepo);
+  } catch (err) {
+    logger.errorWithException("codeowners_team_check_failed", err, { team_path: teamPath });
+    return false;
+  }
+}
+
+async function findTeamRepoAccess(
+  token: string,
+  repoOwner: string,
+  repo: string,
+  teamOrg: string,
+  teamSlug: string,
+  logger: Logger,
+): Promise<boolean> {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  try {
+    for (let page = 1; ; page += 1) {
+      const resp = await fetch(
+        `https://api.github.com/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repo)}/teams?per_page=100&page=${page}`,
+        { headers },
+      );
+      if (resp.status !== 200) {
+        if (resp.status !== 404) {
+          logger.warn("codeowners_repo_teams_api_error", {
+            team_path: `${teamOrg}/${teamSlug}`,
+            status: resp.status,
+            body: (await resp.text()).slice(0, 200),
+          });
+        }
+        return false;
+      }
+
+      const teams = (await resp.json()) as RepoTeamResponse[];
+      const match = teams.find(
+        (team) =>
+          team.slug === teamSlug && team.organization?.login?.toLowerCase() === teamOrg.toLowerCase(),
+      );
+      if (match) return teamRepoHasWriteAccess(match);
+      if (teams.length < 100) return false;
+    }
+  } catch (err) {
+    logger.errorWithException("codeowners_repo_teams_fetch_failed", err, {
+      team_path: `${teamOrg}/${teamSlug}`,
+    });
+    return false;
+  }
+}
+
+async function verifyCodeownersTeamGroups(
+  env: Env,
+  installationId: number,
+  owner: string,
+  repo: string,
+  actor: string,
+  groups: string[][],
+  logger: Logger,
+): Promise<boolean> {
+  let unscopedToken: string;
+  try {
+    unscopedToken = await generateInstallationToken(env, installationId);
+  } catch (err) {
+    logger.errorWithException("codeowners_team_token_failed", err);
+    return false;
+  }
+
+  for (const group of groups) {
+    let groupPassed = false;
+    for (const teamPath of group) {
+      if (typeof teamPath !== "string") continue;
+      if (await checkTeamMembership(unscopedToken, owner, repo, teamPath, actor, logger)) {
+        logger.info("codeowners_team_verified", { actor, team_path: teamPath });
+        groupPassed = true;
+        break;
+      }
+    }
+    if (!groupPassed) return false;
+  }
+
+  return true;
+}
+
 // Handler for GET /get_github_app_installation
 export async function handleGetInstallation(
   env: Env,
@@ -388,7 +626,7 @@ export async function handleGetInstallation(
 export async function handleExchangeToken(
   env: Env,
   authHeader: string | null,
-  body?: { permissions?: TokenPermissionsInput },
+  body?: ExchangeTokenRequestBody,
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
   const oidcToken = extractBearerToken(authHeader);
   if (!oidcToken) {
@@ -426,6 +664,46 @@ export async function handleExchangeToken(
     return Result.err(installationResult.error);
   }
   const { id: installationId, source: installationSource } = installationResult.value;
+
+  const codeownersTeamGroups = normalizeCodeownersTeamGroups(body);
+  if (codeownersTeamGroups === null) {
+    return Result.err(
+      new AuthorizationError({
+        message: "codeowners_teams is unsupported; use codeowners_team_groups",
+        reason: "invalid_format",
+      }),
+    );
+  }
+  if (codeownersTeamGroups.length > 0) {
+    const actor = body?.actor ?? claims.actor;
+    if (body?.actor && body.actor.toLowerCase() !== claims.actor.toLowerCase()) {
+      return Result.err(
+        new AuthorizationError({
+          message: "CODEOWNERS actor does not match OIDC actor",
+          reason: "invalid_format",
+        }),
+      );
+    }
+
+    const verified = await verifyCodeownersTeamGroups(
+      env,
+      installationId,
+      owner,
+      repo,
+      actor,
+      codeownersTeamGroups,
+      exchangeLog,
+    );
+    if (!verified) {
+      exchangeLog.warn("codeowners_team_denied", { actor, groups: codeownersTeamGroups });
+      return Result.err(
+        new AuthorizationError({
+          message: `${actor} is not a member of every required CODEOWNERS team group`,
+          reason: "no_write_access",
+        }),
+      );
+    }
+  }
 
   // Generate scoped token — use caller-provided permissions (clamped to defaults)
   const permissions = resolvePermissions(body?.permissions);

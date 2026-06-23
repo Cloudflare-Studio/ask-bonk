@@ -148,8 +148,13 @@ auth.post("/exchange_github_app_token", async (c) => {
   const authHeader = c.req.header("Authorization") ?? null;
 
   // Body is optional — callers may include { permissions } to scope the token.
-  // Accepts a preset name ("NO_PUSH", "WRITE") or a custom permissions object.
-  let body: { permissions?: import("./oidc").TokenPermissionsInput } = {};
+  // CODEOWNERS team groups are verified server-side because github.token does
+  // not have the org membership scope required for team membership APIs.
+  let body: {
+    permissions?: import("./oidc").TokenPermissionsInput;
+    codeowners_team_groups?: string[][];
+    actor?: string;
+  } = {};
   try {
     body = await c.req.json();
   } catch {

@@ -7,10 +7,10 @@ const DEFAULT_TIMEOUT = "45m";
 const DEFAULT_RETRIES = 2;
 const DEFAULT_BASE_DELAY_MS = 15_000;
 const OUTPUT_TAIL_LIMIT = 64_000;
+const STREAM_DRAIN_GRACE_MS = 1_000;
 
 const NON_RETRYABLE_EXIT_CODES = new Set([
-  124, // GNU timeout: command timed out
-  125, // GNU timeout internal failure
+  124, // opencode run timed out
   126, // command found but not executable
   127, // command not found
   130, // SIGINT
@@ -64,6 +64,7 @@ function parseDurationMs(value: string): number | null {
     case "h":
       return amount * 60 * 60 * 1000;
   }
+  return null;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -82,18 +83,40 @@ function rememberTail(current: string, chunk: string): string {
   return next.length > OUTPUT_TAIL_LIMIT ? next.slice(next.length - OUTPUT_TAIL_LIMIT) : next;
 }
 
+function killOpenCodeProcess(proc: BunSubprocess, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-proc.pid, signal);
+  } catch {
+    proc.kill(signal);
+  }
+}
+
 async function streamAndCapture(
   stream: ReadableStream<Uint8Array> | null,
   target: NodeJS.WriteStream,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!stream) return "";
 
   const decoder = new TextDecoder();
+  const reader = stream.getReader();
   let output = "";
+  const abort = () => {
+    void reader.cancel();
+  };
 
-  for await (const chunk of stream) {
-    target.write(chunk);
-    output = rememberTail(output, decoder.decode(chunk, { stream: true }));
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      target.write(value);
+      output = rememberTail(output, decoder.decode(value, { stream: true }));
+    }
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+  } finally {
+    signal?.removeEventListener("abort", abort);
   }
 
   output = rememberTail(output, decoder.decode());
@@ -101,24 +124,52 @@ async function streamAndCapture(
 }
 
 async function runOpenCodeAttempt(timeoutMs: number): Promise<OpenCodeFailure> {
-  const timeoutSeconds = `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`;
-  const proc = Bun.spawn(["timeout", timeoutSeconds, "opencode", "github", "run"], {
-    env: {
-      ...process.env,
-      USE_GITHUB_TOKEN: "true",
-      GITHUB_TOKEN: process.env.GH_TOKEN || "",
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    streamAndCapture(proc.stdout, process.stdout),
-    streamAndCapture(proc.stderr, process.stderr),
-    proc.exited,
+  let timedOut = false;
+  const controller = new AbortController();
+  let proc: BunSubprocess;
+  try {
+    proc = Bun.spawn(["opencode", "github", "run"], {
+      detached: true,
+      env: {
+        ...process.env,
+        USE_GITHUB_TOKEN: "true",
+        GITHUB_TOKEN: process.env.GH_TOKEN || "",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { exitCode: 127, output: error.message };
+    }
+    throw error;
+  }
+  const streamOutput = Promise.all([
+    streamAndCapture(proc.stdout, process.stdout, controller.signal),
+    streamAndCapture(proc.stderr, process.stderr, controller.signal),
   ]);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    killOpenCodeProcess(proc, "SIGTERM");
+    killOpenCodeProcess(proc, "SIGKILL");
+    controller.abort();
+  }, Math.max(1, timeoutMs));
 
-  return { exitCode, output: `${stdout}\n${stderr}` };
+  try {
+    const exitCode = await proc.exited;
+    clearTimeout(timeout);
+
+    const drainGrace = setTimeout(() => {
+      killOpenCodeProcess(proc, "SIGTERM");
+      killOpenCodeProcess(proc, "SIGKILL");
+      controller.abort();
+    }, STREAM_DRAIN_GRACE_MS);
+    const [stdout, stderr] = await streamOutput.finally(() => clearTimeout(drainGrace));
+
+    return { exitCode: timedOut ? 124 : exitCode, output: `${stdout}\n${stderr}` };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function writeExitCode(exitCode: number): void {
@@ -131,6 +182,12 @@ async function sleep(ms: number): Promise<void> {
 }
 
 export async function runOpenCodeWithRetry(): Promise<number> {
+  if (process.platform === "win32") {
+    console.error("Bonk GitHub Action requires a Linux or macOS runner.");
+    writeExitCode(126);
+    return 126;
+  }
+
   const timeoutMs = parseDurationMs(process.env.OPENCODE_TIMEOUT || DEFAULT_TIMEOUT) ??
     parseDurationMs(DEFAULT_TIMEOUT)!;
   const retries = parsePositiveInteger(process.env.OPENCODE_RETRIES, DEFAULT_RETRIES);

@@ -169,8 +169,12 @@ runs:
         echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
 
     - name: Configure Git
-      if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
+      if: |
+        success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
+        && steps.preflight.outputs.is_fork != 'true'
       shell: bash
+      env:
+        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
       run: |
         git config --global user.name "ask-bonk[bot]"
         git config --global user.email "ask-bonk[bot]@users.noreply.github.com"
@@ -178,13 +182,26 @@ runs:
         # local git config. Pushes authenticated with GITHUB_TOKEN don't trigger
         # downstream workflows (by design). The App installation token obtained
         # via OIDC exchange does trigger them.
-        if [ -n "${GH_TOKEN}" ]; then
+        if [ -n "${GH_TOKEN:-}" ]; then
           server_url="${GITHUB_SERVER_URL:-https://github.com}"
           host="${server_url#https://}"
           host="${host#http://}"
           git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
         fi
+
+    - name: Clear Git credentials for fork
+      if: |
+        success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
+        && steps.preflight.outputs.is_fork == 'true' && steps.preflight.outputs.run_opencode == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        server_url="${GITHUB_SERVER_URL:-https://github.com}"
+        host="${server_url#https://}"
+        host="${host#http://}"
+        git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
+        git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
 
     - name: Run opencode
       if: |
@@ -198,6 +215,7 @@ runs:
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
+        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
@@ -227,3 +245,14 @@ runs:
         # when the run was never tracked or was already removed from activeRuns.
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
       run: bun run ${{ github.action_path }}/script/finalize.ts
+
+    - name: Cleanup Git credentials
+      if: always() && steps.mentions.outputs.skip != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        server_url="${GITHUB_SERVER_URL:-https://github.com}"
+        host="${server_url#https://}"
+        host="${host#http://}"
+        git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
+        git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true

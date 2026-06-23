@@ -12,6 +12,7 @@
     "deploy": "flue build --target cloudflare && wrangler deploy --config dist/ask_bonk/wrangler.json --var BONK_VERSION:\"$(git describe --tags --always)\" --var BONK_COMMIT:\"$(git rev-parse --short HEAD)\"",
     "dev": "flue dev --target cloudflare",
     "test": "vitest",
+    "typecheck:action": "tsc --noEmit -p tsconfig.github-action.json",
     "cf-typegen": "wrangler types",
     "cli:build": "bun build cli/index.ts --compile --outfile cli/bonk",
     "cli": "bun run cli/index.ts",

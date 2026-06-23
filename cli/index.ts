@@ -397,6 +397,9 @@ async function runWorkflow(
       PROMPT: config.prompt || "",
       CRON: config.cron || "0 0 * * 1",
       PERMISSIONS: config.permissions,
+      ACTION_PERMISSIONS: config.permissions === "read" ? "write" : config.permissions,
+      TOKEN_PERMISSIONS_INPUT:
+        config.permissions === "read" ? "          token_permissions: NO_PUSH" : "",
       BOT_COMMAND,
       BOT_MENTION,
       EVENTS: config.events

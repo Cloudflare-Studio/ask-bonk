@@ -150,11 +150,7 @@ auth.post("/exchange_github_app_token", async (c) => {
   // Body is optional — callers may include { permissions } to scope the token.
   // CODEOWNERS team groups are verified server-side because github.token does
   // not have the org membership scope required for team membership APIs.
-  let body: {
-    permissions?: import("./oidc").TokenPermissionsInput;
-    codeowners_team_groups?: string[][];
-    actor?: string;
-  } = {};
+  let body: unknown = {};
   try {
     body = await c.req.json();
   } catch {

@@ -334,6 +334,7 @@ export async function checkCodeowners(
 
   let hasWritePermission: boolean | undefined;
   const teamGroups: string[][] = [];
+  const teamGroupKeys = new Set<string>();
   for (const filename of changedFiles.paths) {
     const rule = findMatchingCodeownersRule(rules, filename);
     if (!rule) {
@@ -356,7 +357,11 @@ export async function checkCodeowners(
       continue;
     }
     if (rule.teams.length > 0) {
-      teamGroups.push(rule.teams);
+      const teamGroupKey = rule.teams.join("\0");
+      if (!teamGroupKeys.has(teamGroupKey)) {
+        teamGroupKeys.add(teamGroupKey);
+        teamGroups.push(rule.teams);
+      }
       continue;
     }
     if (!actorOwnsRule(rule, actor)) {

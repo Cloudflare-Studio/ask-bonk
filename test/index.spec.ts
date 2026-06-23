@@ -448,6 +448,10 @@ describe("CODEOWNERS team verification", () => {
   });
 
   it("rejects malformed team group shapes", () => {
+    expect(normalizeCodeownersTeamGroups(null as any)).toBeNull();
+    expect(normalizeCodeownersTeamGroups("x" as any)).toBeNull();
+    expect(normalizeCodeownersTeamGroups(1 as any)).toBeNull();
+    expect(normalizeCodeownersTeamGroups([] as any)).toBeNull();
     expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [] })).toBeNull();
     expect(
       normalizeCodeownersTeamGroups({ codeowners_team_groups: null } as any),
@@ -464,6 +468,20 @@ describe("CODEOWNERS team verification", () => {
     ).toBeNull();
     expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [[]] })).toBeNull();
     expect(normalizeCodeownersTeamGroups({ codeowners_team_groups: [[""]] })).toBeNull();
+  });
+
+  it("dedupes normalized team groups", () => {
+    expect(
+      normalizeCodeownersTeamGroups({
+        codeowners_team_groups: [
+          ["org/security"],
+          [" org/security "],
+          ["org/platform", "org/platform"],
+          ["org/release", "org/docs"],
+          ["org/docs", "org/release"],
+        ],
+      }),
+    ).toEqual([["org/security"], ["org/platform"], ["org/release", "org/docs"]]);
   });
 
   it("rejects secret teams", async () => {

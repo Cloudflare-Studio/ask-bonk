@@ -272,7 +272,7 @@ const PERMISSION_RANK: Record<string, number> = { read: 0, write: 1 };
 // - Custom object → merged with defaults; each key clamped to min(default, requested)
 // - Unknown preset name → NO_PUSH (fail-closed; no existing callers to protect)
 // - Non-object / array → NO_PUSH (fail-closed against untrusted JSON)
-export function resolvePermissions(requested?: TokenPermissionsInput): Required<TokenPermissions> {
+export function resolvePermissions(requested?: unknown): Required<TokenPermissions> {
   if (!requested) return { ...DEFAULT_TOKEN_PERMISSIONS };
 
   // Preset name — fail-closed: unrecognized presets get the most restrictive preset
@@ -282,7 +282,7 @@ export function resolvePermissions(requested?: TokenPermissionsInput): Required<
   }
 
   // Reject non-plain-objects (arrays, numbers, etc. from untrusted JSON)
-  if (typeof requested !== "object" || Array.isArray(requested)) {
+  if (!isRecord(requested)) {
     return { ...PERMISSION_PRESETS.NO_PUSH };
   }
 
@@ -403,17 +403,37 @@ function teamRepoHasWriteAccess(teamRepo: TeamRepoResponse | undefined): boolean
   );
 }
 
-export function normalizeCodeownersTeamGroups(body?: ExchangeTokenRequestBody): string[][] | null {
-  if (body && "codeowners_team_groups" in body) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeCodeownersTeamGroups(body?: unknown): string[][] | null {
+  if (body === undefined) return [];
+  if (!isRecord(body)) return null;
+
+  if ("codeowners_team_groups" in body) {
     const rawGroups = body.codeowners_team_groups;
     if (!Array.isArray(rawGroups) || rawGroups.length === 0) return null;
     const groups: string[][] = [];
+    const groupKeys = new Set<string>();
     for (const group of rawGroups) {
       if (!Array.isArray(group) || group.length === 0) return null;
-      if (group.some((teamPath) => typeof teamPath !== "string" || !teamPath.trim())) {
-        return null;
+      const normalizedGroup: string[] = [];
+      const teamPaths = new Set<string>();
+      for (const teamPath of group) {
+        if (typeof teamPath !== "string") return null;
+        const normalizedTeamPath = teamPath.trim();
+        if (!normalizedTeamPath) return null;
+        if (!teamPaths.has(normalizedTeamPath)) {
+          teamPaths.add(normalizedTeamPath);
+          normalizedGroup.push(normalizedTeamPath);
+        }
       }
-      groups.push(group);
+      const groupKey = [...normalizedGroup].sort().join("\0");
+      if (!groupKeys.has(groupKey)) {
+        groupKeys.add(groupKey);
+        groups.push(normalizedGroup);
+      }
     }
     return groups;
   }
@@ -626,7 +646,7 @@ export async function handleGetInstallation(
 export async function handleExchangeToken(
   env: Env,
   authHeader: string | null,
-  body?: ExchangeTokenRequestBody,
+  body?: unknown,
 ): Promise<Result<ExchangeTokenResponse, TokenExchangeError>> {
   const oidcToken = extractBearerToken(authHeader);
   if (!oidcToken) {
@@ -675,8 +695,10 @@ export async function handleExchangeToken(
     );
   }
   if (codeownersTeamGroups.length > 0) {
-    const actor = body?.actor ?? claims.actor;
-    if (body?.actor && body.actor.toLowerCase() !== claims.actor.toLowerCase()) {
+    const requestBody = isRecord(body) ? body : {};
+    const requestedActor = typeof requestBody.actor === "string" ? requestBody.actor : undefined;
+    const actor = requestedActor ?? claims.actor;
+    if (requestedActor && requestedActor.toLowerCase() !== claims.actor.toLowerCase()) {
       return Result.err(
         new AuthorizationError({
           message: "CODEOWNERS actor does not match OIDC actor",
@@ -706,7 +728,8 @@ export async function handleExchangeToken(
   }
 
   // Generate scoped token — use caller-provided permissions (clamped to defaults)
-  const permissions = resolvePermissions(body?.permissions);
+  const requestBody = isRecord(body) ? body : {};
+  const permissions = resolvePermissions(requestBody.permissions);
 
   return Result.tryPromise({
     try: async () => {
@@ -719,7 +742,7 @@ export async function handleExchangeToken(
       exchangeLog.info("token_exchanged", {
         installation_id: installationId,
         installation_source: installationSource,
-        requested_permissions: body?.permissions,
+        requested_permissions: requestBody.permissions,
         resolved_permissions: permissions,
       });
 

@@ -390,6 +390,40 @@ src @src-owner
     fetchMock.mockRestore();
     exit.mockRestore();
   });
+
+  it("dedupes repeated CODEOWNERS team groups before server verification", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 2, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: Buffer.from("src/** @org/security").toString("base64") }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ filename: "src/a.ts" }, { filename: "src/b.ts" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ permission: "write" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).resolves.toEqual({ teamGroups: [["org/security"]] });
+  });
 });
 
 describe("GitHub Action OIDC base URL", () => {

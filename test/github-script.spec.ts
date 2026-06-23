@@ -149,6 +149,10 @@ describe("GitHub Action preflight prompt", () => {
 });
 
 describe("GitHub Action CODEOWNERS matching", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("uses the last matching rule for changed files", () => {
     const rules = parseCodeowners(`
 * @global-owner
@@ -351,6 +355,136 @@ src @src-owner
     expect(findMatchingCodeownersRule(rules, "src/config.prod/key.yml")?.owners).toEqual([
       "security-owner",
     ]);
+  });
+
+  it("fails closed on unsupported CODEOWNERS pattern syntax during authorization", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 1, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: Buffer.from("!/secrets @security-owner").toString("base64") }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).rejects.toThrow("exit:1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails closed on unsupported CODEOWNERS owners during authorization", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 1, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: Buffer.from("src/** security@example.com").toString("base64") }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ filename: "src/app.ts" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).rejects.toThrow("exit:1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("requires write permission for ownerless CODEOWNERS overrides", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 1, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: Buffer.from("/apps/ @alice\n/apps/github").toString("base64") }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ filename: "apps/github/action.ts" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ permission: "read" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).rejects.toThrow("exit:1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("allows ownerless CODEOWNERS overrides when the actor has write permission", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ changed_files: 1, base: { sha: "base-sha" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ content: Buffer.from("/apps/ @alice\n/apps/github").toString("base64") }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ filename: "apps/github/action.ts" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ permission: "write" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await expect(
+      withEnv({ PR_NUMBER: "1", ISSUE_NUMBER: undefined }, () =>
+        checkCodeowners("owner", "repo", "main", "alice", "token"),
+      ),
+    ).resolves.toEqual({ teamGroups: [] });
   });
 
   it("does not fall through empty higher-priority CODEOWNERS files", async () => {

@@ -212,3 +212,10 @@ export interface SetupWorkflowRequest {
   issue_number: number;
   default_branch: string;
 }
+
+// Context object passed to Flue convention-based workflow run() functions.
+// Mirrors the old @flue/runtime FlueContext type that was removed in beta.7.
+export interface FlueContext<TPayload, TEnv> {
+  env: TEnv;
+  payload: TPayload;
+}

@@ -1,7 +1,6 @@
-import type { FlueContext } from "@flue/runtime";
 import { runFinalizeWorkflowJob, type FinalizeWorkflowJobPayload } from "../github-workflow-jobs";
 import { internalWorkflowRoute } from "../internal-workflows";
-import type { Env } from "../types";
+import type { Env, FlueContext } from "../types";
 
 export const route = internalWorkflowRoute;
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Result } from "better-result";
-import { configureFlueRuntime, type FlueRuntime } from "@flue/runtime/internal";
+import { configureFlueRuntime, type CloudflareRuntime } from "@flue/runtime/internal";
 import { internalWorkflowRoute } from "../src/internal-workflows";
 import type { Env } from "../src/types";
 import type { GitHubActionsJWTClaims } from "../src/oidc";
@@ -52,23 +52,24 @@ function createClaims(owner = "test-org", repo = "test-repo"): GitHubActionsJWTC
   };
 }
 
-function configureWorkflowForwarder(routeWorkflowRequest: FlueRuntime["routeWorkflowRequest"]) {
+// Minimal stub satisfying the WorkflowDefinition brand check
+const stubDefinition = { __flueWorkflowDefinition: true as const };
+
+function configureWorkflowForwarder(routeWorkflowRequest: CloudflareRuntime["routeWorkflowRequest"]) {
   configureFlueRuntime({
     target: "cloudflare",
-    manifest: {
-      agents: [],
-      workflows: [
-        { name: "github-setup", transports: { http: true } },
-        { name: "github-track", transports: { http: true } },
-        { name: "github-finalize", transports: { http: true } },
-      ],
-    },
-    workflowRouteMiddleware: {
-      "github-setup": internalWorkflowRoute,
-      "github-track": internalWorkflowRoute,
-      "github-finalize": internalWorkflowRoute,
-    },
+    agents: [],
+    workflows: [
+      { name: "github-setup", definition: stubDefinition, route: internalWorkflowRoute },
+      { name: "github-track", definition: stubDefinition, route: internalWorkflowRoute },
+      { name: "github-finalize", definition: stubDefinition, route: internalWorkflowRoute },
+    ],
+    admitWorkflow: async () => ({ runId: "stub-run-id" }),
+    dispatchQueue: { enqueue: async () => ({ dispatchId: "stub" }) },
     routeWorkflowRequest,
+    routeAgentRequest: async () => null,
+    routeRunRequest: async () => null,
+    createRunIndexForRequest: () => undefined,
   });
 }
 
@@ -91,7 +92,7 @@ describe("GitHub API workflow compatibility routes", () => {
         default_branch: "main",
       });
       return Response.json({ result: { status: 200, body: { exists: true } } });
-    }) satisfies NonNullable<FlueRuntime["routeWorkflowRequest"]>;
+    }) satisfies NonNullable<CloudflareRuntime["routeWorkflowRequest"]>;
     configureWorkflowForwarder(forwarded);
     const { default: app } = await import("../src/app");
 
@@ -127,7 +128,7 @@ describe("GitHub API workflow compatibility routes", () => {
         actor: "octocat",
       });
       return Response.json({ result: { status: 200, body: { ok: true } } });
-    }) satisfies NonNullable<FlueRuntime["routeWorkflowRequest"]>;
+    }) satisfies NonNullable<CloudflareRuntime["routeWorkflowRequest"]>;
     configureWorkflowForwarder(forwarded);
     const { default: app } = await import("../src/app");
 
@@ -165,7 +166,7 @@ describe("GitHub API workflow compatibility routes", () => {
       return Response.json({
         result: { status: 200, body: { ok: true, warning: "agent unavailable" } },
       });
-    }) satisfies NonNullable<FlueRuntime["routeWorkflowRequest"]>;
+    }) satisfies NonNullable<CloudflareRuntime["routeWorkflowRequest"]>;
     configureWorkflowForwarder(forwarded);
     const { default: app } = await import("../src/app");
 

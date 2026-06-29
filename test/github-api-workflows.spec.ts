@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Result } from "better-result";
+import { defineAgent, defineWorkflow } from "@flue/runtime";
 import { configureFlueRuntime, type FlueRuntime } from "@flue/runtime/internal";
 import { internalWorkflowRoute } from "../src/internal-workflows";
 import type { Env } from "../src/types";
@@ -53,23 +54,40 @@ function createClaims(owner = "test-org", repo = "test-repo"): GitHubActionsJWTC
 }
 
 function configureWorkflowForwarder(routeWorkflowRequest: FlueRuntime["routeWorkflowRequest"]) {
-  configureFlueRuntime({
-    target: "cloudflare",
-    manifest: {
-      agents: [],
-      workflows: [
-        { name: "github-setup", transports: { http: true } },
-        { name: "github-track", transports: { http: true } },
-        { name: "github-finalize", transports: { http: true } },
-      ],
+  const workflow = defineWorkflow({
+    agent: defineAgent(() => ({ model: "anthropic/claude-haiku-4-5" })),
+    run() {
+      return undefined;
     },
-    workflowRouteMiddleware: {
-      "github-setup": internalWorkflowRoute,
-      "github-track": internalWorkflowRoute,
-      "github-finalize": internalWorkflowRoute,
+  });
+  const runtime: FlueRuntime = {
+    target: "cloudflare",
+    agents: [],
+    workflows: [
+      { name: "github-setup", definition: workflow, route: internalWorkflowRoute },
+      { name: "github-track", definition: workflow, route: internalWorkflowRoute },
+      { name: "github-finalize", definition: workflow, route: internalWorkflowRoute },
+    ],
+    dispatchQueue: {
+      async enqueue(input) {
+        return { dispatchId: input.dispatchId, acceptedAt: input.acceptedAt };
+      },
+    },
+    async admitWorkflow() {
+      return { runId: "test-run" };
+    },
+    async routeAgentRequest() {
+      return null;
     },
     routeWorkflowRequest,
-  });
+    async routeRunRequest() {
+      return null;
+    },
+    createRunIndexForRequest() {
+      return undefined;
+    },
+  };
+  configureFlueRuntime(runtime);
 }
 
 describe("GitHub API workflow compatibility routes", () => {

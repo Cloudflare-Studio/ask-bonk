@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last verified: 2026-06-22.
+Last verified: 2026-07-03.
 
 GitHub code review bot built on Cloudflare Workers, Flue, Hono, Durable Objects, and TypeScript. Use `bun` only.
 
@@ -9,6 +9,7 @@ GitHub code review bot built on Cloudflare Workers, Flue, Hono, Durable Objects,
 ```bash
 bun install --frozen-lockfile                    # CI install; use after dependency changes to verify lockfile
 bun install                                      # update bun.lock after package.json changes
+bun update                                       # update dependencies within package.json ranges
 bun run tsc --noEmit                             # typecheck Worker app
 bun run test                                     # Vitest in Workers pool; do not use `bun test`
 bun run test -- test/index.spec.ts               # focused test file
@@ -24,6 +25,15 @@ bun run cli                                      # interactive installer/workflo
 Before considering a code change complete, run at least `bun run tsc --noEmit`, `bun run test`, and `bun run lint`. For Flue, Worker config, dependency, or deploy-path changes, also run `bun run build`, `bunx wrangler types --check`, and the generated-config dry-run deploy above.
 
 When `package.json` changes, run `bun install` and commit `package.json` with `bun.lock`. CI uses `bun install --frozen-lockfile`.
+
+## Dependency Updates
+
+- Use `bun update` for routine dependency refreshes. Keep updates within the existing `package.json` ranges unless the task explicitly asks for range or major-version changes.
+- Commit both `package.json` and `bun.lock` whenever resolved dependency versions change. If `package.json` was edited manually, run `bun install` to refresh `bun.lock` before validation.
+- For dependency PR summaries, list the packages that changed, call out major/minor changes and any packages intentionally excluded, and note source or test fixes required by dependency API changes.
+- Wrangler, Workerd, `@cloudflare/vitest-pool-workers`, Flue, binding, migration, compatibility-date, and `wrangler.jsonc` changes can all change generated Worker types. Run `bunx wrangler types` after these changes, commit `worker-configuration.d.ts` when it changes, then run `bunx wrangler types --check`.
+- Treat `worker-configuration.d.ts` header-only runtime changes as real generated output. Recent Wrangler updates have failed checks until the generated `workerd@...` version in this file was refreshed.
+- Dependency update PRs must pass `bun install --frozen-lockfile`, `bun run tsc --noEmit`, `bun run test`, `bun run lint`, `bun run build`, `bunx wrangler types --check`, and the generated-config dry-run deploy command before they are complete.
 
 ## Architecture
 

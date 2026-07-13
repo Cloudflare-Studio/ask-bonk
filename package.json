@@ -28,7 +28,7 @@
     "@octokit/plugin-throttling": "^11.0.3",
     "@octokit/rest": "^22.0.1",
     "agents": "^0.16.2",
-    "ai": "^6.0.224",
+    "ai": "^6.0.225",
     "better-result": "^2.9.2",
     "hono": "4.12.26",
     "jose": "^6.2.3",

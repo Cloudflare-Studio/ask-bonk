@@ -28,7 +28,7 @@
     "@octokit/plugin-throttling": "^11.0.3",
     "@octokit/rest": "^22.0.1",
     "agents": "^0.17.4",
-    "ai": "^7.0.26",
+    "ai": "^7.0.28",
     "better-result": "^2.9.2",
     "hono": "4.12.30",
     "jose": "^6.2.3",
@@ -42,7 +42,7 @@
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^26.1.1",
     "oxfmt": "^0.58.0",
-    "oxlint": "^1.73.0",
+    "oxlint": "^1.74.0",
     "typescript": "^7.0.2",
     "vitest": "~4.1.10",
     "wrangler": "^4.110.0"

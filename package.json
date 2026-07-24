@@ -48,6 +48,7 @@
     "wrangler": "^4.113.0"
   },
   "overrides": {
-    "hono": "4.12.30"
+    "hono": "4.12.30",
+    "@cloudflare/vite-plugin": "^1.47.0"
   }
 }

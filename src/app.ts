@@ -71,7 +71,7 @@ function isPullRequestDelivery(delivery: GitHubWebhookDelivery): boolean {
 }
 
 const app = new Hono<{ Bindings: Env }>();
-const flueApp = flue() as unknown as Hono<{ Bindings: Env }>;
+const flueApp = flue();
 type GitHubChannelEnv = { Bindings: Env };
 
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
@@ -349,7 +349,6 @@ apiGithub.put("/track", async (c) => {
 });
 
 app.route("/api/github", apiGithub);
-// Flue ships its own Hono dependency; the runtime route is structurally compatible at runtime.
 app.route("/", flueApp);
 
 export default app;

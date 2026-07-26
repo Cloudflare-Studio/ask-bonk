@@ -2,9 +2,9 @@ import { defineWorkflow } from "@flue/runtime";
 import * as v from "valibot";
 import { runFinalizeWorkflowJob, type FinalizeWorkflowJobPayload } from "../github-workflow-jobs";
 import {
+  getInternalWorkflowEnv,
   internalWorkflowAgent,
   internalWorkflowRoute,
-  runInternalWorkflowJob,
   workflowJobResultSchema,
 } from "../internal-workflows";
 
@@ -22,9 +22,10 @@ export default defineWorkflow({
     actor: v.optional(v.string()),
   }),
   output: workflowJobResultSchema,
-  async run(context) {
-    return await runInternalWorkflowJob(context, (env) =>
-      runFinalizeWorkflowJob(env, context.input satisfies FinalizeWorkflowJobPayload),
+  async run({ input }) {
+    return await runFinalizeWorkflowJob(
+      getInternalWorkflowEnv(),
+      input satisfies FinalizeWorkflowJobPayload,
     );
   },
 });

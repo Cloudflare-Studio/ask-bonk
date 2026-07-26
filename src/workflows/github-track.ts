@@ -2,9 +2,9 @@ import { defineWorkflow } from "@flue/runtime";
 import * as v from "valibot";
 import { runTrackWorkflowJob, type TrackWorkflowJobPayload } from "../github-workflow-jobs";
 import {
+  getInternalWorkflowEnv,
   internalWorkflowAgent,
   internalWorkflowRoute,
-  runInternalWorkflowJob,
   workflowJobResultSchema,
 } from "../internal-workflows";
 
@@ -25,9 +25,10 @@ export default defineWorkflow({
     actor: v.optional(v.string()),
   }),
   output: workflowJobResultSchema,
-  async run(context) {
-    return await runInternalWorkflowJob(context, (env) =>
-      runTrackWorkflowJob(env, context.input satisfies TrackWorkflowJobPayload),
+  async run({ input }) {
+    return await runTrackWorkflowJob(
+      getInternalWorkflowEnv(),
+      input satisfies TrackWorkflowJobPayload,
     );
   },
 });

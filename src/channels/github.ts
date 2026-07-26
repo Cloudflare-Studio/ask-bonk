@@ -11,15 +11,25 @@ export function createGitHubWebhookChannel(webhookSecret: string) {
   });
 }
 
-// Reuse upstream conversationKey/parseConversationKey behavior while replacing
-// the route below so this sentinel secret is never used for webhook verification.
-const conversationKeyChannel = createGitHubWebhookChannel("route-overridden");
+let conversationKeyChannel: GitHubChannel<GitHubChannelEnv> | undefined;
+
+function getConversationKeyChannel(): GitHubChannel<GitHubChannelEnv> {
+  // Cloudflare rejects runtime-only APIs during module initialization. Create
+  // the unguessable fallback lazily, and never mount its generated route.
+  conversationKeyChannel ??= createGitHubWebhookChannel(crypto.randomUUID());
+  return conversationKeyChannel;
+}
 
 // Resolve the secret from Worker bindings inside the handler. Secrets may not be
 // available through process.env during module initialization, and global-scope
 // fallbacks must not accept a public webhook secret.
 export const channel: GitHubChannel<GitHubChannelEnv> = {
-  ...conversationKeyChannel,
+  conversationKey(ref) {
+    return getConversationKeyChannel().conversationKey(ref);
+  },
+  parseConversationKey(id) {
+    return getConversationKeyChannel().parseConversationKey(id);
+  },
   routes: [
     {
       method: "POST",

@@ -28,16 +28,16 @@
     "@octokit/plugin-throttling": "^11.0.3",
     "@octokit/rest": "^22.0.1",
     "agents": "^0.17.4",
-    "ai": "^7.0.34",
+    "ai": "^7.0.37",
     "better-result": "^2.10.0",
     "hono": "4.12.30",
     "jose": "^6.2.4",
-    "shescape": "^3.0.0",
+    "shescape": "^3.0.1",
     "ulid": "^3.0.2",
     "valibot": "^1.4.2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.7",
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
     "@flue/cli": "^1.0.0-beta.9",
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^26.1.1",
@@ -45,7 +45,7 @@
     "oxlint": "^1.75.0",
     "typescript": "^7.0.2",
     "vitest": "~4.1.10",
-    "wrangler": "^4.113.0"
+    "wrangler": "^4.114.0"
   },
   "overrides": {
     "hono": "4.12.30",

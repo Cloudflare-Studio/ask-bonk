@@ -1,4 +1,5 @@
-import { defineAgent, type ActionContext, type ActionInputSchema, type WorkflowRouteHandler } from "@flue/runtime";
+import { defineAgent, type WorkflowRouteHandler } from "@flue/runtime";
+import { getCloudflareContext } from "@flue/runtime/cloudflare";
 import * as v from "valibot";
 import type { Env } from "./types";
 
@@ -9,15 +10,10 @@ export const workflowJobResultSchema = v.object({
   body: v.any(),
 });
 
-const workflowEnvs = new Map<string, Env>();
-
-export const internalWorkflowAgent = defineAgent<Env>(({ env, id }) => {
-  workflowEnvs.set(id, env);
-  return {
-    // Internal workflows are code-only, but Flue requires a resolvable model to initialize them.
-    model: "anthropic/claude-haiku-4-5",
-  };
-});
+export const internalWorkflowAgent = defineAgent(() => ({
+  // Internal workflows are code-only, but Flue requires a resolvable model to initialize them.
+  model: "anthropic/claude-haiku-4-5",
+}));
 
 // Internal compatibility routes call Flue workflows in-process. External callers
 // must continue to use the OIDC-protected /api/github/* routes.
@@ -42,23 +38,28 @@ export function internalWorkflowHeaders(): Headers {
   });
 }
 
-export async function runInternalWorkflowJob<T>(
-  context: ActionContext<ActionInputSchema>,
-  job: (env: Env) => Promise<T>,
-): Promise<T> {
-  const runId = Reflect.get(context.harness, "instanceId");
-  if (typeof runId !== "string") {
-    throw new Error("Internal workflow harness is missing its run id");
-  }
+function isInternalWorkflowEnv(value: unknown): value is Env {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "REPO_AGENT" in value &&
+    "APP_INSTALLATIONS" in value &&
+    "RATE_LIMITER" in value &&
+    "BONK_EVENTS" in value &&
+    "GITHUB_APP_ID" in value &&
+    "GITHUB_APP_PRIVATE_KEY" in value &&
+    "GITHUB_WEBHOOK_SECRET" in value &&
+    "DEFAULT_MODEL" in value &&
+    "ALLOWED_ORGS" in value &&
+    "BONK_VERSION" in value &&
+    "BONK_COMMIT" in value
+  );
+}
 
-  const env = workflowEnvs.get(runId);
-  if (!env) {
+export function getInternalWorkflowEnv(): Env {
+  const env = getCloudflareContext().env;
+  if (!isInternalWorkflowEnv(env)) {
     throw new Error("Internal workflow env is unavailable");
   }
-
-  try {
-    return await job(env);
-  } finally {
-    workflowEnvs.delete(runId);
-  }
+  return env;
 }

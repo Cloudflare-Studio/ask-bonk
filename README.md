@@ -14,7 +14,7 @@ It's a code (and docs!) review agent that responds to mentions in issues and PRs
 
 ## Installation
 
-> :bangbang: The hosted Bonk instance only runs for allowlisted organizations. Other installations are automatically rejected. The app & action are public as GitHub doesn't support an allowlist for app installs: just same-org or "anyone".
+> :bangbang: The hosted Bonk instance only runs on a handful of repos (`elithrar/*`, `cloudflare/*`, and `ask-bonk/*`). Installing Bonk on repositories outside these orgs will result in the installation being automatically rejected. The app & action are public as GitHub doesn't support an allowlist for app installs: just same-org or "anyone".
 
 > **To use Bonk on your own repos**, you'll need to create your own GitHub app and [self-host](#self-hosting) your own instance.
 

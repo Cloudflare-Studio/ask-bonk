@@ -279,6 +279,16 @@ describe("GitHub Action OpenCode configuration", () => {
     expect(result.instructions).toEqual(["/action/bonk_guidance.md"]);
   });
 
+  it("does not choose a default agent for the consumer", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md"),
+    );
+
+    expect(result).toEqual({
+      instructions: ["/action/bonk_guidance.md"],
+    });
+  });
+
   it("rejects invalid instruction configuration", () => {
     expect(() =>
       buildOpenCodeConfigContent('{"instructions":"docs/review.md"}', "/action/bonk_guidance.md"),

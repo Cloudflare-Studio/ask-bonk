@@ -10,7 +10,7 @@ inputs:
     required: true
 
   agent:
-    description: "Set the agent to use for this workflow. Falls back to the default_agent if set in config, else 'build'"
+    description: "Legacy OpenCode agent input. Current OpenCode uses default_agent from consumer config, then 'build'."
     required: false
 
   prompt:

@@ -281,7 +281,7 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON                        | No       |
 | `opencode_version`   | Pin to a specific OpenCode version (e.g., `"1.2.16"`). Defaults to `"latest"`.   | No       |
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
-| `agent`              | OpenCode agent to use                                                            | No       |
+| `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
 | `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
 
 ### OpenCode Config

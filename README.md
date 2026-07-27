@@ -6,7 +6,7 @@
 
 Just `/bonk` it.
 
-It's a code (and docs!) review agent that responds to mentions in issues and PRs. Built on [OpenCode](https://github.com/sst/opencode), Bonk can review code, answer questions about your codebase, and make changes directly by opening PRs and telling you where you can do better.
+It's a code (and docs!) review agent that responds to mentions in issues and PRs. Built on [OpenCode](https://github.com/anomalyco/opencode) and [Flue](https://flueframework.com/), Bonk can review code, answer questions about your codebase, and make changes directly by opening PRs and telling you where you can do better.
 
 - **Code & doc review** - Get feedback on PRs, explain code, or ask questions about your repo just by mentioning `/bonk` in an issue, PR comment or even line comments.
 - **Make changes** - Bonk can edit files and create PRs from issues and update PRs.
@@ -75,7 +75,7 @@ jobs:
 
 #### 3. Add Your API Key
 
-Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and variables** > **Actions**) - [get one here](https://opencode.ai/api-keys)
+Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and variables** > **Actions**) - [get one here](https://opencode.ai/auth)
 
 #### 4. Start Using Bonk
 
@@ -286,16 +286,14 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 
 ### OpenCode Config
 
-For advanced configuration (custom providers, system prompts, custom tools, etc.), create `.opencode/opencode.jsonc` in your repository. See [OpenCode docs](https://opencode.ai/docs/config) for all options.
+For advanced configuration (custom providers, system prompts, custom tools, etc.), create `opencode.jsonc` in your repository root. See [OpenCode docs](https://opencode.ai/docs/config) for all options.
 
 ```jsonc
 {
   "provider": {
     "anthropic": {},
   },
-  "model": {
-    "default": "anthropic/claude-sonnet-4-20250514",
-  },
+  "model": "openai/gpt-5.6-sol",
 }
 ```
 
@@ -313,7 +311,7 @@ You'll need to [create a GitHub App](https://docs.github.com/en/apps/creating-gi
 - Pull requests: Read & Write
 - Workflows: Read & Write
 
-Subscribe to webhook events: Issue comments, Pull request review comments, Pull request reviews.
+Subscribe to webhook events: Issue comments, Pull request review comments, Pull request reviews, Workflow runs.
 
 Required secrets (set via `wrangler secret put`):
 

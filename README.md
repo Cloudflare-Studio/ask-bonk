@@ -293,7 +293,7 @@ For advanced configuration (custom providers, system prompts, custom tools, etc.
   "provider": {
     "anthropic": {},
   },
-  "model": "anthropic/claude-sonnet-4-20250514",
+  "model": "openai/gpt-5.6-sol",
 }
 ```
 

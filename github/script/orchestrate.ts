@@ -8,8 +8,6 @@
 // Still executed via `bun run` — no pre-bundled dist/ needed.
 // finalize.ts remains separate because it runs with `if: always()`.
 
-import { readFileSync } from "fs";
-import { join } from "path";
 import { pathToFileURL } from "url";
 import {
   getContext,
@@ -629,94 +627,120 @@ async function resolveHeadSha(
     const pr = (await resp.json()) as { head?: { sha?: string } };
     return pr.head?.sha || "";
   } catch {
-    // Best-effort: HEAD SHA is used for fork guidance context only.
+    // Best-effort: HEAD SHA is used for inline review context only.
     // Missing SHA means inline review comments may not anchor correctly,
     // but the workflow can still proceed.
     return "";
   }
 }
 
-function buildForkGuidance(prNumber: string, owner: string, repo: string, headSha: string): string {
-  const actionPath = process.env.ACTION_PATH;
-  if (!actionPath) {
-    core.warning("ACTION_PATH not set, using minimal fork guidance");
-    return `This PR is from a fork. You are in comment-only mode for PR #${prNumber} in ${owner}/${repo}. Do not attempt git write operations.`;
-  }
-
-  let guidance: string;
-  try {
-    guidance = readFileSync(join(actionPath, "fork_guidance.md"), "utf-8");
-  } catch (error) {
-    core.warning(`Could not read fork_guidance.md: ${error}`);
-    return `This PR is from a fork. You are in comment-only mode for PR #${prNumber} in ${owner}/${repo}. Do not attempt git write operations.`;
-  }
-
-  if (!headSha) {
-    core.warning("Could not resolve HEAD SHA for fork PR; inline review comments may fail");
-  }
-
-  guidance = guidance.replace(/\{\{PR_NUMBER\}\}/g, prNumber);
-  guidance = guidance.replace(/\{\{OWNER\}\}/g, owner);
-  guidance = guidance.replace(/\{\{REPO\}\}/g, repo);
-  guidance = guidance.replace(/\{\{HEAD_SHA\}\}/g, headSha || "UNKNOWN");
-
-  return guidance.trim();
-}
-
 interface PromptResult {
   isFork: boolean;
   detectionFailed: boolean;
+  mode: "review-only" | "write-capable";
   value: string;
+}
+
+function requestedTokenPermissions(): unknown {
+  const rawPermissions = process.env.TOKEN_PERMISSIONS;
+  if (!rawPermissions?.trim()) return undefined;
+  return parseTokenPermissions(rawPermissions) ?? "NO_PUSH";
+}
+
+function tokenAllowsContentWrites(requested: unknown): boolean {
+  if (!requested) return true;
+  if (typeof requested === "string") return requested.toUpperCase() === "WRITE";
+  if (typeof requested !== "object" || requested === null || Array.isArray(requested)) return false;
+
+  const permissions = requested as Record<string, unknown>;
+  const knownKeys = ["contents", "issues", "pull_requests", "metadata"];
+  const hasAcceptedValue = knownKeys.some(
+    (key) => permissions[key] === "read" || permissions[key] === "write",
+  );
+  if (Object.keys(permissions).length > 0 && !hasAcceptedValue) return false;
+  return permissions.contents !== "read";
+}
+
+function escapePromptValue(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function resolveUserRequest(): string {
+  const userPrompt = process.env.USER_PROMPT?.trim();
+  if (userPrompt) return userPrompt;
+
+  const commentPrompt = extractMentionPrompt(
+    process.env.COMMENT_BODY || process.env.REVIEW_BODY,
+    process.env.MENTIONS,
+  );
+  if (commentPrompt) return commentPrompt;
+
+  if (process.env.EVENT_NAME === "pull_request") {
+    return "Review this pull request.";
+  }
+  if (process.env.EVENT_NAME === "issues") {
+    return "Triage this issue and recommend the next concrete step.";
+  }
+  return "";
 }
 
 export async function buildPrompt(): Promise<PromptResult> {
   const detection = await detectFork();
-
-  const parts: string[] = [];
-
   const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
   const repository = process.env.REPOSITORY || "";
   const [owner = "", repo = ""] = repository.split("/");
+  const writeCapable = tokenAllowsContentWrites(requestedTokenPermissions());
+  const mode = detection.isFork || !writeCapable ? "review-only" : "write-capable";
+  const userRequest = resolveUserRequest();
 
+  let headSha = "";
   if (detection.isFork) {
-    const headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
-
-    if (!prNumber || !owner || !repo) {
-      core.warning("Cannot determine PR context for fork guidance; using minimal guidance");
-      parts.push(
-        "This PR is from a fork. You are in comment-only mode. Do not attempt git write operations.",
-      );
-    } else {
-      parts.push(buildForkGuidance(prNumber, owner, repo, headSha));
+    headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
+    if (!headSha) {
+      core.warning("Could not resolve HEAD SHA for fork PR; inline review comments may fail");
     }
-
-    core.info("PR is from a fork. Fork guidance prompt built.");
-  } else if (process.env.PR_NUMBER && owner && repo) {
-    // Prevent the model from inferring a stale PR from git state.
-    // See: https://github.com/ask-bonk/ask-bonk/issues/148
-    parts.push(
-      `You are working on PR #${process.env.PR_NUMBER} in ${owner}/${repo}. When posting reviews or comments, always target PR #${process.env.PR_NUMBER}.`,
-    );
-    core.info(`Non-fork PR context set: ${owner}/${repo}#${process.env.PR_NUMBER}`);
+    core.info("PR is from a fork. Review-only prompt context built.");
   }
 
-  const userPrompt = process.env.USER_PROMPT?.trim();
-  if (userPrompt) {
-    parts.push(userPrompt);
-  } else {
-    const commentPrompt = extractMentionPrompt(
-      process.env.COMMENT_BODY || process.env.REVIEW_BODY,
-      process.env.MENTIONS,
-    );
-    if (commentPrompt) {
-      parts.push(commentPrompt);
-    }
+  // Preserve OpenCode's required-prompt check for scheduled and dispatch runs.
+  if (!userRequest) {
+    return {
+      isFork: detection.isFork,
+      detectionFailed: detection.detectionFailed ?? false,
+      mode,
+      value: "",
+    };
   }
+
+  const target = process.env.PR_NUMBER
+    ? `pull_request #${process.env.PR_NUMBER}`
+    : prNumber
+      ? `issue #${prNumber}`
+      : "repository";
+  const modeReason = detection.isFork
+    ? "fork pull request"
+    : writeCapable
+      ? "installation token permits content writes"
+      : "installation token has read-only contents permission";
+  const contextLines = [
+    "<bonk_execution_context>",
+    `repository: ${escapePromptValue(owner && repo ? `${owner}/${repo}` : repository || "unknown")}`,
+    `event: ${escapePromptValue(process.env.EVENT_NAME || "unknown")}`,
+    `target: ${escapePromptValue(target)}`,
+    `mode: ${mode}`,
+    `mode_reason: ${modeReason}`,
+  ];
+  if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
+  contextLines.push("</bonk_execution_context>");
 
   return {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
-    value: parts.join("\n\n"),
+    mode,
+    value: [
+      contextLines.join("\n"),
+      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
+    ].join("\n\n"),
   };
 }
 
@@ -1027,6 +1051,7 @@ async function main() {
 
   if (promptResult.detectionFailed) {
     core.setOutput("is_fork", String(promptResult.isFork));
+    core.setOutput("mode", promptResult.mode);
     core.setOutput("value", promptResult.value);
     return core.setFailed("Fork status could not be verified; refusing to proceed.");
   }
@@ -1038,6 +1063,7 @@ async function main() {
 
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
+  core.setOutput("mode", promptResult.mode);
   core.setOutput("value", promptResult.value);
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
   if (oidcResult.token) {

@@ -14,7 +14,7 @@ inputs:
     required: false
 
   prompt:
-    description: "Custom prompt to override the default prompt"
+    description: "Task prompt for scheduled/dispatch runs, or an override for the triggering request"
     required: false
 
   mentions:
@@ -138,7 +138,6 @@ runs:
         COMMENT_BODY: ${{ github.event.comment.body }}
         REVIEW_BODY: ${{ github.event.review.body }}
         MENTIONS: ${{ inputs.mentions }}
-        ACTION_PATH: ${{ github.action_path }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # fork-comment
         FORKS: ${{ inputs.forks }}
@@ -171,7 +170,7 @@ runs:
     - name: Configure Git
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-        && steps.preflight.outputs.is_fork != 'true'
+        && steps.preflight.outputs.mode == 'write-capable'
       shell: bash
       env:
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
@@ -190,10 +189,11 @@ runs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
         fi
 
-    - name: Clear Git credentials for fork
+    - name: Clear Git write credentials for review-only run
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-        && steps.preflight.outputs.is_fork == 'true' && steps.preflight.outputs.run_opencode == 'true'
+        && steps.preflight.outputs.mode == 'review-only'
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
       run: |
         set -euo pipefail
@@ -215,6 +215,7 @@ runs:
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
+        BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}

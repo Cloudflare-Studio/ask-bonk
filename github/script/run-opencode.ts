@@ -1,5 +1,6 @@
 // Runs OpenCode with a small bounded retry for transient provider/session drops.
 
+import { existsSync } from "fs";
 import { pathToFileURL } from "url";
 import { appendGitHubValue } from "./context";
 
@@ -45,6 +46,37 @@ export function isRetryableOpenCodeFailure({ exitCode, output }: OpenCodeFailure
   if (exitCode === 0 || NON_RETRYABLE_EXIT_CODES.has(exitCode)) return false;
   if (GITHUB_CANCELLATION_PATTERNS.some((pattern) => pattern.test(output))) return false;
   return RETRYABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+}
+
+export function buildOpenCodeConfigContent(
+  existingContent: string | undefined,
+  guidancePath: string,
+): string {
+  let config: Record<string, unknown> = {};
+  if (existingContent?.trim()) {
+    const bunRuntime = (globalThis as { Bun?: { JSONC?: { parse(value: string): unknown } } }).Bun;
+    const parsed = bunRuntime?.JSONC
+      ? bunRuntime.JSONC.parse(existingContent)
+      : (JSON.parse(existingContent) as unknown);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("OPENCODE_CONFIG_CONTENT must contain a JSON object");
+    }
+    config = { ...(parsed as Record<string, unknown>) };
+  }
+
+  const configuredInstructions = config.instructions;
+  if (
+    configuredInstructions !== undefined &&
+    (!Array.isArray(configuredInstructions) ||
+      configuredInstructions.some((instruction) => typeof instruction !== "string"))
+  ) {
+    throw new Error("OPENCODE_CONFIG_CONTENT instructions must be an array of strings");
+  }
+
+  config.instructions = Array.from(
+    new Set([...((configuredInstructions as string[] | undefined) ?? []), guidancePath]),
+  );
+  return JSON.stringify(config);
 }
 
 function parseDurationMs(value: string): number | null {
@@ -123,7 +155,10 @@ async function streamAndCapture(
   return output;
 }
 
-async function runOpenCodeAttempt(timeoutMs: number): Promise<OpenCodeFailure> {
+async function runOpenCodeAttempt(
+  timeoutMs: number,
+  configContent: string,
+): Promise<OpenCodeFailure> {
   let timedOut = false;
   const controller = new AbortController();
   let proc: BunSubprocess;
@@ -134,6 +169,7 @@ async function runOpenCodeAttempt(timeoutMs: number): Promise<OpenCodeFailure> {
         ...process.env,
         USE_GITHUB_TOKEN: "true",
         GITHUB_TOKEN: process.env.GH_TOKEN || "",
+        OPENCODE_CONFIG_CONTENT: configContent,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -188,6 +224,26 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     return 126;
   }
 
+  const guidancePath = process.env.BONK_GUIDANCE_PATH;
+  if (!guidancePath || !existsSync(guidancePath)) {
+    console.error("Bonk harness guidance file is missing.");
+    writeExitCode(2);
+    return 2;
+  }
+
+  let configContent: string;
+  try {
+    configContent = buildOpenCodeConfigContent(process.env.OPENCODE_CONFIG_CONTENT, guidancePath);
+  } catch (error) {
+    console.error(
+      `Could not add Bonk harness guidance to OpenCode config: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    writeExitCode(2);
+    return 2;
+  }
+
   const timeoutMs = parseDurationMs(process.env.OPENCODE_TIMEOUT || DEFAULT_TIMEOUT) ??
     parseDurationMs(DEFAULT_TIMEOUT)!;
   const retries = parsePositiveInteger(process.env.OPENCODE_RETRIES, DEFAULT_RETRIES);
@@ -205,7 +261,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
       console.log(`Retrying opencode github run (${attempt}/${maxAttempts})`);
     }
 
-    const result = await runOpenCodeAttempt(remainingMs);
+    const result = await runOpenCodeAttempt(remainingMs, configContent);
 
     if (result.exitCode === 0) {
       writeExitCode(result.exitCode);

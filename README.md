@@ -269,7 +269,7 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 ## Config
 
-Bonk is configured via your workflow file and OpenCode's config. There are no built-in defaults beyond what you specify.
+Bonk is configured via your workflow file and OpenCode's config. Its built-in harness guidance keeps OpenCode on the triggering target, delegates commit/push/PR lifecycle to `opencode github run`, and applies review-only behavior when repository writes are unavailable. Repository instructions and custom OpenCode instructions still apply.
 
 ### Workflow Inputs
 
@@ -281,8 +281,8 @@ Bonk is configured via your workflow file and OpenCode's config. There are no bu
 | `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON                        | No       |
 | `opencode_version`   | Pin to a specific OpenCode version (e.g., `"1.2.16"`). Defaults to `"latest"`.   | No       |
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
-| `agent`              | OpenCode agent to use                                                            | No       |
-| `prompt`             | Custom prompt (for scheduled/dispatch workflows)                                 | No       |
+| `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
+| `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
 
 ### OpenCode Config
 

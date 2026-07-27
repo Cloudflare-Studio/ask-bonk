@@ -251,7 +251,7 @@ describe("GitHub Action preflight prompt", () => {
 });
 
 describe("GitHub Action OpenCode configuration", () => {
-  it("adds Bonk guidance without replacing repository-provided instructions", () => {
+  it("adds Bonk guidance without replacing consumer configuration", () => {
     const result = JSON.parse(
       buildOpenCodeConfigContent(
         `{
@@ -273,12 +273,10 @@ describe("GitHub Action OpenCode configuration", () => {
       buildOpenCodeConfigContent(
         '{"instructions":["/action/bonk_guidance.md"]}',
         "/action/bonk_guidance.md",
-        "  security-review  ",
       ),
     );
 
     expect(result.instructions).toEqual(["/action/bonk_guidance.md"]);
-    expect(result.default_agent).toBe("security-review");
   });
 
   it("rejects invalid instruction configuration", () => {

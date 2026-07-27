@@ -51,7 +51,6 @@ export function isRetryableOpenCodeFailure({ exitCode, output }: OpenCodeFailure
 export function buildOpenCodeConfigContent(
   existingContent: string | undefined,
   guidancePath: string,
-  agent: string | undefined = undefined,
 ): string {
   let config: Record<string, unknown> = {};
   if (existingContent?.trim()) {
@@ -77,9 +76,6 @@ export function buildOpenCodeConfigContent(
   config.instructions = Array.from(
     new Set([...((configuredInstructions as string[] | undefined) ?? []), guidancePath]),
   );
-  if (agent?.trim()) {
-    config.default_agent = agent.trim();
-  }
   return JSON.stringify(config);
 }
 
@@ -237,11 +233,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
 
   let configContent: string;
   try {
-    configContent = buildOpenCodeConfigContent(
-      process.env.OPENCODE_CONFIG_CONTENT,
-      guidancePath,
-      process.env.AGENT,
-    );
+    configContent = buildOpenCodeConfigContent(process.env.OPENCODE_CONFIG_CONTENT, guidancePath);
   } catch (error) {
     console.error(
       `Could not add Bonk harness guidance to OpenCode config: ${

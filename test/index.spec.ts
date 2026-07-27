@@ -692,6 +692,14 @@ describe("PAT Exchange Security", () => {
 // ---------------------------------------------------------------------------
 
 describe("Webhook Verification", () => {
+  it("preserves Flue's canonical GitHub conversation keys", () => {
+    const ref = { owner: "test-org", repo: "test-repo", issueNumber: 123 };
+    const key = githubChannel.conversationKey(ref);
+
+    expect(key).toBe("github:v1:owner:test-org:repo:test-repo:issue:123");
+    expect(githubChannel.parseConversationKey(key)).toEqual(ref);
+  });
+
   it("rejects requests without the JSON webhook content type", async () => {
     const env = createMockEnv();
     const channelApp = createGitHubChannelApp(env.GITHUB_WEBHOOK_SECRET);

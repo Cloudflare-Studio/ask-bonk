@@ -2,9 +2,9 @@ import { defineWorkflow } from "@flue/runtime";
 import * as v from "valibot";
 import { runSetupWorkflowJob } from "../github-workflow-jobs";
 import {
+  getInternalWorkflowEnv,
   internalWorkflowAgent,
   internalWorkflowRoute,
-  runInternalWorkflowJob,
   workflowJobResultSchema,
 } from "../internal-workflows";
 
@@ -19,7 +19,7 @@ export default defineWorkflow({
     default_branch: v.string(),
   }),
   output: workflowJobResultSchema,
-  async run(context) {
-    return await runInternalWorkflowJob(context, (env) => runSetupWorkflowJob(env, context.input));
+  async run({ input }) {
+    return await runSetupWorkflowJob(getInternalWorkflowEnv(), input);
   },
 });

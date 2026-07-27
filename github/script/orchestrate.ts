@@ -694,11 +694,13 @@ export async function buildPrompt(): Promise<PromptResult> {
   const userRequest = resolveUserRequest();
 
   let headSha = "";
-  if (detection.isFork) {
+  if (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER)) {
     headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
     if (!headSha) {
-      core.warning("Could not resolve HEAD SHA for fork PR; inline review comments may fail");
+      core.warning("Could not resolve PR HEAD SHA; inline review comments may fail");
     }
+  }
+  if (detection.isFork) {
     core.info("PR is from a fork. Review-only prompt context built.");
   }
 

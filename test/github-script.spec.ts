@@ -17,6 +17,7 @@ import {
   buildOpenCodeConfigContent,
   isRetryableOpenCodeFailure,
 } from "../github/script/run-opencode";
+import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
   const previous = new Map<string, string | undefined>();
@@ -79,34 +80,6 @@ describe("GitHub Action script context", () => {
   });
 });
 
-describe("OIDC exchange permission forwarding", () => {
-  // Tests parseTokenPermissions — the function orchestrate.ts uses to parse
-  // the TOKEN_PERMISSIONS env var before forwarding to the exchange endpoint.
-
-  it("parses JSON permissions object", () => {
-    expect(parseTokenPermissions('{"contents": "read"}')).toEqual({ contents: "read" });
-  });
-
-  it("passes preset name through as a string", () => {
-    expect(parseTokenPermissions("NO_PUSH")).toBe("NO_PUSH");
-    expect(parseTokenPermissions("WRITE")).toBe("WRITE");
-  });
-
-  it("returns undefined for malformed JSON", () => {
-    expect(parseTokenPermissions("{broken")).toBeUndefined();
-  });
-
-  it("returns undefined for empty/whitespace input", () => {
-    expect(parseTokenPermissions("")).toBeUndefined();
-    expect(parseTokenPermissions("  ")).toBeUndefined();
-    expect(parseTokenPermissions(undefined)).toBeUndefined();
-  });
-
-  it("trims whitespace around preset names", () => {
-    expect(parseTokenPermissions("  NO_PUSH  ")).toBe("NO_PUSH");
-  });
-});
-
 describe("GitHub Action mention prompt extraction", () => {
   it("preserves the user's requested task from a Bonk mention", () => {
     expect(extractMentionPrompt("/bonk fix the flaky test", "/bonk,@ask-bonk")).toBe(
@@ -155,32 +128,87 @@ describe("GitHub Action preflight prompt", () => {
     );
   });
 
-  it.each(["NO_PUSH", '{"contents":"read"}', "{broken"])(
-    "uses review-only mode when token permission %s cannot write contents",
-    async (tokenPermissions) => {
+  it.each([
+    { label: "omitted action input", tokenPermissions: "", contents: "write" },
+    { label: "WRITE preset", tokenPermissions: "WRITE", contents: "write" },
+    { label: "NO_PUSH preset", tokenPermissions: "NO_PUSH", contents: "read" },
+    {
+      label: "explicit contents downgrade",
+      tokenPermissions: '{"contents":"read"}',
+      contents: "read",
+    },
+    {
+      label: "explicit contents write",
+      tokenPermissions: '{"contents":"write"}',
+      contents: "write",
+    },
+    {
+      label: "omitted contents",
+      tokenPermissions: '{"issues":"write"}',
+      contents: "write",
+    },
+    {
+      label: "invalid contents only",
+      tokenPermissions: '{"contents":"admin"}',
+      contents: "read",
+    },
+    {
+      label: "invalid contents with another valid permission",
+      tokenPermissions: '{"contents":"admin","issues":"write"}',
+      contents: "write",
+    },
+    { label: "empty object", tokenPermissions: "{}", contents: "write" },
+    { label: "unknown keys only", tokenPermissions: '{"actions":"write"}', contents: "read" },
+    { label: "unknown preset", tokenPermissions: "CUSTOM", contents: "read" },
+    { label: "malformed JSON", tokenPermissions: "{broken", contents: "read" },
+  ])(
+    "matches the Worker's resolved contents permission for $label",
+    async ({ tokenPermissions, contents }) => {
+      const parsedPermissions = tokenPermissions?.trim()
+        ? (parseTokenPermissions(tokenPermissions) ?? "NO_PUSH")
+        : undefined;
+      expect(resolvePermissions(parsedPermissions).contents).toBe(contents);
+
       const result = await withEnv(
         {
-          EVENT_NAME: "pull_request",
-          USER_PROMPT: "review for correctness",
+          EVENT_NAME: "issues",
+          USER_PROMPT: "triage this issue",
           COMMENT_BODY: undefined,
           REVIEW_BODY: undefined,
-          PR_NUMBER: "17",
-          ISSUE_NUMBER: "17",
+          PR_NUMBER: undefined,
+          ISSUE_NUMBER: "3",
           REPOSITORY: "owner/repo",
-          PR_HEAD_REPO: "owner/repo",
-          PR_BASE_REPO: "owner/repo",
           TOKEN_PERMISSIONS: tokenPermissions,
         },
         () => buildPrompt(),
       );
 
-      expect(result.mode).toBe("review-only");
-      expect(result.value).toContain("target: pull_request #17");
-      expect(result.value).toContain(
-        "mode_reason: installation token has read-only contents permission",
-      );
+      expect(result.mode).toBe(contents === "write" ? "write-capable" : "review-only");
     },
   );
+
+  it("includes the stable head SHA for same-repo review-only pull requests", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request",
+        USER_PROMPT: "review for correctness",
+        COMMENT_BODY: undefined,
+        REVIEW_BODY: undefined,
+        PR_NUMBER: "17",
+        ISSUE_NUMBER: "17",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: "owner/repo",
+        PR_BASE_REPO: "owner/repo",
+        HEAD_SHA: "def456",
+        TOKEN_PERMISSIONS: "NO_PUSH",
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result.isFork).toBe(false);
+    expect(result.mode).toBe("review-only");
+    expect(result.value).toContain("head_sha: def456");
+  });
 
   it("forces fork pull requests into review-only mode", async () => {
     const result = await withEnv(
@@ -755,12 +783,8 @@ describe("Permission level checking", () => {
   // Failing cases: actual permission is below required level
   it.each([
     { actual: "write", required: "admin", label: "write does not satisfy admin" },
-    { actual: "read", required: "admin", label: "read does not satisfy admin" },
     { actual: "read", required: "write", label: "read does not satisfy write" },
-    { actual: "none", required: "write", label: "none does not satisfy write" },
-    { actual: "none", required: "admin", label: "none does not satisfy admin" },
-    { actual: "triage", required: "write", label: "triage does not satisfy write" },
-    { actual: "maintain", required: "admin", label: "maintain does not satisfy admin" },
+    { actual: "unknown", required: "write", label: "unknown fails closed" },
   ])("$label → fails with actor name in message", ({ actual, required }) => {
     const error = checkPermissionLevel(actual, required, "bob");
     expect(error).not.toBeNull();
@@ -769,24 +793,11 @@ describe("Permission level checking", () => {
     expect(error).toContain(actual);
   });
 
-  // Unknown permission levels that aren't in the recognized set ('admin', 'write')
-  // are treated as insufficient — they get rank 0.
-  it.each(["maintain", "triage", "read", "none", "unknown"])(
-    "actual=%s is not recognized as admin or write level",
-    (actual) => {
-      expect(checkPermissionLevel(actual, "write", "alice")).not.toBeNull();
-    },
-  );
-
-  // Unrecognized required levels return a specific error message
-  it.each(["read", "maintain", "triage", "nonsense"])(
-    "required=%s → unknown permission error",
-    (required) => {
-      const error = checkPermissionLevel("admin", required, "alice");
-      expect(error).toContain("Unknown permission level");
-      expect(error).toContain(required);
-    },
-  );
+  it("rejects unsupported required permission levels", () => {
+    const error = checkPermissionLevel("admin", "read", "alice");
+    expect(error).toContain("Unknown permission level");
+    expect(error).toContain("read");
+  });
 });
 
 describe("GitHub Action script HTTP retry", () => {

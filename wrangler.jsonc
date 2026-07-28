@@ -1,15 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ask-bonk",
-  "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
-  "rules": [
-    {
-      "type": "Text",
-      "globs": ["**/*.hbs", "**/*.hbs?raw", "**/*.sql", "**/*.sql?raw"],
-      "fallthrough": true,
-    },
-  ],
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
@@ -50,6 +42,17 @@
     {
       "tag": "v7",
       "new_sqlite_classes": [
+        "FlueGithubSetupWorkflow",
+        "FlueGithubTrackWorkflow",
+        "FlueGithubFinalizeWorkflow",
+      ],
+    },
+    {
+      "tag": "v8",
+      "new_sqlite_classes": ["FlueBonkControlPlaneAgent"],
+      "deleted_classes": [
+        "FlueRegistry",
+        "FlueControlPlaneAgent",
         "FlueGithubSetupWorkflow",
         "FlueGithubTrackWorkflow",
         "FlueGithubFinalizeWorkflow",

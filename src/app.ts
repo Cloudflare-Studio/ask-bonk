@@ -1,13 +1,12 @@
 import { createGitHubChannel, type GitHubWebhookDelivery } from "@flue/github";
-import { flue } from "@flue/runtime/routing";
+import { instrument } from "@flue/runtime";
+import { createCloudflareTracing } from "@flue/runtime/cloudflare";
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
 import { ulid } from "ulid";
+import * as v from "valibot";
 import type {
   Env,
-  TrackWorkflowRequest,
-  FinalizeWorkflowRequest,
-  SetupWorkflowRequest,
   WorkflowRunPayload,
 } from "./types";
 import { deleteInstallation } from "./github";
@@ -31,8 +30,14 @@ import {
   eventsByActorQuery,
 } from "./metrics";
 import { log, createLogger, sanitizeSecrets } from "./log";
-import { internalWorkflowHeaders } from "./internal-workflows";
-import type { WorkflowJobResult } from "./github-workflow-jobs";
+import {
+  runFinalizeWorkflowJob,
+  runSetupWorkflowJob,
+  runTrackWorkflowJob,
+} from "./github-workflow-jobs";
+import { channel as githubChannel } from "./channels/github";
+
+instrument(createCloudflareTracing());
 
 const GITHUB_REPO_URL = "https://github.com/ask-bonk/ask-bonk";
 
@@ -56,6 +61,32 @@ const SUPPORTED_EVENTS = [
   ...META_EVENTS,
 ] as const;
 
+const setupWorkflowRequestSchema = v.object({
+  owner: v.string(),
+  repo: v.string(),
+  issue_number: v.number(),
+  default_branch: v.string(),
+});
+const trackWorkflowRequestSchema = v.object({
+  owner: v.string(),
+  repo: v.string(),
+  run_id: v.number(),
+  run_url: v.string(),
+  issue_number: v.number(),
+  created_at: v.string(),
+  comment_id: v.optional(v.number()),
+  review_comment_id: v.optional(v.number()),
+  issue_id: v.optional(v.number()),
+});
+const finalizeWorkflowRequestSchema = v.object({
+  owner: v.string(),
+  repo: v.string(),
+  run_id: v.number(),
+  status: v.picklist(["success", "failure", "cancelled", "skipped"]),
+  issue_number: v.optional(v.number()),
+  run_url: v.optional(v.string()),
+});
+
 function getDeliveryRepository(delivery: GitHubWebhookDelivery) {
   return "repository" in delivery.payload ? delivery.payload.repository : undefined;
 }
@@ -71,7 +102,6 @@ function isPullRequestDelivery(delivery: GitHubWebhookDelivery): boolean {
 }
 
 const app = new Hono<{ Bindings: Env }>();
-const flueApp = flue();
 type GitHubChannelEnv = { Bindings: Env };
 
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
@@ -124,6 +154,7 @@ stats.get("/actors", async (c) => {
 });
 
 app.route("/stats", stats);
+app.route("/channels/github", githubChannel.route());
 
 // Legacy GitHub App webhook URL. Keep this as an alias so existing app
 // configuration continues to work while Flue owns the canonical channel route.
@@ -235,48 +266,18 @@ function requireRepoMatch(
   return null;
 }
 
-async function runInternalWorkflow<TBody>(
-  requestUrl: string,
-  env: Env,
-  name: string,
-  payload: unknown,
-): Promise<WorkflowJobResult<TBody>> {
-  const url = new URL(requestUrl);
-  url.pathname = `/workflows/${name}`;
-  url.search = "?wait=result";
-
-  const response = await flueApp.fetch(
-    new Request(url, {
-      method: "POST",
-      headers: internalWorkflowHeaders(),
-      body: JSON.stringify(payload),
-    }),
-    env,
-  );
-
-  if (!response.ok) {
-    const message = sanitizeSecrets(await response.text());
-    return { status: 500, body: { error: message } as TBody };
-  }
-
-  const envelope = (await response.json()) as { result?: WorkflowJobResult<TBody> };
-  if (!envelope.result) {
-    return {
-      status: 500,
-      body: { error: "Workflow completed without a result" } as TBody,
-    };
-  }
-  return envelope.result;
-}
-
 // POST /api/github/setup - Check if workflow file exists, create PR if not
 apiGithub.post("/setup", async (c) => {
-  let body: SetupWorkflowRequest;
+  let input: unknown;
   try {
-    body = await c.req.json();
+    input = await c.req.json();
   } catch {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
+
+  const parsed = v.safeParse(setupWorkflowRequestSchema, input);
+  if (!parsed.success) return c.json({ error: "Invalid request body" }, 400);
+  const body = parsed.output;
 
   if (!body.owner || !body.repo || !body.issue_number || !body.default_branch) {
     return c.json(
@@ -290,18 +291,22 @@ apiGithub.post("/setup", async (c) => {
   const mismatch = requireRepoMatch(c.get("oidc"), body.owner, body.repo);
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
-  const result = await runInternalWorkflow(c.req.url, c.env, "github-setup", body);
+  const result = await runSetupWorkflowJob(c.env, body);
   return c.json(result.body, result.status);
 });
 
 // POST /api/github/track - Start tracking a workflow run
 apiGithub.post("/track", async (c) => {
-  let body: TrackWorkflowRequest;
+  let input: unknown;
   try {
-    body = await c.req.json();
+    input = await c.req.json();
   } catch {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
+
+  const parsed = v.safeParse(trackWorkflowRequestSchema, input);
+  if (!parsed.success) return c.json({ error: "Invalid request body" }, 400);
+  const body = parsed.output;
 
   if (
     !body.owner ||
@@ -323,18 +328,22 @@ apiGithub.post("/track", async (c) => {
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
   const actor = c.get("oidc").claims.actor;
-  const result = await runInternalWorkflow(c.req.url, c.env, "github-track", { ...body, actor });
+  const result = await runTrackWorkflowJob(c.env, { ...body, actor });
   return c.json(result.body, result.status);
 });
 
 // PUT /api/github/track - Finalize tracking a workflow run
 apiGithub.put("/track", async (c) => {
-  let body: FinalizeWorkflowRequest;
+  let input: unknown;
   try {
-    body = await c.req.json();
+    input = await c.req.json();
   } catch {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
+
+  const parsed = v.safeParse(finalizeWorkflowRequestSchema, input);
+  if (!parsed.success) return c.json({ error: "Invalid request body" }, 400);
+  const body = parsed.output;
 
   if (!body.owner || !body.repo || !body.run_id || !body.status) {
     return c.json({ error: "Missing required fields: owner, repo, run_id, status" }, 400);
@@ -344,12 +353,11 @@ apiGithub.put("/track", async (c) => {
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
   const actor = c.get("oidc").claims.actor;
-  const result = await runInternalWorkflow(c.req.url, c.env, "github-finalize", { ...body, actor });
+  const result = await runFinalizeWorkflowJob(c.env, { ...body, actor });
   return c.json(result.body, result.status);
 });
 
 app.route("/api/github", apiGithub);
-app.route("/", flueApp);
 
 export default app;
 

@@ -692,12 +692,12 @@ describe("PAT Exchange Security", () => {
 // ---------------------------------------------------------------------------
 
 describe("Webhook Verification", () => {
-  it("preserves Flue's canonical GitHub conversation keys", () => {
+  it("preserves Flue's canonical GitHub instance IDs", () => {
     const ref = { owner: "test-org", repo: "test-repo", issueNumber: 123 };
-    const key = githubChannel.conversationKey(ref);
+    const id = githubChannel.instanceId(ref);
 
-    expect(key).toBe("github:v1:owner:test-org:repo:test-repo:issue:123");
-    expect(githubChannel.parseConversationKey(key)).toEqual(ref);
+    expect(id).toBe("github:v1:owner:test-org:repo:test-repo:issue:123");
+    expect(githubChannel.parseInstanceId(id)).toEqual(ref);
   });
 
   it("rejects requests without the JSON webhook content type", async () => {

@@ -1,4 +1,5 @@
 import { createGitHubChannel, type GitHubChannel } from "@flue/github";
+import { createChannelRouter } from "@flue/runtime";
 import { handleGitHubDelivery } from "../app";
 import type { Env } from "../types";
 
@@ -11,24 +12,24 @@ export function createGitHubWebhookChannel(webhookSecret: string) {
   });
 }
 
-let conversationKeyChannel: GitHubChannel<GitHubChannelEnv> | undefined;
+let instanceIdChannel: GitHubChannel<GitHubChannelEnv> | undefined;
 
-function getConversationKeyChannel(): GitHubChannel<GitHubChannelEnv> {
+function getInstanceIdChannel(): GitHubChannel<GitHubChannelEnv> {
   // Cloudflare rejects runtime-only APIs during module initialization. Create
   // the unguessable fallback lazily, and never mount its generated route.
-  conversationKeyChannel ??= createGitHubWebhookChannel(crypto.randomUUID());
-  return conversationKeyChannel;
+  instanceIdChannel ??= createGitHubWebhookChannel(crypto.randomUUID());
+  return instanceIdChannel;
 }
 
 // Resolve the secret from Worker bindings inside the handler. Secrets may not be
 // available through process.env during module initialization, and global-scope
 // fallbacks must not accept a public webhook secret.
 export const channel: GitHubChannel<GitHubChannelEnv> = {
-  conversationKey(ref) {
-    return getConversationKeyChannel().conversationKey(ref);
+  instanceId(ref) {
+    return getInstanceIdChannel().instanceId(ref);
   },
-  parseConversationKey(id) {
-    return getConversationKeyChannel().parseConversationKey(id);
+  parseInstanceId(id) {
+    return getInstanceIdChannel().parseInstanceId(id);
   },
   routes: [
     {
@@ -46,4 +47,7 @@ export const channel: GitHubChannel<GitHubChannelEnv> = {
       },
     },
   ],
+  route() {
+    return createChannelRouter(channel.routes);
+  },
 };

@@ -87,8 +87,8 @@ jobs:
 
             1. Focus on actual violations and bugs. Where possible, comment on the exact line number to help guide the reviewer.
             2. Break up "needs fixing" (real logic bugs, poor error handling, security issues) vs. "suggestions" (nested logic, unused code, code structure/maintenance guidance) when responding so that a human has clear, actionable feedback.
-            3. Use the gh cli to create comments on the files (or line numbers) where relevant. Use suggestions to suggest fixes, especially where you have high-confidence in the fix. Ensure fixes are valid code and take into account the surrounding code (opening/closing braces, indentation, comments). ALWAYS leave the final "review" comment empty.
-            4. Your summary will be posted as a comment for you by OpenCode.
+            3. Use the gh cli only for precise inline comments where relevant. Submit them together in one review with an empty review body. Use suggestions for high-confidence fixes, ensuring they are valid code and account for surrounding braces, indentation, and comments. If there are no actionable inline findings, do not create a review.
+            4. Return your summary as the final response. OpenCode posts it as the top-level PR comment; never post a top-level comment, review summary, or non-empty review body yourself.
 
             In general, aim to provide actionable comments > code suggestions.
 

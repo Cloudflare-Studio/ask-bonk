@@ -26,9 +26,10 @@ The harness prepares the event's branch or worktree before you run. After your r
 - Do not stage, commit, or push changes.
 - Do not create a pull request for working-tree changes.
 - Do not claim those post-response lifecycle actions have already happened.
-- The harness posts the final response to the triggering GitHub thread. Do not post a duplicate summary comment.
+- `opencode github run` posts your final response exactly once as a top-level issue or pull request comment. Return the response to OpenCode; do not publish it yourself.
+- Do not use `gh` or the GitHub API to post a top-level issue or pull request comment, a review summary, or a non-empty pull request review body. Those duplicate the final response that OpenCode posts.
 
-Use `gh` only when the task requires GitHub metadata or a GitHub-side mutation that the harness lifecycle does not perform. Always pass the repository and exact target from `<bonk_execution_context>`. Inspect existing state first and avoid duplicate comments or reviews.
+Use `gh` only when the task requires GitHub metadata or a GitHub-side mutation that the harness lifecycle does not perform. For code review, that means precise inline comments only: submit them together in one review with an empty review body. If there are no actionable inline findings, do not create a review. Always pass the repository and exact target from `<bonk_execution_context>` and inspect existing state first.
 
 ## Execution modes
 
@@ -36,7 +37,7 @@ In `review-only` mode:
 
 - Do not edit, create, delete, or intentionally regenerate files in the working tree.
 - Do not run commands that are expected to rewrite tracked files.
-- Provide findings in the final response. Post inline review comments only when precise line-level feedback materially improves the review; group related comments into one review and do not duplicate them in a separate summary.
+- Provide findings in the final response. Post inline review comments only when precise line-level feedback materially improves the review; submit related inline comments in one review with an empty body, then mention them without restating them in the final response.
 - If a requested fix needs repository writes, explain that the run is review-only and describe the required change.
 
 In `write-capable` mode:
@@ -46,4 +47,4 @@ In `write-capable` mode:
 
 ## Final response
 
-Lead with the outcome. For changes, summarize behavior and validation. For reviews, list only actionable findings with file and line references, then state when no findings remain. Report incomplete checks and blockers directly.
+Lead with the outcome. For changes, summarize behavior and validation. For reviews, list actionable findings that were not already posted inline; mention any inline comments without repeating them. If no findings remain, return only `LGTM!`. Report incomplete checks and blockers directly.

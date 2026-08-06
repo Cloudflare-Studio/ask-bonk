@@ -3,10 +3,12 @@
 
 import { execFileSync } from "node:child_process";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { core, exchangeGitHubAppToken, parseCodeownersTeamGroups } from "./context";
 
-function git(args: string[]): string {
+function git(args: string[], cwd = process.cwd()): string {
   return execFileSync(
     "/usr/bin/git",
     [
@@ -21,6 +23,7 @@ function git(args: string[]): string {
     {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      cwd,
       env: {
         PATH: process.env.PATH,
         LANG: process.env.LANG,
@@ -32,6 +35,53 @@ function git(args: string[]): string {
       },
     },
   ).trim();
+}
+
+function readGitPathState(path: string): Uint8Array {
+  if (!existsSync(path)) {
+    return Buffer.from("missing\0");
+  }
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    return Buffer.from(`symlink\0${readlinkSync(path)}\0`);
+  }
+  if (!stat.isFile()) throw new Error(`Unexpected Git control path type: ${path}`);
+  return Buffer.concat([Buffer.from("file\0"), readFileSync(path)]);
+}
+
+export function digestGitControlState(
+  parts: Readonly<Record<string, string | Uint8Array>>,
+): string {
+  const hash = createHash("sha256");
+  for (const key of Object.keys(parts).sort()) {
+    const value = parts[key];
+    hash.update(`${key.length}:${key}:`);
+    hash.update(`${typeof value === "string" ? Buffer.byteLength(value) : value.byteLength}:`);
+    hash.update(value);
+  }
+  return hash.digest("hex");
+}
+
+// Pi owns worktree edits, not Git state. Snapshot the effective local config,
+// index semantics, and repository-local exclude/attribute controls so Finalize
+// can reject attempts to influence its trusted Git commands.
+export function gitControlStateDigest(cwd = process.cwd()): string {
+  const parts: Record<string, string | Uint8Array> = {
+    localConfig: git(
+      ["config", "--local", "--includes", "--null", "--list", "--show-origin"],
+      cwd,
+    ),
+    indexStage: git(["ls-files", "--stage", "-z"], cwd),
+    indexFlags: git(["ls-files", "-v", "-z"], cwd),
+  };
+  for (const path of ["info/exclude", "info/attributes", "info/sparse-checkout"]) {
+    const absolutePath = git(
+      ["rev-parse", "--path-format=absolute", "--git-path", path],
+      cwd,
+    );
+    parts[`gitPath:${path}`] = readGitPathState(absolutePath);
+  }
+  return digestGitControlState(parts);
 }
 
 function repositoryRemote(): string {
@@ -159,8 +209,10 @@ export function prepareWorktree(): PreparedWorktree {
     }
 
     const baseSha = git(["rev-parse", "HEAD"]);
+    const gitStateDigest = gitControlStateDigest();
     core.setOutput("base_sha", baseSha);
     core.setOutput("branch", branch);
+    core.setOutput("git_state_digest", gitStateDigest);
     core.info(`Prepared ${branch} at ${baseSha}`);
     return { baseSha, branch };
   } finally {

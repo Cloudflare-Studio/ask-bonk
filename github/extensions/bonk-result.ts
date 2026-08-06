@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 // Keep the extension independent of a repository dependency on Pi. The Action
@@ -172,6 +172,9 @@ export default function bonkResultExtension(pi: ExtensionAPI): void {
       mkdirSync(dirname(resultPath), { recursive: true });
       const temporaryPath = `${resultPath}.${process.pid}.tmp`;
       writeFileSync(temporaryPath, `${JSON.stringify(result)}\n`, { mode: 0o600 });
+      // Some Node-compatible filesystems do not honor the create mode passed
+      // to writeFileSync, so enforce it before the atomic rename as well.
+      chmodSync(temporaryPath, 0o600);
       renameSync(temporaryPath, resultPath);
 
       return {

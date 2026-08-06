@@ -236,6 +236,7 @@ runs:
         RUN_MODE: ${{ steps.preflight.outputs.mode }}
         INITIAL_SHA: ${{ steps.worktree.outputs.base_sha }}
         LOCAL_BRANCH: ${{ steps.worktree.outputs.branch }}
+        INITIAL_GIT_STATE_DIGEST: ${{ steps.worktree.outputs.git_state_digest }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.preflight.outputs.head_sha }}

@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -10,6 +10,7 @@ import {
   getApiBaseUrl,
   exchangeGitHubAppToken,
   parseCodeownersTeamGroups,
+  validatePiVersion,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 import {
@@ -26,11 +27,15 @@ import {
   isFailedAssistantMessage,
   isRetryablePiFailure,
   loadAgentPrompt,
+  runPiWithRetry,
   shouldApproveProject,
 } from "../github/script/run-pi";
-import { parseBonkResult } from "../github/extensions/bonk-result";
+import bonkResultExtension, { parseBonkResult } from "../github/extensions/bonk-result";
+import { digestGitControlState } from "../github/script/prepare-worktree";
 import {
   assertResultMatchesWorktree,
+  assertPullRequestPushAllowed,
+  normalizePiStatus,
   publishReview,
   publishTopLevelResponse,
 } from "../github/script/finalize";
@@ -94,6 +99,13 @@ describe("GitHub Action script context", () => {
       "token",
     );
     expect(result).toEqual({ isFork: true, headSha: "abc" });
+  });
+
+  it("accepts only latest or semver-shaped Pi versions", () => {
+    expect(validatePiVersion(undefined)).toBe("latest");
+    expect(validatePiVersion(" latest ")).toBe("latest");
+    expect(validatePiVersion("0.83.0-beta.1")).toBe("0.83.0-beta.1");
+    expect(validatePiVersion("latest; echo unsafe")).toBe("latest");
   });
 });
 
@@ -472,6 +484,38 @@ describe("GitHub Action Pi configuration", () => {
     expect(environment).not.toHaveProperty("RUN_MODE");
     expect(environment).not.toHaveProperty("INPUT_OIDC_BASE_URL");
   });
+
+  it.each([
+    ["missing prompt", { PROMPT: undefined }],
+    ["invalid system context", { SYSTEM_CONTEXT: "not-json" }],
+    ["missing model", { MODEL: undefined }],
+    ["invalid agent name", { AGENT: "../reviewer" }],
+  ])("fails before launching Pi for %s", async (_label, override) => {
+    const directory = mkdtempSync(join(tmpdir(), "bonk-pi-preflight-"));
+    const guidancePath = join(directory, "guidance.md");
+    writeFileSync(guidancePath, "Bonk guidance");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const exitCode = await withEnv(
+        {
+          BONK_GUIDANCE_PATH: guidancePath,
+          BONK_ACTION_PATH: directory,
+          BONK_RESULT_PATH: join(directory, "result.json"),
+          PROMPT: "Review this",
+          SYSTEM_CONTEXT: '{"target":"pull_request #1"}',
+          MODEL: "anthropic/test",
+          AGENT: undefined,
+          GITHUB_OUTPUT: undefined,
+          ...override,
+        },
+        () => runPiWithRetry(),
+      );
+      expect(exitCode).toBe(2);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GitHub Action structured result contract", () => {
@@ -491,6 +535,29 @@ describe("GitHub Action structured result contract", () => {
       body: "Posted one inline finding.",
       findings: [{ path: "src/app.ts", line: 8, endLine: 10, severity: "error", body: "Fix this." }],
     });
+  });
+
+  it("writes and validates the structured result through the Bonk extension", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bonk-result-"));
+    const resultPath = join(directory, "result.json");
+    let execute!: (toolCallId: string, params: unknown) => Promise<unknown>;
+    bonkResultExtension({
+      registerTool(tool) {
+        execute = tool.execute;
+      },
+    });
+
+    try {
+      await withEnv({ BONK_RESULT_PATH: resultPath }, () =>
+        execute("call-1", { kind: "answer", body: "Completed." }),
+      );
+      expect(JSON.parse(readFileSync(resultPath, "utf8"))).toEqual({
+        kind: "answer",
+        body: "Completed.",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects traversal paths and malformed result variants", () => {
@@ -514,6 +581,34 @@ describe("GitHub Action structured result contract", () => {
     expect(() =>
       assertResultMatchesWorktree({ kind: "change", body: "Done." }, "write-capable", ""),
     ).toThrow("without worktree changes");
+  });
+
+  it("normalizes a skipped Run step to a reported failure", () => {
+    expect(normalizePiStatus("success")).toBe("success");
+    expect(normalizePiStatus("failure")).toBe("failure");
+    expect(normalizePiStatus("skipped")).toBe("failure");
+    expect(normalizePiStatus(undefined)).toBe("unknown");
+  });
+
+  it("rejects fork and stale-head pushes before Finalize mutates GitHub", () => {
+    const pullRequest = {
+      html_url: "https://github.com/owner/repo/pull/42",
+      head: { ref: "feature", sha: "abc123", repo: { full_name: "owner/repo" } },
+      base: { ref: "main" },
+    };
+    expect(() =>
+      assertPullRequestPushAllowed(pullRequest, "owner/repo", "abc123"),
+    ).not.toThrow();
+    expect(() =>
+      assertPullRequestPushAllowed(
+        { ...pullRequest, head: { ...pullRequest.head, repo: { full_name: "fork/repo" } } },
+        "owner/repo",
+        "abc123",
+      ),
+    ).toThrow("fork pull request");
+    expect(() =>
+      assertPullRequestPushAllowed(pullRequest, "owner/repo", "newer-sha"),
+    ).toThrow("head changed");
   });
 
   it("updates the run-marked top-level comment instead of duplicating it", async () => {
@@ -588,12 +683,46 @@ describe("GitHub Action structured result contract", () => {
     );
 
     const request = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/repos/owner/repo/pulls/42/comments?per_page=100&sort=created&direction=desc",
+    );
     const body = JSON.parse(String(request.body));
     expect(request.method).toBe("POST");
     expect(body).toMatchObject({ commit_id: "abc123", event: "COMMENT", body: "" });
     expect(body.comments).toHaveLength(2);
     expect(body.comments[0].body).toContain("<!-- bonk-review:123 -->");
     expect(body.comments[1]).toMatchObject({ line: 7, start_line: 5, start_side: "RIGHT" });
+  });
+});
+
+describe("GitHub Action Git control-state boundary", () => {
+  it("detects local config, exclude, and index mutations made after Prepare", () => {
+    const state = {
+      localConfig: "user.name=Bonk Test",
+      indexStage: "100644 abc123 0\\ttracked.txt",
+      indexFlags: "H tracked.txt",
+      "gitPath:info/exclude": "file\\0# defaults",
+      "gitPath:info/attributes": "missing\\0",
+      "gitPath:info/sparse-checkout": "missing\\0",
+    };
+    const prepared = digestGitControlState(state);
+
+    expect(
+      digestGitControlState({
+        ...state,
+        localConfig:
+          `${state.localConfig}\\0url.https://example.invalid/.insteadOf=https://github.com/`,
+      }),
+    ).not.toBe(prepared);
+    expect(
+      digestGitControlState({
+        ...state,
+        "gitPath:info/exclude": "file\\0# defaults\\nhidden-by-pi",
+      }),
+    ).not.toBe(prepared);
+    expect(
+      digestGitControlState({ ...state, indexFlags: "S tracked.txt" }),
+    ).not.toBe(prepared);
   });
 });
 

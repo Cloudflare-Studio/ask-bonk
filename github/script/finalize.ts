@@ -15,6 +15,7 @@ import {
 } from "./context";
 import { fetchWithRetry } from "./http";
 import { parseBonkResult, type BonkFinding, type BonkResult } from "../extensions/bonk-result";
+import { gitControlStateDigest } from "./prepare-worktree";
 
 const API_VERSION = "2022-11-28";
 const MAX_COMMENT_LENGTH = 65_000;
@@ -102,7 +103,13 @@ function worktreeStatus(): string {
 function assertPreparedGitState(): void {
   const initialSha = process.env.INITIAL_SHA;
   const localBranch = process.env.LOCAL_BRANCH;
-  if (!initialSha || !localBranch) throw new Error("Missing prepared Git state");
+  const initialGitStateDigest = process.env.INITIAL_GIT_STATE_DIGEST;
+  if (!initialSha || !localBranch || !initialGitStateDigest) {
+    throw new Error("Missing prepared Git state");
+  }
+  if (gitControlStateDigest() !== initialGitStateDigest) {
+    throw new Error("Pi changed repository-local Git control state during the Run phase");
+  }
   if (git(["rev-parse", "HEAD"]) !== initialSha) {
     throw new Error("Pi changed Git history during the Run phase");
   }
@@ -233,7 +240,7 @@ export async function publishReview(
 
   const marker = reviewMarker();
   const existingComments = await githubApi<ReviewComment[]>(
-    `/repos/${repository}/pulls/${prNumber}/comments?per_page=100`,
+    `/repos/${repository}/pulls/${prNumber}/comments?per_page=100&sort=created&direction=desc`,
   );
   if (!existingComments.some((comment) => comment.body?.includes(marker))) {
     const commitId = process.env.HEAD_SHA || git(["rev-parse", "HEAD"]);
@@ -252,6 +259,19 @@ export async function publishReview(
 
 function commitTitle(result: Extract<BonkResult, { kind: "change" }>): string {
   return result.commitTitle || "Apply Bonk changes";
+}
+
+export function assertPullRequestPushAllowed(
+  pullRequest: PullRequestData,
+  repository: string,
+  initialSha?: string,
+): void {
+  if (pullRequest.head.repo?.full_name !== repository) {
+    throw new Error("Bonk will not push changes to a fork pull request");
+  }
+  if (initialSha && pullRequest.head.sha !== initialSha) {
+    throw new Error("Pull request head changed after the Prepare phase; refusing to push");
+  }
 }
 
 async function createOrFindPullRequest(
@@ -300,13 +320,7 @@ async function finalizeChange(
     const pullRequest = await githubApi<PullRequestData>(
       `/repos/${repository}/pulls/${prNumber}`,
     );
-    if (pullRequest.head.repo?.full_name !== repository) {
-      throw new Error("Bonk will not push changes to a fork pull request");
-    }
-    const initialSha = process.env.INITIAL_SHA;
-    if (initialSha && pullRequest.head.sha !== initialSha) {
-      throw new Error("Pull request head changed after the Prepare phase; refusing to push");
-    }
+    assertPullRequestPushAllowed(pullRequest, repository, process.env.INITIAL_SHA);
     gitWithToken(["push", pushUrl, `HEAD:refs/heads/${pullRequest.head.ref}`]);
     return result.body;
   }
@@ -316,11 +330,16 @@ async function finalizeChange(
   return `${result.body}\n\n${prUrl}`;
 }
 
-async function publishResult(result: BonkResult): Promise<void> {
+function validateResult(result: BonkResult): void {
   assertPreparedGitState();
   const status = worktreeStatus();
   assertResultMatchesWorktree(result, process.env.RUN_MODE || "review-only", status);
+}
 
+async function publishResult(result: BonkResult): Promise<void> {
+  // Recheck after token exchange as well. Pi has exited, but this keeps the
+  // credentialed publication path independently guarded.
+  validateResult(result);
   let body: string;
   if (result.kind === "review") {
     body = await publishReview(result);
@@ -333,17 +352,17 @@ async function publishResult(result: BonkResult): Promise<void> {
 }
 
 async function finalizeTracking(status: string): Promise<void> {
-  const context = getContext();
-  const { owner, repo } = context.repo;
-  let oidcToken: string;
   try {
-    oidcToken = await getOidcToken();
-  } catch (error) {
-    core.warning(`Failed to get OIDC token for finalize: ${error}`);
-    return;
-  }
+    const context = getContext();
+    const { owner, repo } = context.repo;
+    let oidcToken: string;
+    try {
+      oidcToken = await getOidcToken();
+    } catch (error) {
+      core.warning(`Failed to get OIDC token for finalize: ${error}`);
+      return;
+    }
 
-  try {
     const response = await fetchWithRetry(`${getApiBaseUrl()}/api/github/track`, {
       method: "PUT",
       headers: {
@@ -370,13 +389,14 @@ async function finalizeTracking(status: string): Promise<void> {
 }
 
 export async function finalizeRun(): Promise<void> {
-  const rawStatus = process.env.PI_STATUS || "unknown";
-  const piStatus = rawStatus === "skipped" ? "failure" : rawStatus;
+  const piStatus = normalizePiStatus(process.env.PI_STATUS);
   let publishError: unknown;
 
   if (piStatus === "success") {
     const previousToken = process.env.GH_TOKEN;
     try {
+      const result = readResult();
+      validateResult(result);
       process.env.GH_TOKEN = await exchangeGitHubAppToken({
         forceNoPush: process.env.IS_FORK === "true",
         tokenPermissions: process.env.TOKEN_PERMISSIONS,
@@ -385,7 +405,7 @@ export async function finalizeRun(): Promise<void> {
         ),
         actor: process.env.ACTOR || process.env.GITHUB_ACTOR,
       });
-      await publishResult(readResult());
+      await publishResult(result);
     } catch (error) {
       publishError = error;
     } finally {
@@ -396,6 +416,11 @@ export async function finalizeRun(): Promise<void> {
 
   await finalizeTracking(publishError ? "failure" : piStatus);
   if (publishError) throw publishError;
+}
+
+export function normalizePiStatus(status: string | undefined): string {
+  const resolved = status || "unknown";
+  return resolved === "skipped" ? "failure" : resolved;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

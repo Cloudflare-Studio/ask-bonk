@@ -6,6 +6,8 @@ import guidance from "../github/bonk_guidance.md?raw";
 import resultExtension from "../github/extensions/bonk-result.ts?raw";
 import runPiScript from "../github/script/run-pi.ts?raw";
 import orchestrateScript from "../github/script/orchestrate.ts?raw";
+import finalizeScript from "../github/script/finalize.ts?raw";
+import prepareWorktreeScript from "../github/script/prepare-worktree.ts?raw";
 
 const reviewPrompt = [
   "Review this pull request for discrete, actionable defects introduced by the change.",
@@ -66,6 +68,7 @@ describe("Bonk Pi prompt contract", () => {
   it("keeps one explicit Bonk extension and GitHub credentials out of the Pi step", () => {
     expect(resultExtension.match(/pi\.registerTool\(/g)).toHaveLength(1);
     expect(resultExtension).toContain('name: "submit_result"');
+    expect(resultExtension).toContain("chmodSync(temporaryPath, 0o600)");
     expect(runPiScript.match(/extensions\/bonk-result\.ts/g)).toHaveLength(1);
 
     const runStep = action.slice(action.indexOf('- name: "Run: Pi"'), action.indexOf('- name: "Finalize:'));
@@ -77,6 +80,23 @@ describe("Bonk Pi prompt contract", () => {
     expect(runStep).toContain('exec bun run "${BONK_ACTION_PATH}/script/run-pi.ts"');
     expect(action).not.toContain("steps.preflight.outputs.gh_token");
     expect(orchestrateScript).not.toContain('setOutput("gh_token"');
+  });
+
+  it("keeps trusted Git state and token acquisition on the Finalize side of the boundary", () => {
+    expect(action).toContain(
+      "INITIAL_GIT_STATE_DIGEST: ${{ steps.worktree.outputs.git_state_digest }}",
+    );
+    expect(finalizeScript).toContain("gitControlStateDigest() !== initialGitStateDigest");
+    expect(finalizeScript).toContain("Pi changed repository-local Git control state");
+    expect(finalizeScript.indexOf("const result = readResult();")).toBeLessThan(
+      finalizeScript.indexOf("process.env.GH_TOKEN = await exchangeGitHubAppToken"),
+    );
+    expect(prepareWorktreeScript).toContain(
+      "`+refs/pull/${prNumber}/head:refs/heads/${branch}`",
+    );
+    expect(prepareWorktreeScript).toContain("actualHead !== expectedHead");
+    expect(finalizeScript).toContain("assertPullRequestPushAllowed");
+    expect(finalizeScript).toContain("const pushUrl = repositoryRemote()");
   });
 
   it("preserves legacy inputs and repository agent configuration", () => {

@@ -274,9 +274,9 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 Bonk is configured through the workflow and Pi's repository resources. The Action has three ownership stages:
 
-1. **Prepare** validates the trigger and actor, resolves the authoritative target, serializes run metadata into Pi's system-prompt channel, keeps only the triggering request in the user message, prepares the exact branch, and removes checkout credentials before Pi starts.
+1. **Prepare** validates the trigger and actor, resolves the authoritative target, serializes run metadata into Pi's system-prompt channel, keeps only the triggering request in the user message, prepares the exact branch, removes checkout credentials, and snapshots repository-local Git control state before Pi starts.
 2. **Run Pi** removes GitHub, Actions OIDC, runner-command, SSH, and Git-control variables before starting the Pi supervisor; the supervisor filters its child environment again. Pi then loads the selected agent and repository skills, inspects or edits the worktree, and submits one structured answer, review, or change result.
-3. **Finalize** validates the result and worktree, then owns comments, reviews, commits, pushes, pull requests, and run tracking.
+3. **Finalize** validates the result, worktree, branch, commit, and Git control-state snapshot before obtaining publication credentials. It then owns comments, reviews, commits, pushes, pull requests, and run tracking.
 
 These stages make credentials and side effects explicit, but a composite Action still runs on one GitHub Actions runner; the filtered Pi process is a credential-minimization boundary, not a general-purpose sandbox.
 

@@ -1,5 +1,5 @@
 // Finalize tracking a workflow run
-// Called by the GitHub Action after OpenCode completes (with if: always())
+// Called by the GitHub Action after Pi completes (with if: always())
 
 import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
 import { fetchWithRetry } from "./http";
@@ -7,11 +7,11 @@ import { fetchWithRetry } from "./http";
 async function main() {
   const context = getContext();
   const { owner, repo } = context.repo;
-  const rawStatus = process.env.OPENCODE_STATUS || "unknown";
+  const rawStatus = process.env.PI_STATUS || "unknown";
 
-  // When the OpenCode step is "skipped", it means an earlier step (cache,
+  // When the Pi step is "skipped", it means an earlier step (cache,
   // install, etc.) failed — GitHub Actions skips subsequent steps on failure.
-  // The finalize step only runs when preflight succeeded and the OpenCode step
+  // The finalize step only runs when preflight succeeded and the Pi step
   // was *expected* to run, so "skipped" here always indicates an infrastructure
   // failure rather than an intentional skip.
   const status = rawStatus === "skipped" ? "failure" : rawStatus;

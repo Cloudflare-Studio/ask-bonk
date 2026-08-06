@@ -4,6 +4,8 @@
 import { appendFileSync } from "fs";
 import { fetchWithRetry } from "./http";
 
+// Keep the legacy audience during the rolling migration so a newly merged
+// Action can still authenticate against a Worker deployment from before Pi.
 const DEFAULT_OIDC_AUDIENCE = "opencode-github-action";
 const oidcTokenCache = new Map<string, Promise<string>>();
 
@@ -249,14 +251,14 @@ export async function detectForkFromPR(
   }
 }
 
-// Validates an OpenCode version string. Accepts "latest", "dev", or a semver-
-// like version (e.g. "1.2.16", "1.2.16-beta.1"). Returns the validated version
+// Validates a Pi version string. Accepts "latest" or a semver-like version
+// (e.g. "0.83.0", "0.83.0-beta.1"). Returns the validated version
 // string, or "latest" for empty/invalid input.
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
 
-export function validateOpenCodeVersion(input: string | undefined): string {
+export function validatePiVersion(input: string | undefined): string {
   const trimmed = input?.trim();
-  if (!trimmed || trimmed === "latest" || trimmed === "dev") {
+  if (!trimmed || trimmed === "latest") {
     return trimmed || "latest";
   }
   if (SEMVER_RE.test(trimmed)) {

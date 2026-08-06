@@ -129,7 +129,7 @@ app.route("/stats", stats);
 // configuration continues to work while Flue owns the canonical channel route.
 app.post("/webhooks", async (c) => handleLegacyWebhook(c));
 
-// OIDC endpoints for OpenCode GitHub Action token exchange
+// OIDC endpoints for the Pi-backed GitHub Action token exchange
 const auth = new Hono<{ Bindings: Env }>();
 
 auth.get("/get_github_app_installation", async (c) => {

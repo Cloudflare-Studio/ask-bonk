@@ -1,4 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   detectForkFromPR,
   parseTokenPermissions,
@@ -7,6 +10,7 @@ import {
   getApiBaseUrl,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
+import { runCrossRepoCommand } from "../github/script/cross-repo";
 import {
   buildPrompt,
   checkCodeowners,
@@ -14,9 +18,15 @@ import {
   parseCodeowners,
 } from "../github/script/orchestrate";
 import {
-  buildOpenCodeConfigContent,
-  isRetryableOpenCodeFailure,
-} from "../github/script/run-opencode";
+  buildPiArgs,
+  deliverFinalResponse,
+  discoverProjectSkills,
+  extractAssistantText,
+  isFailedAssistantMessage,
+  isRetryablePiFailure,
+  loadAgentPrompt,
+  shouldApproveProject,
+} from "../github/script/run-pi";
 import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
@@ -259,7 +269,7 @@ describe("GitHub Action preflight prompt", () => {
     expect(result.value.match(/<bonk_execution_context>/g)).toHaveLength(1);
   });
 
-  it("preserves OpenCode's required prompt check for scheduled runs", async () => {
+  it("preserves the required prompt check for scheduled runs", async () => {
     const result = await withEnv(
       {
         EVENT_NAME: "schedule",
@@ -278,49 +288,147 @@ describe("GitHub Action preflight prompt", () => {
   });
 });
 
-describe("GitHub Action OpenCode configuration", () => {
-  it("adds Bonk guidance without replacing consumer configuration", () => {
-    const result = JSON.parse(
-      buildOpenCodeConfigContent(
-        `{
-          "instructions": ["docs/review.md"],
-          "default_agent": "review"
-        }`,
-        "/action/bonk_guidance.md",
-      ),
-    );
+describe("GitHub Action Pi configuration", () => {
+  it("only approves project resources for non-fork runs", () => {
+    expect(shouldApproveProject("false")).toBe(true);
+    expect(shouldApproveProject(undefined)).toBe(true);
+    expect(shouldApproveProject("true")).toBe(false);
+  });
 
-    expect(result).toEqual({
-      instructions: ["docs/review.md", "/action/bonk_guidance.md"],
-      default_agent: "review",
+  it("loads trusted repository instructions and skills without executable extensions", () => {
+    const args = buildPiArgs({
+      model: "anthropic/claude-opus-4-5",
+      prompt: "<bonk_user_request>Review this</bonk_user_request>",
+      guidance: "Bonk guidance",
+      thinking: "high",
+      skills: ["/action/skills/cross-repo/SKILL.md"],
     });
+
+    expect(args).toContain("--approve");
+    expect(args).toContain("--no-extensions");
+    expect(args).not.toContain("--no-skills");
+    expect(args).not.toContain("--no-context-files");
+    expect(args).toContain("--no-session");
+    expect(args).toContain("high");
+    expect(args).toContain("/action/skills/cross-repo/SKILL.md");
+    expect(args.at(-1)).toContain("GitHub task:\n\n<bonk_user_request>");
   });
 
-  it("deduplicates Bonk guidance", () => {
-    const result = JSON.parse(
-      buildOpenCodeConfigContent(
-        '{"instructions":["/action/bonk_guidance.md"]}',
-        "/action/bonk_guidance.md",
-      ),
-    );
-
-    expect(result.instructions).toEqual(["/action/bonk_guidance.md"]);
-  });
-
-  it("does not choose a default agent for the consumer", () => {
-    const result = JSON.parse(
-      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md"),
-    );
-
-    expect(result).toEqual({
-      instructions: ["/action/bonk_guidance.md"],
+  it("appends the selected agent prompt", () => {
+    const args = buildPiArgs({
+      model: "anthropic/claude-opus-4-5",
+      prompt: "Review this",
+      guidance: "Bonk guidance",
+      agentPrompt: "Review security boundaries.",
     });
+
+    expect(args).toContain("# Selected Bonk agent\n\nReview security boundaries.");
   });
 
-  it("rejects invalid instruction configuration", () => {
-    expect(() =>
-      buildOpenCodeConfigContent('{"instructions":"docs/review.md"}', "/action/bonk_guidance.md"),
-    ).toThrow("instructions must be an array of strings");
+  it("loads legacy named agent prompts without their frontmatter", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bonk-agent-"));
+    try {
+      mkdirSync(join(cwd, ".opencode", "agents"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".opencode", "agents", "reviewer.md"),
+        "---\nname: reviewer\nmode: primary\n---\nReview security boundaries.\n",
+      );
+      expect(loadAgentPrompt("reviewer", cwd)).toBe("Review security boundaries.");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("loads repository Agent Skills explicitly for untrusted fork runs", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bonk-skills-"));
+    try {
+      mkdirSync(join(cwd, ".agents", "skills", "review"), { recursive: true });
+      mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
+      writeFileSync(join(cwd, ".agents", "skills", "review", "SKILL.md"), "review");
+      writeFileSync(join(cwd, ".pi", "skills", "triage.md"), "triage");
+
+      expect(discoverProjectSkills(cwd)).toEqual([
+        join(cwd, ".pi", "skills", "triage.md"),
+        join(cwd, ".agents", "skills", "review", "SKILL.md"),
+      ]);
+      const args = buildPiArgs({
+        model: "anthropic/claude-opus-4-5",
+        prompt: "Review this",
+        guidance: "Bonk guidance",
+        approveProject: false,
+        skills: discoverProjectSkills(cwd),
+      });
+      expect(args).toContain("--no-approve");
+      expect(args).not.toContain("--approve");
+      expect(args).toContain(join(cwd, ".agents", "skills", "review", "SKILL.md"));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores unsupported thinking levels", () => {
+    const args = buildPiArgs({
+      model: "anthropic/claude-opus-4-5",
+      prompt: "Review this",
+      guidance: "Bonk guidance",
+      thinking: "ultra",
+    });
+
+    expect(args).not.toContain("--thinking");
+  });
+
+  it("extracts the authoritative assistant text from Pi JSON events", () => {
+    expect(
+      extractAssistantText({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal" },
+          { type: "text", text: "Implemented the migration." },
+        ],
+      }),
+    ).toBe("Implemented the migration.");
+  });
+
+  it("recognizes assistant error and abort events as failed runs", () => {
+    expect(isFailedAssistantMessage({ role: "assistant", stopReason: "error" })).toBe(true);
+    expect(isFailedAssistantMessage({ role: "assistant", stopReason: "aborted" })).toBe(true);
+    expect(isFailedAssistantMessage({ role: "assistant", stopReason: "stop" })).toBe(false);
+  });
+
+  it("delivers the final response to the triggering GitHub thread once", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+    await withEnv(
+      {
+        ISSUE_NUMBER: "42",
+        GITHUB_REPOSITORY: "owner/repo",
+        REPOSITORY: undefined,
+        GH_TOKEN: "token",
+      },
+      () => deliverFinalResponse("Migration complete."),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/issues/42/comments",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ body: "Migration complete." }),
+      }),
+    );
+  });
+});
+
+describe("GitHub Action cross-repository wrapper", () => {
+  it("rejects commands outside gh and git before requesting credentials", async () => {
+    await expect(
+      runCrossRepoCommand(["owner/repo", "--", "curl", "https://example.com"]),
+    ).resolves.toBe(2);
+  });
+
+  it("rejects malformed target repositories", async () => {
+    await expect(runCrossRepoCommand(["owner/repo/extra", "--", "gh", "pr", "list"])).rejects.toThrow(
+      "owner/repo format",
+    );
   });
 });
 
@@ -841,61 +949,73 @@ describe("GitHub Action script HTTP retry", () => {
   });
 });
 
-describe("GitHub Action OpenCode retry classification", () => {
-  it("retries transient OpenCode cancellation drops", () => {
+describe("GitHub Action Pi retry classification", () => {
+  const failure = (overrides: Partial<Parameters<typeof isRetryablePiFailure>[0]> = {}) => ({
+    exitCode: 1,
+    output: "",
+    finalResponse: "",
+    hadToolExecution: false,
+    ...overrides,
+  });
+
+  it("retries transient Pi cancellation drops before tools run", () => {
     expect(
-      isRetryableOpenCodeFailure({
-        exitCode: 1,
+      isRetryablePiFailure(failure({
         output: "Error: The operation was canceled.",
-      }),
+      })),
     ).toBe(true);
   });
 
   it("retries provider and network failures", () => {
     expect(
-      isRetryableOpenCodeFailure({
-        exitCode: 1,
+      isRetryablePiFailure(failure({
         output: "provider stream terminated unexpectedly",
-      }),
+      })),
     ).toBe(true);
 
     expect(
-      isRetryableOpenCodeFailure({
-        exitCode: 1,
+      isRetryablePiFailure(failure({
         output: "fetch failed: ECONNRESET",
-      }),
+      })),
     ).toBe(true);
   });
 
   it("does not retry GitHub cancellation or timeout exits", () => {
     expect(
-      isRetryableOpenCodeFailure({
+      isRetryablePiFailure(failure({
         exitCode: 143,
         output: "Error: The operation was canceled.",
-      }),
+      })),
     ).toBe(false);
 
     expect(
-      isRetryableOpenCodeFailure({
+      isRetryablePiFailure(failure({
         exitCode: 124,
         output: "Error: The operation was canceled.",
-      }),
+      })),
     ).toBe(false);
 
     expect(
-      isRetryableOpenCodeFailure({
-        exitCode: 1,
+      isRetryablePiFailure(failure({
         output: "The operation was canceled because the workflow was cancelled.",
-      }),
+      })),
     ).toBe(false);
   });
 
   it("does not retry ordinary command failures", () => {
     expect(
-      isRetryableOpenCodeFailure({
-        exitCode: 1,
+      isRetryablePiFailure(failure({
         output: "TypeScript compilation failed",
-      }),
+      })),
+    ).toBe(false);
+  });
+
+  it("does not retry after Pi has executed a tool", () => {
+    expect(
+      isRetryablePiFailure(failure({
+        output: "fetch failed: ECONNRESET",
+        hadToolExecution: true,
+      })),
     ).toBe(false);
   });
 });

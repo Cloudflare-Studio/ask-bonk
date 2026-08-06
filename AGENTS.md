@@ -44,7 +44,7 @@ When `package.json` changes, run `bun install` and commit `package.json` with `b
 - `src/github-workflow-jobs.ts` owns the shared setup, track, and finalize job logic used by those workflows.
 - `src/cloudflare.ts` exports Cloudflare entrypoints for Flue discovery. Keep it in sync with exported Durable Object classes.
 - `src/agent.ts` defines `RepoAgent`, the Durable Object that tracks workflow runs and posts/edit failure comments.
-- `github/action.yml` and `github/script/*.ts` are the composite action that runs OpenCode inside GitHub Actions. The Worker does not run OpenCode itself.
+- `github/action.yml` and `github/script/*.ts` are the composite action that runs Pi inside GitHub Actions. The Worker does not run Pi itself.
 - `cli/` is the interactive installer/workflow generator. It uses `gh` CLI helpers and Handlebars templates.
 - `ae_queries/` SQL files are imported by Wrangler text rules for `/stats` Analytics Engine endpoints.
 
@@ -68,8 +68,8 @@ When `package.json` changes, run `bun install` and commit `package.json` with `b
 
 - Durable Object name format is `{owner}/{repo}`. Persist `owner` and `repo` in state; alarm wakeups may not have `this.name` available.
 - There are three finalization paths: action-driven `PUT /api/github/track`, DO alarm polling, and `workflow_run.completed` webhook safety net.
-- `RepoAgent` still owns external GitHub Actions run state. Do not remove it just because setup/track/finalize are Flue workflows; OpenCode still runs in GitHub Actions, so Bonk needs cross-request active-run state, alarm polling, and failure-comment edit history outside Flue workflow run records.
-- Reevaluate moving or reducing `RepoAgent` only when Bonk can run OpenCode inside a Flue-managed isolated sandbox and use Flue workflow run state as the primary execution record.
+- `RepoAgent` still owns external GitHub Actions run state. Do not remove it just because setup/track/finalize are Flue workflows; Pi still runs in GitHub Actions, so Bonk needs cross-request active-run state, alarm polling, and failure-comment edit history outside Flue workflow run records.
+- Reevaluate moving or reducing `RepoAgent` only when Bonk can run Pi inside a Flue-managed isolated sandbox and use Flue workflow run state as the primary execution record.
 - `workflow_run.completed` must only post comments for tracked runs. Untracked workflow runs are metrics-only to avoid failure-comment spam.
 - `this.schedule()` calls must stay wrapped in `try/catch`; the workflow_run webhook is the backup if scheduling fails.
 - Failure comments are edited in place by context key (`i:{issueNumber}` or `rc:{reviewCommentId}`); preserve the create/edit fallback behavior.
@@ -77,7 +77,7 @@ When `package.json` changes, run `bun install` and commit `package.json` with `b
 ## GitHub Action Pitfalls
 
 - Composite action steps do not share environment variables unless values are written to `GITHUB_ENV`. Outputs require `core.setOutput()` and `steps.<id>.outputs.*`.
-- `finalize.ts` must never call `core.setFailed()`. It runs under `if: always()` and must not mask the real OpenCode failure.
+- `finalize.ts` must never call `core.setFailed()`. It runs under `if: always()` and must not mask the real Pi failure.
 - GitHub reports downstream skipped steps as `skipped`, not `failure`; keep the client-side and server-side remapping/treatment as failure.
 - `actions/checkout` persists `GITHUB_TOKEN` in `http.https://github.com/.extraheader`. The action must replace it with the App installation token so Bonk pushes trigger CI.
 - Multiline `GITHUB_ENV` and step output writes use random `BONK_<uuid>` delimiters to avoid injection.

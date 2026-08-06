@@ -6,11 +6,11 @@
 
 Just `/bonk` it.
 
-It's a code (and docs!) review agent that responds to mentions in issues and PRs. Built on [OpenCode](https://github.com/anomalyco/opencode) and [Flue](https://flueframework.com/), Bonk can review code, answer questions about your codebase, and make changes directly by opening PRs and telling you where you can do better.
+It's a code (and docs!) review agent that responds to mentions in issues and PRs. Built on [Pi](https://github.com/earendil-works/pi) and [Flue](https://flueframework.com/), Bonk can review code, answer questions about your codebase, and make changes directly by opening PRs and telling you where you can do better.
 
 - **Code & doc review** - Get feedback on PRs, explain code, or ask questions about your repo just by mentioning `/bonk` in an issue, PR comment or even line comments.
 - **Make changes** - Bonk can edit files and create PRs from issues and update PRs.
-- **Fully configurable** - Supports any [model provider](https://opencode.ai/docs/providers) that OpenCode does (Anthropic, OpenAI, Google, etc.). Why reinvent the wheel when there's a perfectly round one already?
+- **Fully configurable** - Supports Pi's [built-in model providers](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md), including Anthropic, OpenAI, Google, OpenCode Zen, and others.
 
 ## Installation
 
@@ -67,7 +67,7 @@ jobs:
       - name: Run Bonk
         uses: ask-bonk/ask-bonk/github@main
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }} # or the supported provider of your choice
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }} # OpenCode Zen, or use another Pi provider key
         with:
           model: "opencode/claude-opus-4-5"
           mentions: "/bonk,@ask-bonk"
@@ -75,7 +75,7 @@ jobs:
 
 #### 3. Add Your API Key
 
-Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and variables** > **Actions**) - [get one here](https://opencode.ai/auth)
+Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and variables** > **Actions**) for the default OpenCode Zen model - [get one here](https://opencode.ai/auth). You can instead configure another Pi provider as shown below.
 
 #### 4. Start Using Bonk
 
@@ -83,7 +83,7 @@ Mention `@ask-bonk` or `/bonk` in any issue or PR comment.
 
 ### Using Other Providers
 
-[Any OpenCode provider](https://opencode.ai/docs/providers/) is supported. Update your `bonk.yml` workflow file to specify a different model and pass the appropriate API key:
+[Pi's built-in providers](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md) are supported. Update your `bonk.yml` workflow file to specify a different model and pass the appropriate API key:
 
 ```yaml
 - name: Run Bonk
@@ -102,7 +102,7 @@ You can also configure Bonk to use [Cloudflare AI Gateway](https://developers.cl
   env:
     CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     CLOUDFLARE_GATEWAY_ID: ${{ secrets.CLOUDFLARE_GATEWAY_ID }}
-    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
   with:
     model: cloudflare-ai-gateway/anthropic/claude-opus-4-5
 ```
@@ -198,7 +198,7 @@ Custom objects are merged with the defaults and each permission is clamped to th
 
 #### Version Pinning
 
-By default, Bonk installs the latest OpenCode release. If a release is broken, you can pin to a known-good version:
+By default, Bonk installs the latest Pi coding agent release. If a release is broken, you can pin to a known-good version:
 
 ```yaml
 - name: Run Bonk
@@ -207,12 +207,12 @@ By default, Bonk installs the latest OpenCode release. If a release is broken, y
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
     model: "opencode/claude-opus-4-5"
-    opencode_version: "1.2.16"
+    pi_version: "0.83.0"
 ```
 
-Accepts a semver string (e.g., `"1.2.16"`, `"1.2.16-beta.1"`), `"latest"`, or `"dev"`. Invalid input (including `v`-prefixed versions, incomplete versions, or strings containing shell metacharacters) silently falls back to `"latest"` with a warning in the workflow log.
+Accepts a semver string (e.g., `"0.83.0"`, `"0.83.0-beta.1"`) or `"latest"`. Invalid input (including `v`-prefixed versions, incomplete versions, or strings containing shell metacharacters) falls back to `"latest"` with a warning in the workflow log.
 
-The `opencode_dev` input takes precedence over `opencode_version` -- setting `opencode_dev: "true"` always installs from the dev channel regardless of the pinned version.
+The legacy `opencode_version` and `opencode_dev` inputs remain accepted as no-ops so existing workflow files do not break. Use `pi_version` for new version pins.
 
 #### Scheduled Tasks
 
@@ -269,7 +269,7 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 ## Config
 
-Bonk is configured via your workflow file and OpenCode's config. Its built-in harness guidance keeps OpenCode on the triggering target, delegates commit/push/PR lifecycle to `opencode github run`, and applies review-only behavior when repository writes are unavailable. Repository instructions and custom OpenCode instructions still apply.
+Bonk is configured through the workflow and Pi's repository resources. Its built-in harness guidance keeps Pi on the triggering target, gives Pi the commit/push/PR lifecycle for authorized changes, applies review-only behavior when repository writes are unavailable, and posts Pi's final response exactly once.
 
 ### Workflow Inputs
 
@@ -279,23 +279,22 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `mentions`           | Comma-separated triggers (e.g., `/bonk,@ask-bonk`)                               | No       |
 | `permissions`        | Required permission: `admin`, `write`, `any`, or `CODEOWNERS`                    | No       |
 | `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON                        | No       |
-| `opencode_version`   | Pin to a specific OpenCode version (e.g., `"1.2.16"`). Defaults to `"latest"`.   | No       |
-| `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
-| `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
+| `pi_version`         | Pin to a Pi coding agent version (e.g., `"0.83.0"`). Defaults to `"latest"`.     | No       |
+| `opencode_version`   | Deprecated compatibility input; accepted and ignored                            | No       |
+| `opencode_dev`       | Deprecated compatibility input; accepted and ignored                            | No       |
+| `agent`              | Named prompt from `.pi/agents/<name>.md`                                         | No       |
+| `variant`            | Pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`  | No       |
 | `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
 
-### OpenCode Config
+### Pi Config, Instructions, and Skills
 
-For advanced configuration (custom providers, system prompts, custom tools, etc.), create `opencode.jsonc` in your repository root. See [OpenCode docs](https://opencode.ai/docs/config) for all options.
+Bonk loads Pi's normal repository context and system prompts, including `AGENTS.md`, `CLAUDE.md`, `.pi/SYSTEM.md`, and `.pi/APPEND_SYSTEM.md`. It also trusts and discovers repository skills from `.pi/skills/` and `.agents/skills/**/SKILL.md`, including skills found from the checkout directory up to the repository root.
 
-```jsonc
-{
-  "provider": {
-    "anthropic": {},
-  },
-  "model": "openai/gpt-5.6-sol",
-}
-```
+Set `agent: reviewer` to append `.pi/agents/reviewer.md` as a named system-prompt profile. For compatibility during migration, Bonk also reads `.agents/agents/<name>.md` and legacy `.opencode/agents/<name>.md` files. If the selected file has YAML frontmatter, Bonk appends only its Markdown body.
+
+For same-repository runs, Bonk passes `--approve` so non-interactive Pi loads repository context, system prompts, and skills. Fork runs pass `--no-approve`; Bonk still discovers `.agents/skills/**/SKILL.md` itself and loads each skill explicitly, but does not trust fork-controlled `.pi/settings.json`, packages, system prompts, or startup resources. All runs pass `--no-extensions`, `--no-prompt-templates`, and `--no-themes`, so repository-controlled executable Pi extensions do not run inside the Action. See Pi's [context](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#context-files), [system prompt](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#system-prompt), and [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) documentation.
+
+Bonk also loads its built-in `cross-repo` skill. For an explicitly requested same-organization task, the skill runs `gh` or `git` through Bonk's existing OIDC exchange and keeps the short-lived target-repository token out of the model output and repository config.
 
 ## Self-Hosting
 
@@ -319,7 +318,7 @@ Required secrets (set via `wrangler secret put`):
 - `GITHUB_APP_PRIVATE_KEY` - Your GitHub App private key (PEM format)
 - `GITHUB_WEBHOOK_SECRET` - Webhook secret for verifying GitHub requests
 
-BYO LLM keys: any [OpenCode supported provider](https://opencode.ai/docs/providers/) is, well, supported. Users provide their own API keys via repository secrets in their workflows.
+BYO LLM keys: Pi's [API-key providers](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md) are supported. Users provide their own API keys via repository secrets in their workflows.
 
 ## Contributing
 

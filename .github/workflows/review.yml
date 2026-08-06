@@ -67,12 +67,7 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_AI_GATEWAY_ACCOUNT_ID }}
           CLOUDFLARE_GATEWAY_ID: ${{ secrets.CF_AI_GATEWAY_NAME }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
-          # Auto-approve tool calls in CI only, so Bonk doesn't get stuck on
-          # approval prompts. This is intentionally not in opencode.jsonc so
-          # local/interactive sessions keep their normal permission prompts.
-          OPENCODE_CONFIG_CONTENT: >-
-            {"permission":"allow","provider":{"cloudflare-ai-gateway":{"models":{"workers-ai/@cf/zai-org/glm-5.2":{"reasoning":true,"tool_call":true,"temperature":true,"limit":{"context":262144,"output":262144}}}}}}
+          CLOUDFLARE_API_KEY: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
         with:
           model: cloudflare-ai-gateway/workers-ai/@cf/zai-org/glm-5.2
           mentions: "/review"
@@ -88,7 +83,7 @@ jobs:
             1. Focus on actual violations and bugs. Where possible, comment on the exact line number to help guide the reviewer.
             2. Break up "needs fixing" (real logic bugs, poor error handling, security issues) vs. "suggestions" (nested logic, unused code, code structure/maintenance guidance) when responding so that a human has clear, actionable feedback.
             3. Use the gh cli to create comments on the files (or line numbers) where relevant. Use suggestions to suggest fixes, especially where you have high-confidence in the fix. Ensure fixes are valid code and take into account the surrounding code (opening/closing braces, indentation, comments). ALWAYS leave the final "review" comment empty.
-            4. Your summary will be posted as a comment for you by OpenCode.
+            4. Your summary will be posted as a comment for you by Bonk.
 
             In general, aim to provide actionable comments > code suggestions.
 

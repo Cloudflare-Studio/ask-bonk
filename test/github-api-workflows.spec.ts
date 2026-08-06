@@ -32,7 +32,7 @@ function createClaims(owner = "test-org", repo = "test-repo"): GitHubActionsJWTC
   return {
     iss: "https://token.actions.githubusercontent.com",
     sub: `repo:${owner}/${repo}:ref:refs/heads/main`,
-    aud: "opencode-github-action",
+    aud: "pi-github-action",
     exp: Math.floor(Date.now() / 1000) + 3600,
     iat: Math.floor(Date.now() / 1000),
     repository: `${owner}/${repo}`,

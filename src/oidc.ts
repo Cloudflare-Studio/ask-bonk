@@ -17,6 +17,7 @@ import { RETRY_CONFIG, APP_INSTALLATION_CACHE_TTL_SECS } from "./constants";
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
+const GITHUB_ACTIONS_AUDIENCES = ["pi-github-action", "opencode-github-action"];
 
 const JWKS = createRemoteJWKSet(new URL(`${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`));
 
@@ -52,7 +53,7 @@ export interface GitHubActionsJWTClaims {
 // Validates a GitHub Actions OIDC token using jose library
 export async function validateGitHubOIDCToken(
   token: string,
-  expectedAudience: string = "opencode-github-action",
+  expectedAudience: string | string[] = GITHUB_ACTIONS_AUDIENCES,
 ): Promise<Result<GitHubActionsJWTClaims, OIDCValidationError>> {
   return Result.tryPromise({
     try: async () => {

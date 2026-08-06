@@ -282,7 +282,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     }
 
     // Post failure comment for any non-success status.
-    // The finalize step's conditions guarantee it only runs when the OpenCode
+    // The finalize step's conditions guarantee it only runs when the Pi
     // step was expected to execute, so "skipped" means an infrastructure step
     // failed and should be treated as a failure. The finalize script remaps
     // "skipped" -> "failure" client-side, but we also handle it here as

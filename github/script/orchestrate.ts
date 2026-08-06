@@ -15,7 +15,7 @@ import {
   getApiBaseUrl,
   detectForkFromPR,
   parseTokenPermissions,
-  validateOpenCodeVersion,
+  validatePiVersion,
   checkPermissionLevel,
   extractMentionPrompt,
   core,
@@ -534,18 +534,15 @@ async function checkSetup(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 function resolveVersion(): void {
-  const isDev = process.env.OPENCODE_DEV === "true";
-  core.setOutput("dev", isDev ? "true" : "false");
-
-  const rawVersion = process.env.OPENCODE_VERSION;
-  const resolvedVersion = validateOpenCodeVersion(rawVersion);
+  const rawVersion = process.env.PI_VERSION;
+  const resolvedVersion = validatePiVersion(rawVersion);
   if (rawVersion && rawVersion.trim() !== resolvedVersion && resolvedVersion === "latest") {
     core.warning(
-      `Invalid opencode_version "${rawVersion}" — falling back to "latest". Use a semver string (e.g. "1.2.16") or "latest".`,
+      `Invalid pi_version "${rawVersion}" — falling back to "latest". Use a semver string (e.g. "0.83.0") or "latest".`,
     );
   }
-  core.setOutput("opencode_version", resolvedVersion);
-  core.info(`Resolved opencode version: ${resolvedVersion}`);
+  core.setOutput("pi_version", resolvedVersion);
+  core.info(`Resolved Pi version: ${resolvedVersion}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -694,17 +691,17 @@ export async function buildPrompt(): Promise<PromptResult> {
   const userRequest = resolveUserRequest();
 
   let headSha = "";
-  if (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER)) {
+  if (process.env.PR_NUMBER) {
     headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
     if (!headSha) {
-      core.warning("Could not resolve PR HEAD SHA; inline review comments may fail");
+      core.warning("Could not resolve the authoritative PR HEAD SHA");
     }
   }
   if (detection.isFork) {
     core.info("PR is from a fork. Review-only prompt context built.");
   }
 
-  // Preserve OpenCode's required-prompt check for scheduled and dispatch runs.
+  // Preserve the required-prompt check for scheduled and dispatch runs.
   if (!userRequest) {
     return {
       isFork: detection.isFork,
@@ -731,6 +728,8 @@ export async function buildPrompt(): Promise<PromptResult> {
     `target: ${escapePromptValue(target)}`,
     `mode: ${mode}`,
     `mode_reason: ${modeReason}`,
+    `default_branch: ${escapePromptValue(process.env.DEFAULT_BRANCH || "unknown")}`,
+    `run_id: ${escapePromptValue(process.env.GITHUB_RUN_ID || "unknown")}`,
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
   contextLines.push("</bonk_execution_context>");
@@ -874,8 +873,8 @@ async function handleFork(oidcFailed: boolean): Promise<void> {
   }
 
   if (!oidcFailed) {
-    core.info("Fork PR with OIDC token available. OpenCode will run in comment-only mode.");
-    core.setOutput("run_opencode", "true");
+    core.info("Fork PR with OIDC token available. Pi will run in comment-only mode.");
+    core.setOutput("run_pi", "true");
     return;
   }
 

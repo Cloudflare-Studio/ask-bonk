@@ -19,7 +19,7 @@
     },
   },
   "vars": {
-    // Default model for OpenCode sessions
+    // Default model for Pi sessions
     "DEFAULT_MODEL": "opencode/claude-opus-4-5",
     "BONK_VERSION": "dev",
     "BONK_COMMIT": "unknown",

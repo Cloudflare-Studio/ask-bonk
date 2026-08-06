@@ -208,6 +208,85 @@ export function getApiBaseUrl(): string {
   return normalized.replace(/\/auth$/, "");
 }
 
+export interface GitHubAppTokenOptions {
+  forceNoPush?: boolean;
+  tokenPermissions?: string;
+  codeownersTeamGroups?: string[][];
+  actor?: string;
+}
+
+export function parseCodeownersTeamGroups(raw: string | undefined): string[][] {
+  if (!raw) return [];
+  const value = JSON.parse(raw) as unknown;
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (group) =>
+        Array.isArray(group) &&
+        group.length > 0 &&
+        group.every((owner) => typeof owner === "string" && owner.length > 0),
+    )
+  ) {
+    throw new Error("Invalid CODEOWNERS team authorization context");
+  }
+  return value as string[][];
+}
+
+// Exchange GitHub's per-step OIDC credential for a short-lived installation
+// token. Trusted stages call this independently so the token never needs to be
+// persisted in a composite-action output across the untrusted Pi stage.
+export async function exchangeGitHubAppToken(
+  options: GitHubAppTokenOptions = {},
+): Promise<string> {
+  const actionOidcToken = await getOidcToken();
+  const exchangeBody: Record<string, unknown> = {};
+  const rawPermissions = options.tokenPermissions;
+
+  if (options.forceNoPush) {
+    exchangeBody.permissions = "NO_PUSH";
+  } else if (rawPermissions?.trim()) {
+    const parsed = parseTokenPermissions(rawPermissions);
+    if (parsed === undefined) {
+      console.log("::warning::Invalid token_permissions input; falling back to NO_PUSH");
+    }
+    exchangeBody.permissions = parsed ?? "NO_PUSH";
+  }
+
+  if (options.codeownersTeamGroups?.length) {
+    exchangeBody.codeowners_team_groups = options.codeownersTeamGroups;
+    if (options.actor) exchangeBody.actor = options.actor;
+  }
+
+  const response = await fetchWithRetry(
+    `${getApiBaseUrl()}/auth/exchange_github_app_token`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${actionOidcToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(exchangeBody),
+    },
+    { timeoutMs: 10_000 },
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || "Unknown error";
+    try {
+      message = (JSON.parse(text) as { error?: string }).error || message;
+    } catch {
+      // Preserve the non-JSON response text.
+    }
+    throw new Error(`Token exchange returned ${response.status}: ${message}`);
+  }
+
+  const data = (await response.json()) as { token?: string };
+  if (!data.token) throw new Error("Token exchange response missing token");
+  console.log(`::add-mask::${data.token}`);
+  return data.token;
+}
+
 // Shared fork detection from env vars and optional API fallback.
 // Returns { isFork, headSha? } or null if detection failed.
 export async function detectForkFromPR(

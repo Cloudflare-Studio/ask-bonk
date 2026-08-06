@@ -5,6 +5,7 @@ import action from "../github/action.yml?raw";
 import guidance from "../github/bonk_guidance.md?raw";
 import resultExtension from "../github/extensions/bonk-result.ts?raw";
 import runPiScript from "../github/script/run-pi.ts?raw";
+import orchestrateScript from "../github/script/orchestrate.ts?raw";
 
 const reviewPrompt = [
   "Review this pull request for discrete, actionable defects introduced by the change.",
@@ -45,6 +46,23 @@ describe("Bonk Pi prompt contract", () => {
     expect(generatedReviewWorkflow).not.toContain("LGTM!");
   });
 
+  it("passes authoritative metadata as system material and only the request as user material", () => {
+    expect(action).toContain("SYSTEM_CONTEXT: ${{ steps.preflight.outputs.system_context }}");
+    expect(runPiScript).toContain("## Authoritative execution context");
+    expect(runPiScript).toContain("GitHub task from the triggering user:");
+    expect(guidance).toContain("authoritative run metadata in this system prompt");
+    expect(guidance).toContain("The user message contains only the triggering task");
+  });
+
+  it("tracks runnable non-fork requests before token exchange and always finalizes later failures", () => {
+    const earlyTrack = orchestrateScript.indexOf("if (!promptResult.isFork) {\n    await trackRun();");
+    const exchange = orchestrateScript.indexOf("const oidcResult = await exchangeOidc");
+    expect(earlyTrack).toBeGreaterThan(-1);
+    expect(earlyTrack).toBeLessThan(exchange);
+    expect(action).toContain("always() && steps.preflight.outcome == 'success'");
+    expect(action).toContain("PI_STATUS: ${{ steps.pi.outcome }}");
+  });
+
   it("keeps one explicit Bonk extension and GitHub credentials out of the Pi step", () => {
     expect(resultExtension.match(/pi\.registerTool\(/g)).toHaveLength(1);
     expect(resultExtension).toContain('name: "submit_result"');
@@ -55,13 +73,29 @@ describe("Bonk Pi prompt contract", () => {
     expect(runStep).not.toContain("GH_TOKEN");
     expect(runStep).not.toContain("OIDC_BASE_URL");
     expect(runStep).not.toContain("GITHUB_TOKEN");
+    expect(runStep).toContain("GH_*|GITHUB_*|ACTIONS_*|RUNNER_*|GIT_CONFIG_*");
+    expect(runStep).toContain('exec bun run "${BONK_ACTION_PATH}/script/run-pi.ts"');
+    expect(action).not.toContain("steps.preflight.outputs.gh_token");
+    expect(orchestrateScript).not.toContain('setOutput("gh_token"');
   });
 
   it("preserves legacy inputs and repository agent configuration", () => {
-    expect(action).toContain("opencode_version:");
-    expect(action).toContain("opencode_dev:");
+    for (const input of [
+      "model",
+      "agent",
+      "prompt",
+      "mentions",
+      "permissions",
+      "oidc_base_url",
+      "forks",
+      "variant",
+      "token_permissions",
+      "opencode_version",
+      "opencode_dev",
+    ]) {
+      expect(action).toContain(`  ${input}:`);
+    }
     expect(action.match(/Accepted but ignored\./g)).toHaveLength(2);
-    expect(action).toContain("agent:");
     expect(runPiScript).toContain("/.agents/skills");
     expect(runPiScript).toContain("/.agents/agents/");
     expect(runPiScript).toContain("/.opencode/agents/");

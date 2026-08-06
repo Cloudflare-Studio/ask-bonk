@@ -13,6 +13,7 @@ import {
   getContext,
   getOidcToken,
   getApiBaseUrl,
+  exchangeGitHubAppToken,
   detectForkFromPR,
   parseTokenPermissions,
   validatePiVersion,
@@ -636,6 +637,7 @@ interface PromptResult {
   detectionFailed: boolean;
   mode: "review-only" | "write-capable";
   value: string;
+  systemContext: string;
   headSha?: string;
 }
 
@@ -657,10 +659,6 @@ function tokenAllowsContentWrites(requested: unknown): boolean {
   );
   if (Object.keys(permissions).length > 0 && !hasAcceptedValue) return false;
   return permissions.contents !== "read";
-}
-
-function escapePromptValue(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function resolveUserRequest(): string {
@@ -709,6 +707,7 @@ export async function buildPrompt(): Promise<PromptResult> {
       detectionFailed: detection.detectionFailed ?? false,
       mode,
       value: "",
+      systemContext: "",
       headSha,
     };
   }
@@ -723,32 +722,29 @@ export async function buildPrompt(): Promise<PromptResult> {
     : writeCapable
       ? "installation token permits content writes"
       : "installation token has read-only contents permission";
-  const contextLines = [
-    "<bonk_execution_context>",
-    `repository: ${escapePromptValue(owner && repo ? `${owner}/${repo}` : repository || "unknown")}`,
-    `event: ${escapePromptValue(process.env.EVENT_NAME || "unknown")}`,
-    `target: ${escapePromptValue(target)}`,
-    `working_tree: ${mode === "write-capable" ? "write-capable" : "read-only"}`,
-    `working_tree_reason: ${modeReason}`,
-    "git_lifecycle_owner: bonk_harness",
-    "github_mutation_owner: bonk_harness",
-    "result_contract: submit_result tool",
-    "top_level_response_owner: bonk_harness",
-    `default_branch: ${escapePromptValue(process.env.DEFAULT_BRANCH || "unknown")}`,
-    `run_id: ${escapePromptValue(process.env.GITHUB_RUN_ID || "unknown")}`,
-  ];
-  if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
-  contextLines.push("</bonk_execution_context>");
+  const executionContext = {
+    schemaVersion: 1,
+    repository: owner && repo ? `${owner}/${repo}` : repository || "unknown",
+    event: process.env.EVENT_NAME || "unknown",
+    target,
+    workingTree: mode === "write-capable" ? "write-capable" : "read-only",
+    workingTreeReason: modeReason,
+    gitLifecycleOwner: "bonk_harness",
+    githubMutationOwner: "bonk_harness",
+    resultContract: "submit_result",
+    topLevelResponseOwner: "bonk_harness",
+    defaultBranch: process.env.DEFAULT_BRANCH || "unknown",
+    runId: process.env.GITHUB_RUN_ID || "unknown",
+    ...(headSha ? { headSha } : {}),
+  } as const;
 
   return {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
     mode,
     headSha,
-    value: [
-      contextLines.join("\n"),
-      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
-    ].join("\n\n"),
+    value: userRequest,
+    systemContext: JSON.stringify(executionContext, null, 2),
   };
 }
 
@@ -758,18 +754,11 @@ export async function buildPrompt(): Promise<PromptResult> {
 
 interface OidcResult {
   failed: boolean;
-  token?: string;
 }
 
 interface OidcExchangeOptions {
   forceNoPush: boolean;
   codeownersTeamGroups?: string[][];
-}
-
-function maskValue(value: string): void {
-  if (value) {
-    console.log(`::add-mask::${value}`);
-  }
 }
 
 function oidcFailClosed(reason: string): OidcResult {
@@ -778,92 +767,23 @@ function oidcFailClosed(reason: string): OidcResult {
 }
 
 async function exchangeOidc(options: OidcExchangeOptions): Promise<OidcResult> {
-  const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-
-  if (!oidcUrl || !oidcRequestToken) {
+  if (
+    !process.env.ACTIONS_ID_TOKEN_REQUEST_URL ||
+    !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  ) {
     return oidcFailClosed("OIDC credentials not available");
   }
-
-  let actionOidcToken: string;
   try {
-    actionOidcToken = await getOidcToken();
+    await exchangeGitHubAppToken({
+      forceNoPush: options.forceNoPush,
+      tokenPermissions: process.env.TOKEN_PERMISSIONS,
+      codeownersTeamGroups: options.codeownersTeamGroups,
+      actor: process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR,
+    });
   } catch (error) {
-    return oidcFailClosed(`Failed to get OIDC token: ${error}`);
+    return oidcFailClosed(String(error));
   }
-
-  let oidcBaseUrl: string;
-  try {
-    oidcBaseUrl = `${getApiBaseUrl()}/auth`;
-  } catch (error) {
-    return oidcFailClosed(`Invalid OIDC_BASE_URL: ${error}`);
-  }
-
-  // Build request body — include token_permissions if provided by the caller.
-  // Accepts a preset name (e.g., "NO_PUSH") or a JSON permissions object.
-  const exchangeBody: Record<string, unknown> = {};
-  const rawPermissions = process.env.TOKEN_PERMISSIONS;
-  if (options.forceNoPush) {
-    exchangeBody.permissions = "NO_PUSH";
-  } else if (rawPermissions?.trim()) {
-    const parsed = parseTokenPermissions(rawPermissions);
-    if (parsed !== undefined) {
-      exchangeBody.permissions = parsed;
-    } else {
-      // parseTokenPermissions returns undefined only for malformed JSON (the
-      // outer `if` already guarantees the input is non-empty after trim).
-      // Fail closed: send NO_PUSH so the server doesn't grant full defaults.
-      core.warning(`Invalid TOKEN_PERMISSIONS JSON, falling back to NO_PUSH: ${rawPermissions}`);
-      exchangeBody.permissions = "NO_PUSH";
-    }
-  }
-
-  if (options.codeownersTeamGroups && options.codeownersTeamGroups.length > 0) {
-    exchangeBody.codeowners_team_groups = options.codeownersTeamGroups;
-    const actor = process.env.COMMENT_ACTOR || process.env.REVIEW_ACTOR || process.env.GITHUB_ACTOR;
-    if (actor) {
-      exchangeBody.actor = actor;
-    }
-  }
-
-  let appToken: string;
-  try {
-    const resp = await fetchWithRetry(
-      `${oidcBaseUrl}/exchange_github_app_token`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${actionOidcToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(exchangeBody),
-      },
-      { timeoutMs: 10000 },
-    );
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      let errorMessage = "Unknown error";
-      try {
-        const data = JSON.parse(text) as { error?: string };
-        errorMessage = data.error || errorMessage;
-      } catch {
-        errorMessage = text || errorMessage;
-      }
-      return oidcFailClosed(`Token exchange returned ${resp.status}: ${errorMessage}`);
-    }
-
-    const data = (await resp.json()) as { token?: string };
-    if (!data.token) {
-      return oidcFailClosed("Token exchange response missing token");
-    }
-    appToken = data.token;
-  } catch (error) {
-    return oidcFailClosed(`Token exchange request failed: ${error}`);
-  }
-
-  maskValue(appToken);
-  return { failed: false, token: appToken };
+  return { failed: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,12 +977,39 @@ async function main() {
 
   const promptResult = await buildPrompt();
 
-  if (promptResult.detectionFailed) {
+  const setPromptOutputs = () => {
     core.setOutput("is_fork", String(promptResult.isFork));
     core.setOutput("mode", promptResult.mode);
     core.setOutput("value", promptResult.value);
+    core.setOutput("system_context", promptResult.systemContext);
     core.setOutput("head_sha", promptResult.headSha || "");
+    core.setOutput(
+      "codeowners_team_groups",
+      JSON.stringify(codeownersCheck?.teamGroups || []),
+    );
+  };
+  setPromptOutputs();
+
+  if (promptResult.detectionFailed) {
     return core.setFailed("Fork status could not be verified; refusing to proceed.");
+  }
+
+  if (!promptResult.value.trim()) {
+    return core.setFailed(
+      "Bonk requires a prompt for schedule and workflow_dispatch events.",
+    );
+  }
+
+  if (promptResult.isFork && process.env.FORKS === "false") {
+    await handleFork(false);
+    return;
+  }
+
+  // Register non-fork runs before the installation-token exchange so an
+  // exchange or later infrastructure failure still receives the existing
+  // reaction and in-thread failure feedback from RepoAgent.
+  if (!promptResult.isFork) {
+    await trackRun();
   }
 
   const oidcResult = await exchangeOidc({
@@ -1070,19 +1017,12 @@ async function main() {
     codeownersTeamGroups: codeownersCheck?.teamGroups,
   });
 
-  // Set prompt outputs
-  core.setOutput("is_fork", String(promptResult.isFork));
-  core.setOutput("mode", promptResult.mode);
-  core.setOutput("value", promptResult.value);
-  core.setOutput("head_sha", promptResult.headSha || "");
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
-  if (oidcResult.token) {
-    core.setOutput("gh_token", oidcResult.token);
-  }
 
   // Step 4: Handle fork PRs
   if (promptResult.isFork) {
     await handleFork(oidcResult.failed);
+    if (!oidcResult.failed) await trackRun();
     return;
   }
 
@@ -1091,8 +1031,6 @@ async function main() {
     return core.setFailed("OIDC token exchange failed. Ensure id-token: write is configured.");
   }
 
-  // Step 6: Track the run
-  await trackRun();
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -173,7 +173,11 @@ runs:
       id: worktree
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
+        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
+        TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
+        CODEOWNERS_TEAM_GROUPS: ${{ steps.preflight.outputs.codeowners_team_groups }}
+        IS_FORK: ${{ steps.preflight.outputs.is_fork }}
+        ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_RUN_ID: ${{ github.run_id }}
@@ -188,12 +192,22 @@ runs:
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_pi == 'true')
       id: pi
       shell: bash
-      run: bun run ${{ github.action_path }}/script/run-pi.ts
+      run: |
+        set -euo pipefail
+        for name in $(compgen -e); do
+          case "$name" in
+            GH_*|GITHUB_*|ACTIONS_*|RUNNER_*|GIT_CONFIG_*|GIT_ASKPASS|GIT_SSH|GIT_SSH_COMMAND|SSH_ASKPASS|SSH_AUTH_SOCK)
+              unset "$name"
+              ;;
+          esac
+        done
+        exec bun run "${BONK_ACTION_PATH}/script/run-pi.ts"
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
+        SYSTEM_CONTEXT: ${{ steps.preflight.outputs.system_context }}
         BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
         BONK_ACTION_PATH: ${{ github.action_path }}
         BONK_RESULT_PATH: ${{ runner.temp }}/bonk-result-${{ github.run_id }}.json
@@ -214,7 +228,10 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         PI_STATUS: ${{ steps.pi.outcome }}
-        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
+        TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
+        CODEOWNERS_TEAM_GROUPS: ${{ steps.preflight.outputs.codeowners_team_groups }}
+        IS_FORK: ${{ steps.preflight.outputs.is_fork }}
+        ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
         BONK_RESULT_PATH: ${{ runner.temp }}/bonk-result-${{ github.run_id }}.json
         RUN_MODE: ${{ steps.preflight.outputs.mode }}
         INITIAL_SHA: ${{ steps.worktree.outputs.base_sha }}
@@ -235,6 +252,9 @@ runs:
         server_url="${GITHUB_SERVER_URL:-https://github.com}"
         host="${server_url#https://}"
         host="${host#http://}"
-        git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
+        while IFS= read -r key; do
+          [ -n "$key" ] && git config --local --unset-all "$key" 2>/dev/null || true
+        done < <(git config --local --name-only --get-regexp '^http\..*\.extraheader$' 2>/dev/null || true)
         git config --local --unset-all "credential.helper" 2>/dev/null || true
+        git config --local --unset-all "remote.origin.pushurl" 2>/dev/null || true
         git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true

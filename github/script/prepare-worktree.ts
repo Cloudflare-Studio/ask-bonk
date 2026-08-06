@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
-import { core } from "./context";
+import { core, exchangeGitHubAppToken, parseCodeownersTeamGroups } from "./context";
 
 function git(args: string[]): string {
   return execFileSync(
@@ -70,10 +70,24 @@ function gitWithToken(args: string[]): string {
 export function scrubGitCredentials(): void {
   const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
   const remote = repositoryRemote();
-  for (const key of new Set([
+  const headerKeys = new Set([
     `http.${serverUrl}/.extraheader`,
     "http.https://github.com/.extraheader",
-  ])) {
+  ]);
+  try {
+    for (const key of git([
+      "config",
+      "--local",
+      "--name-only",
+      "--get-regexp",
+      "^http\\..*\\.extraheader$",
+    ]).split("\n")) {
+      if (key) headerKeys.add(key);
+    }
+  } catch {
+    // No repository-local HTTP authorization headers are configured.
+  }
+  for (const key of headerKeys) {
     try {
       git(["config", "--local", "--unset-all", key]);
     } catch {
@@ -84,6 +98,11 @@ export function scrubGitCredentials(): void {
     git(["config", "--local", "--unset-all", "credential.helper"]);
   } catch {
     // actions/checkout normally uses an extraheader, not a helper.
+  }
+  try {
+    git(["config", "--local", "--unset-all", "remote.origin.pushurl"]);
+  } catch {
+    // A separate push URL is uncommon, but must not survive into Finalize.
   }
   git(["remote", "set-url", "origin", remote]);
 }
@@ -149,9 +168,25 @@ export function prepareWorktree(): PreparedWorktree {
   }
 }
 
+async function prepareWorktreeWithFreshToken(): Promise<PreparedWorktree> {
+  const previousToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = await exchangeGitHubAppToken({
+    forceNoPush: process.env.IS_FORK === "true",
+    tokenPermissions: process.env.TOKEN_PERMISSIONS,
+    codeownersTeamGroups: parseCodeownersTeamGroups(process.env.CODEOWNERS_TEAM_GROUPS),
+    actor: process.env.ACTOR || process.env.GITHUB_ACTOR,
+  });
+  try {
+    return prepareWorktree();
+  } finally {
+    if (previousToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previousToken;
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    prepareWorktree();
+    await prepareWorktreeWithFreshToken();
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
   }

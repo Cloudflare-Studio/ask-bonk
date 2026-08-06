@@ -41,12 +41,14 @@ export interface GitHubActionsJWTClaims {
   actor: string;
   actor_id: string;
   workflow: string;
+  workflow_ref?: string;
+  workflow_sha?: string;
   head_ref?: string;
   base_ref?: string;
   event_name: string;
   ref: string;
   ref_type: string;
-  job_workflow_ref: string;
+  job_workflow_ref?: string;
   runner_environment: string;
 }
 
@@ -899,7 +901,7 @@ export async function handleExchangeTokenForRepo(
         source_visibility: sourceData.visibility,
         target_visibility: targetData.visibility,
         run_id: claims.run_id,
-        workflow: claims.job_workflow_ref,
+        workflow: claims.workflow_ref || claims.job_workflow_ref,
       });
 
       return { token: targetToken };

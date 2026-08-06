@@ -5,7 +5,14 @@ import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { getApiBaseUrl, getContext, getOidcToken, core } from "./context";
+import {
+  getApiBaseUrl,
+  getContext,
+  getOidcToken,
+  exchangeGitHubAppToken,
+  parseCodeownersTeamGroups,
+  core,
+} from "./context";
 import { fetchWithRetry } from "./http";
 import { parseBonkResult, type BonkFinding, type BonkResult } from "../extensions/bonk-result";
 
@@ -286,7 +293,7 @@ async function finalizeChange(
     throw new Error("Pi submitted a change result without stageable changes");
   }
   git(["commit", "-m", commitTitle(result)]);
-  git(["remote", "set-url", "origin", repositoryRemote()]);
+  const pushUrl = repositoryRemote();
 
   const prNumber = process.env.PR_NUMBER;
   if (prNumber) {
@@ -300,11 +307,11 @@ async function finalizeChange(
     if (initialSha && pullRequest.head.sha !== initialSha) {
       throw new Error("Pull request head changed after the Prepare phase; refusing to push");
     }
-    gitWithToken(["push", "origin", `HEAD:refs/heads/${pullRequest.head.ref}`]);
+    gitWithToken(["push", pushUrl, `HEAD:refs/heads/${pullRequest.head.ref}`]);
     return result.body;
   }
 
-  gitWithToken(["push", "origin", `HEAD:refs/heads/${localBranch}`]);
+  gitWithToken(["push", pushUrl, `HEAD:refs/heads/${localBranch}`]);
   const prUrl = await createOrFindPullRequest(result, localBranch);
   return `${result.body}\n\n${prUrl}`;
 }
@@ -368,10 +375,22 @@ export async function finalizeRun(): Promise<void> {
   let publishError: unknown;
 
   if (piStatus === "success") {
+    const previousToken = process.env.GH_TOKEN;
     try {
+      process.env.GH_TOKEN = await exchangeGitHubAppToken({
+        forceNoPush: process.env.IS_FORK === "true",
+        tokenPermissions: process.env.TOKEN_PERMISSIONS,
+        codeownersTeamGroups: parseCodeownersTeamGroups(
+          process.env.CODEOWNERS_TEAM_GROUPS,
+        ),
+        actor: process.env.ACTOR || process.env.GITHUB_ACTOR,
+      });
       await publishResult(readResult());
     } catch (error) {
       publishError = error;
+    } finally {
+      if (previousToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previousToken;
     }
   }
 

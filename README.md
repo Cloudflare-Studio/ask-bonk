@@ -175,7 +175,7 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
 
 #### Token Scoping
 
-By default, Bonk's trusted Prepare and Finalize stages request an installation token with full write access. The Pi child environment does not contain that token. Use `token_permissions` to restrict what the finalizer can publish -- useful for review-only workflows where Bonk should never push code.
+By default, Bonk's trusted stages request short-lived installation tokens with full write access. Prepare and Finalize exchange their own tokens through OIDC; no installation token is passed through a step output or retained across the Pi stage, and the Pi child environment does not contain one. Use `token_permissions` to restrict what the finalizer can publish -- useful for review-only workflows where Bonk should never push code.
 
 ```yaml
 # Review-only: can comment and suggest, cannot push
@@ -214,6 +214,8 @@ By default, Bonk installs the latest Pi coding agent release. If a release is br
 Accepts a semver string (e.g., `"0.83.0"`, `"0.83.0-beta.1"`) or `"latest"`. Invalid input (including `v`-prefixed versions, incomplete versions, or strings containing shell metacharacters) falls back to `"latest"` with a warning in the workflow log.
 
 The legacy `opencode_version` and `opencode_dev` inputs remain accepted as no-ops so existing workflow files do not break. Use `pi_version` for new version pins.
+
+Bonk v2 does not load OpenCode configuration, plugins, or provider definitions. Existing workflow inputs, OpenCode Zen model identifiers and API keys, legacy named agent files, and Agent Skills remain supported as documented here. Setup recognizes the verified calling workflow path, including `bonk.yml`, `bonk.yaml`, and custom workflow filenames that already invoke the Action.
 
 #### Scheduled Tasks
 
@@ -272,8 +274,8 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 Bonk is configured through the workflow and Pi's repository resources. The Action has three ownership stages:
 
-1. **Prepare** validates the trigger and actor, resolves the authoritative target, structures the prompt, prepares the exact branch, and removes checkout credentials before Pi starts.
-2. **Run Pi** loads the selected agent and repository skills, inspects or edits the worktree, and submits one structured answer, review, or change result. Its child environment excludes GitHub tokens, Actions OIDC credentials, and runner command files.
+1. **Prepare** validates the trigger and actor, resolves the authoritative target, serializes run metadata into Pi's system-prompt channel, keeps only the triggering request in the user message, prepares the exact branch, and removes checkout credentials before Pi starts.
+2. **Run Pi** removes GitHub, Actions OIDC, runner-command, SSH, and Git-control variables before starting the Pi supervisor; the supervisor filters its child environment again. Pi then loads the selected agent and repository skills, inspects or edits the worktree, and submits one structured answer, review, or change result.
 3. **Finalize** validates the result and worktree, then owns comments, reviews, commits, pushes, pull requests, and run tracking.
 
 These stages make credentials and side effects explicit, but a composite Action still runs on one GitHub Actions runner; the filtered Pi process is a credential-minimization boundary, not a general-purpose sandbox.

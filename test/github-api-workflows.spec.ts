@@ -45,10 +45,11 @@ function createClaims(owner = "test-org", repo = "test-repo"): GitHubActionsJWTC
     actor: "octocat",
     actor_id: "789",
     workflow: "Bonk",
+    workflow_ref: `${owner}/${repo}/.github/workflows/bonk.yaml@refs/heads/main`,
     event_name: "issue_comment",
     ref: "refs/heads/main",
     ref_type: "branch",
-    job_workflow_ref: `${owner}/${repo}/.github/workflows/bonk.yml@refs/heads/main`,
+    job_workflow_ref: `${owner}/${repo}/.github/workflows/reusable.yml@refs/heads/main`,
     runner_environment: "github-hosted",
   };
 }
@@ -107,6 +108,7 @@ describe("GitHub API workflow compatibility routes", () => {
         repo: "test-repo",
         issue_number: 12,
         default_branch: "main",
+        workflow_path: ".github/workflows/bonk.yaml",
       });
       return Response.json({ result: { status: 200, body: { exists: true } } });
     }) satisfies NonNullable<FlueRuntime["routeWorkflowRequest"]>;

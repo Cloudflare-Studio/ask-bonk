@@ -726,8 +726,10 @@ export async function buildPrompt(): Promise<PromptResult> {
     `repository: ${escapePromptValue(owner && repo ? `${owner}/${repo}` : repository || "unknown")}`,
     `event: ${escapePromptValue(process.env.EVENT_NAME || "unknown")}`,
     `target: ${escapePromptValue(target)}`,
-    `mode: ${mode}`,
-    `mode_reason: ${modeReason}`,
+    `working_tree: ${mode === "write-capable" ? "write-capable" : "read-only"}`,
+    `working_tree_reason: ${modeReason}`,
+    "git_lifecycle_owner: pi_agent",
+    "top_level_response_owner: bonk_harness",
     `default_branch: ${escapePromptValue(process.env.DEFAULT_BRANCH || "unknown")}`,
     `run_id: ${escapePromptValue(process.env.GITHUB_RUN_ID || "unknown")}`,
   ];

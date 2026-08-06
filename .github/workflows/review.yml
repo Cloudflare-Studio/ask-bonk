@@ -15,11 +15,6 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Get PR number
-        id: pr-number
-        run: |
-          echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-
       - name: Verify PR exists
         id: verify-pr
         run: |
@@ -46,21 +41,6 @@ jobs:
         if: steps.verify-pr.outputs.exists == 'true'
         run: bun install --frozen-lockfile
 
-      - name: Get PR details
-        if: steps.verify-pr.outputs.exists == 'true'
-        id: pr-details
-        run: |
-          gh api /repos/${{ github.repository }}/pulls/${{ steps.pr-number.outputs.number }} > /tmp/pr_data.json
-          echo "title=$(jq -r .title /tmp/pr_data.json)" >> $GITHUB_OUTPUT
-          echo "sha=$(jq -r .head.sha /tmp/pr_data.json)" >> $GITHUB_OUTPUT
-          {
-            echo 'body<<EOF'
-            jq -r .body /tmp/pr_data.json
-            echo EOF
-          } >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Run Bonk
         if: steps.verify-pr.outputs.exists == 'true'
         uses: ask-bonk/ask-bonk/github@main
@@ -74,24 +54,6 @@ jobs:
           permissions: write
           agent: reviewer
           prompt: |
-            Review the following pull request (title: ${{ steps.pr-details.outputs.title }}) against the below review guidelines:
-
-            Please check all the code changes in this pull request against the style guide, also look for any bugs if they exist. Diffs are important but make sure you read the entire file to get proper context. Make it clear the suggestions are merely suggestions and the human can decide what to do.
-
-            Refer to AGENTS.md and any additional instructions for our style guide, conventions and repo-wide rules.
-
-            1. Focus on actual violations and bugs. Where possible, comment on the exact line number to help guide the reviewer.
-            2. Break up "needs fixing" (real logic bugs, poor error handling, security issues) vs. "suggestions" (nested logic, unused code, code structure/maintenance guidance) when responding so that a human has clear, actionable feedback.
-            3. Use the gh cli to create comments on the files (or line numbers) where relevant. Use suggestions to suggest fixes, especially where you have high-confidence in the fix. Ensure fixes are valid code and take into account the surrounding code (opening/closing braces, indentation, comments). ALWAYS leave the final "review" comment empty.
-            4. Your summary will be posted as a comment for you by Bonk.
-
-            In general, aim to provide actionable comments > code suggestions.
-
-            <pr_number>
-            ${{ steps.pr-number.outputs.number }}
-            </pr_number>
-            <pr_description>
-            ${{ steps.pr-details.outputs.body }}
-            </pr_description>
-
-            If the PR looks good, respond with only "LGTM!". No need to pad your response if the PR passes review.
+            Review this pull request for discrete, actionable defects introduced by the change.
+            Inspect the diff, relevant surrounding code, and applicable repository instructions.
+            Ignore non-blocking style preferences and speculative concerns. Report every qualifying finding in severity order.

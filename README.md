@@ -269,7 +269,7 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 ## Config
 
-Bonk is configured through the workflow and Pi's repository resources. Its built-in harness guidance keeps Pi on the triggering target, gives Pi the commit/push/PR lifecycle for authorized changes, applies review-only behavior when repository writes are unavailable, and posts Pi's final response exactly once.
+Bonk is configured through the workflow and Pi's repository resources. Its built-in harness guidance keeps Pi on the triggering target, gives Pi the commit/push/PR lifecycle for authorized changes, applies read-only working-tree behavior when repository content writes are unavailable, and makes the Bonk harness the sole owner of posting Pi's final response.
 
 ### Workflow Inputs
 

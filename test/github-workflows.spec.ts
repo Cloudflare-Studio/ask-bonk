@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
 import { internalWorkflowHeaders, internalWorkflowRoute } from "../src/internal-workflows";
 import { runFinalizeWorkflowJob } from "../src/github-workflow-jobs";
+import { ensureWorkflowFile } from "../src/workflow";
 import type { Env } from "../src/types";
 
 const mocks = vi.hoisted(() => ({
@@ -74,6 +75,21 @@ describe("GitHub Flue workflow jobs", () => {
     });
 
     expect(result).toEqual({ status: 200, body: { ok: true, warning: "agent unavailable" } });
+  });
+});
+
+describe("GitHub workflow setup compatibility", () => {
+  it("accepts the OIDC-verified calling workflow without requiring bonk.yml", async () => {
+    await expect(
+      ensureWorkflowFile(
+        {} as never,
+        "test-org",
+        "test-repo",
+        12,
+        "main",
+        ".github/workflows/bonk.yaml",
+      ),
+    ).resolves.toEqual({ exists: true });
   });
 });
 

@@ -129,7 +129,7 @@ app.route("/stats", stats);
 // configuration continues to work while Flue owns the canonical channel route.
 app.post("/webhooks", async (c) => handleLegacyWebhook(c));
 
-// OIDC endpoints for OpenCode GitHub Action token exchange
+// OIDC endpoints for the Pi-backed GitHub Action token exchange
 const auth = new Hono<{ Bindings: Env }>();
 
 auth.get("/get_github_app_installation", async (c) => {
@@ -235,6 +235,20 @@ function requireRepoMatch(
   return null;
 }
 
+function workflowPathFromJobRef(
+  jobWorkflowRef: string | undefined,
+  owner: string,
+  repo: string,
+): string | undefined {
+  const prefix = `${owner}/${repo}/`;
+  if (!jobWorkflowRef?.startsWith(prefix)) return undefined;
+  const pathAndRef = jobWorkflowRef.slice(prefix.length);
+  const refSeparator = pathAndRef.lastIndexOf("@");
+  if (refSeparator < 0) return undefined;
+  const path = pathAndRef.slice(0, refSeparator);
+  return /^\.github\/workflows\/[^/@]+\.ya?ml$/i.test(path) ? path : undefined;
+}
+
 async function runInternalWorkflow<TBody>(
   requestUrl: string,
   env: Env,
@@ -290,7 +304,15 @@ apiGithub.post("/setup", async (c) => {
   const mismatch = requireRepoMatch(c.get("oidc"), body.owner, body.repo);
   if (mismatch) return c.json({ error: mismatch.error }, mismatch.status);
 
-  const result = await runInternalWorkflow(c.req.url, c.env, "github-setup", body);
+  const workflowPath = workflowPathFromJobRef(
+    c.get("oidc").claims.workflow_ref || c.get("oidc").claims.job_workflow_ref,
+    body.owner,
+    body.repo,
+  );
+  const result = await runInternalWorkflow(c.req.url, c.env, "github-setup", {
+    ...body,
+    ...(workflowPath ? { workflow_path: workflowPath } : {}),
+  });
   return c.json(result.body, result.status);
 });
 

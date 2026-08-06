@@ -85,6 +85,7 @@ export async function runSetupWorkflowJob(
       body.repo,
       body.issue_number,
       body.default_branch,
+      body.workflow_path,
     );
 
     setupLog.info("setup_completed", {

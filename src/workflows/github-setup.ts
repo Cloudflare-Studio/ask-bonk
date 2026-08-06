@@ -17,6 +17,7 @@ export default defineWorkflow({
     repo: v.string(),
     issue_number: v.number(),
     default_branch: v.string(),
+    workflow_path: v.optional(v.string()),
   }),
   output: workflowJobResultSchema,
   async run({ input }) {

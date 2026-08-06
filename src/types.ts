@@ -211,4 +211,6 @@ export interface SetupWorkflowRequest {
   repo: string;
   issue_number: number;
   default_branch: string;
+  // Verified calling workflow path derived from the Actions OIDC claim.
+  workflow_path?: string;
 }

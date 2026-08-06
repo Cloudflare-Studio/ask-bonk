@@ -80,7 +80,7 @@ const PROVIDERS: Record<ProviderChoice, { name: string; keyName: string; default
     defaultModel: "gpt-4o",
   },
   other: {
-    name: "Other OpenCode supported provider",
+    name: "Other Pi-supported provider",
     keyName: "",
     defaultModel: "",
   },
@@ -128,7 +128,7 @@ async function selectProvider(): Promise<ProviderConfig> {
       { value: "opencode-zen", label: "OpenCode Zen", hint: "recommended" },
       { value: "anthropic", label: "Anthropic" },
       { value: "openai", label: "OpenAI" },
-      { value: "other", label: "Other OpenCode supported provider" },
+      { value: "other", label: "Other Pi-supported provider" },
     ],
   })) as ProviderChoice;
 
@@ -793,7 +793,7 @@ function getUsageDescription(preset: WorkflowPreset, config: WorkflowConfig): st
 
 async function showMenu() {
   p.intro(
-    "Bonk CLI: a command-line helper for installing Bonk, a code-review tool build on OpenCode",
+    "Bonk CLI: a command-line helper for installing Bonk, a code-review tool built on Pi",
   );
 
   const action = await p.select({

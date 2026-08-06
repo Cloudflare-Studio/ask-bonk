@@ -13,6 +13,7 @@ import workflowTemplate from "../cli/templates/bonk.yml.hbs?raw";
 import { createLogger } from "./log";
 
 const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";
+const LEGACY_WORKFLOW_FILE_PATH = ".github/workflows/bonk.yaml";
 const WORKFLOW_BRANCH = "bonk/add-workflow-file";
 
 export interface SetupResult {
@@ -38,9 +39,20 @@ export async function ensureWorkflowFile(
   repo: string,
   issueNumber: number,
   defaultBranch: string,
+  verifiedWorkflowPath?: string,
 ): Promise<SetupResult> {
   const workflowLog = createLogger({ owner, repo, issue_number: issueNumber });
-  const hasWorkflow = await fileExists(octokit, owner, repo, WORKFLOW_FILE_PATH);
+  // The OIDC job_workflow_ref proves that a same-repository workflow is
+  // currently invoking Bonk, regardless of whether it uses the canonical
+  // filename, the legacy .yaml suffix, or a custom workflow name.
+  if (verifiedWorkflowPath) {
+    workflowLog.info("workflow_file_exists", { workflow_path: verifiedWorkflowPath });
+    return { exists: true };
+  }
+
+  const hasWorkflow =
+    (await fileExists(octokit, owner, repo, WORKFLOW_FILE_PATH)) ||
+    (await fileExists(octokit, owner, repo, LEGACY_WORKFLOW_FILE_PATH));
 
   if (hasWorkflow) {
     workflowLog.info("workflow_file_exists");
@@ -117,7 +129,7 @@ After merging, ensure the following secret is set in your repository:
 1. Go to **Settings** > **Secrets and variables** > **Actions**
 2. Add a new repository secret:
    - **Name**: \`OPENCODE_API_KEY\`
-   - **Value**: Your Anthropic API key (get one at https://console.anthropic.com/)
+   - **Value**: Your OpenCode Zen API key (get one at https://opencode.ai/auth)
 
 ## Usage
 

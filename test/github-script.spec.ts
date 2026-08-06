@@ -10,7 +10,6 @@ import {
   getApiBaseUrl,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
-import { runCrossRepoCommand } from "../github/script/cross-repo";
 import {
   buildPrompt,
   checkCodeowners,
@@ -19,7 +18,7 @@ import {
 } from "../github/script/orchestrate";
 import {
   buildPiArgs,
-  deliverFinalResponse,
+  buildPiEnvironment,
   discoverProjectSkills,
   extractAssistantText,
   isFailedAssistantMessage,
@@ -27,6 +26,12 @@ import {
   loadAgentPrompt,
   shouldApproveProject,
 } from "../github/script/run-pi";
+import { parseBonkResult } from "../github/extensions/bonk-result";
+import {
+  assertResultMatchesWorktree,
+  publishReview,
+  publishTopLevelResponse,
+} from "../github/script/finalize";
 import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
@@ -133,7 +138,9 @@ describe("GitHub Action preflight prompt", () => {
     expect(result.value).toContain("repository: owner/repo");
     expect(result.value).toContain("target: issue #42");
     expect(result.value).toContain("working_tree: write-capable");
-    expect(result.value).toContain("git_lifecycle_owner: pi_agent");
+    expect(result.value).toContain("git_lifecycle_owner: bonk_harness");
+    expect(result.value).toContain("github_mutation_owner: bonk_harness");
+    expect(result.value).toContain("result_contract: submit_result tool");
     expect(result.value).toContain("top_level_response_owner: bonk_harness");
     expect(result.value).toContain(
       "<bonk_user_request>\n/bonk summarize this issue\n</bonk_user_request>",
@@ -299,13 +306,14 @@ describe("GitHub Action Pi configuration", () => {
     expect(shouldApproveProject("true")).toBe(false);
   });
 
-  it("loads trusted repository instructions and skills without executable extensions", () => {
+  it("loads trusted repository resources and only the Bonk result extension", () => {
     const args = buildPiArgs({
       model: "anthropic/claude-opus-4-5",
       prompt: "<bonk_user_request>Review this</bonk_user_request>",
       guidance: "Bonk guidance",
       thinking: "high",
-      skills: ["/action/skills/cross-repo/SKILL.md"],
+      skills: ["/repo/.agents/skills/review/SKILL.md"],
+      extension: "/action/extensions/bonk-result.ts",
     });
 
     expect(args).toContain("--approve");
@@ -314,7 +322,9 @@ describe("GitHub Action Pi configuration", () => {
     expect(args).not.toContain("--no-context-files");
     expect(args).toContain("--no-session");
     expect(args).toContain("high");
-    expect(args).toContain("/action/skills/cross-repo/SKILL.md");
+    expect(args).toContain("/repo/.agents/skills/review/SKILL.md");
+    expect(args).toContain("--extension");
+    expect(args).toContain("/action/extensions/bonk-result.ts");
     expect(args.at(-1)).toContain("GitHub task:\n\n<bonk_user_request>");
   });
 
@@ -399,40 +409,165 @@ describe("GitHub Action Pi configuration", () => {
     expect(isFailedAssistantMessage({ role: "assistant", stopReason: "stop" })).toBe(false);
   });
 
-  it("delivers the final response to the triggering GitHub thread once", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
-    await withEnv(
-      {
-        ISSUE_NUMBER: "42",
-        GITHUB_REPOSITORY: "owner/repo",
-        REPOSITORY: undefined,
-        GH_TOKEN: "token",
-      },
-      () => deliverFinalResponse("Migration complete."),
-    );
+  it("removes GitHub, OIDC, and runner control variables from Pi", () => {
+    const environment = buildPiEnvironment({
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "provider-token",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      BONK_RESULT_PATH: "/tmp/result.json",
+      BONK_ACTION_PATH: "/action",
+      GH_TOKEN: "github-token",
+      GH_ENTERPRISE_TOKEN: "enterprise-token",
+      GITHUB_TOKEN: "github-token",
+      GITHUB_ENV: "/tmp/github-env",
+      GITHUB_WORKSPACE: "/repo",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-token",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example",
+      RUNNER_TEMP: "/tmp/runner",
+      GIT_CONFIG_COUNT: "1",
+      GIT_ASKPASS: "/tmp/askpass",
+    });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.github.com/repos/owner/repo/issues/42/comments",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ body: "Migration complete." }),
-      }),
-    );
+    expect(environment).toMatchObject({
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "provider-token",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      BONK_RESULT_PATH: "/tmp/result.json",
+      GIT_TERMINAL_PROMPT: "0",
+      PI_SKIP_VERSION_CHECK: "1",
+    });
+    expect(environment).not.toHaveProperty("GH_TOKEN");
+    expect(environment).not.toHaveProperty("GH_ENTERPRISE_TOKEN");
+    expect(environment).not.toHaveProperty("GITHUB_TOKEN");
+    expect(environment).not.toHaveProperty("GITHUB_ENV");
+    expect(environment).not.toHaveProperty("GITHUB_WORKSPACE");
+    expect(environment).not.toHaveProperty("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    expect(environment).not.toHaveProperty("RUNNER_TEMP");
+    expect(environment).not.toHaveProperty("GIT_CONFIG_COUNT");
+    expect(environment).not.toHaveProperty("GIT_ASKPASS");
   });
 });
 
-describe("GitHub Action cross-repository wrapper", () => {
-  it("rejects commands outside gh and git before requesting credentials", async () => {
-    await expect(
-      runCrossRepoCommand(["owner/repo", "--", "curl", "https://example.com"]),
-    ).resolves.toBe(2);
+describe("GitHub Action structured result contract", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("rejects malformed target repositories", async () => {
-    await expect(runCrossRepoCommand(["owner/repo/extra", "--", "gh", "pr", "list"])).rejects.toThrow(
-      "owner/repo format",
+  it("accepts a bounded review result", () => {
+    expect(
+      parseBonkResult({
+        kind: "review",
+        body: "Posted one inline finding.",
+        findings: [{ path: "src/app.ts", line: 8, endLine: 10, severity: "error", body: "Fix this." }],
+      }),
+    ).toEqual({
+      kind: "review",
+      body: "Posted one inline finding.",
+      findings: [{ path: "src/app.ts", line: 8, endLine: 10, severity: "error", body: "Fix this." }],
+    });
+  });
+
+  it("rejects traversal paths and malformed result variants", () => {
+    expect(() =>
+      parseBonkResult({
+        kind: "review",
+        body: "Finding.",
+        findings: [{ path: "../secret", line: 1, body: "No." }],
+      }),
+    ).toThrow("repository-relative");
+    expect(() => parseBonkResult({ kind: "unknown", body: "No." })).toThrow("kind");
+  });
+
+  it("enforces the result kind against worktree behavior", () => {
+    expect(() =>
+      assertResultMatchesWorktree({ kind: "answer", body: "Done." }, "write-capable", " M file.ts"),
+    ).toThrow("unexpected worktree changes");
+    expect(() =>
+      assertResultMatchesWorktree({ kind: "change", body: "Done." }, "review-only", " M file.ts"),
+    ).toThrow("review-only");
+    expect(() =>
+      assertResultMatchesWorktree({ kind: "change", body: "Done." }, "write-capable", ""),
+    ).toThrow("without worktree changes");
+  });
+
+  it("updates the run-marked top-level comment instead of duplicating it", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: 7, body: "Old\n\n<!-- bonk-run:123 -->" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 7 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await withEnv(
+      {
+        GH_TOKEN: "token",
+        GITHUB_REPOSITORY: "owner/repo",
+        ISSUE_NUMBER: "42",
+        GITHUB_RUN_ID: "123",
+      },
+      () => publishTopLevelResponse("Updated result."),
     );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://api.github.com/repos/owner/repo/issues/comments/7",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ body: "Updated result.\n\n<!-- bonk-run:123 -->" }),
+      }),
+    );
+  });
+
+  it("publishes all inline findings in one empty-body review", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 9 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await withEnv(
+      {
+        GH_TOKEN: "token",
+        GITHUB_REPOSITORY: "owner/repo",
+        PR_NUMBER: "42",
+        ISSUE_NUMBER: "42",
+        GITHUB_RUN_ID: "123",
+        HEAD_SHA: "abc123",
+      },
+      () =>
+        publishReview({
+          kind: "review",
+          body: "Posted two inline findings.",
+          findings: [
+            { path: "src/a.ts", line: 3, body: "First." },
+            { path: "src/b.ts", line: 5, endLine: 7, body: "Second." },
+          ],
+        }),
+    );
+
+    const request = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+    expect(request.method).toBe("POST");
+    expect(body).toMatchObject({ commit_id: "abc123", event: "COMMENT", body: "" });
+    expect(body.comments).toHaveLength(2);
+    expect(body.comments[0].body).toContain("<!-- bonk-review:123 -->");
+    expect(body.comments[1]).toMatchObject({ line: 7, start_line: 5, start_side: "RIGHT" });
   });
 });
 

@@ -141,7 +141,7 @@ For more complex tasks, use a multi-line prompt:
 - `/bonk explain how the auth system works` - Ask questions about the codebase
 - `@ask-bonk fix the failing tests` - Let Bonk make changes and push commits
 - `/bonk add documentation for the API endpoints` - Generate documentation
-- `/bonk add the --format="json" flag to the export subcommand and update the product/docs repo CLI docs to show the usage` - Make changes across one (or more!) repos in your org using the `cross-repo` tool
+- `/bonk add the --format="json" flag to the export subcommand` - Make a scoped change and open or update the relevant pull request
 
 ### Supported Events
 
@@ -166,6 +166,7 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
   with:
     model: "opencode/claude-opus-4-5"
     mentions: "/review"
+    token_permissions: NO_PUSH
     prompt: |
       Review this PR for bugs, security issues, and style. Leave suggestions
       on specific line numbers. Consider the wider context of each file and
@@ -174,7 +175,7 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
 
 #### Token Scoping
 
-By default, Bonk's installation token has full write access. Use `token_permissions` to restrict what the agent can do -- useful for review-only workflows where the agent should never push code.
+By default, Bonk's trusted Prepare and Finalize stages request an installation token with full write access. The Pi child environment does not contain that token. Use `token_permissions` to restrict what the finalizer can publish -- useful for review-only workflows where Bonk should never push code.
 
 ```yaml
 # Review-only: can comment and suggest, cannot push
@@ -188,7 +189,7 @@ By default, Bonk's installation token has full write access. Use `token_permissi
     token_permissions: NO_PUSH
 ```
 
-`NO_PUSH` sets `contents: read` while keeping `issues: write` and `pull_requests: write` so the agent can still post comments and reviews. `WRITE` is the default (full access). You can also pass a custom JSON object for fine-grained control:
+`NO_PUSH` sets `contents: read` while keeping `issues: write` and `pull_requests: write` so the finalizer can still post comments and reviews. `WRITE` is the default (full access). You can also pass a custom JSON object for fine-grained control:
 
 ```yaml
 token_permissions: '{"contents": "read", "pull_requests": "read"}'
@@ -269,7 +270,13 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 ## Config
 
-Bonk is configured through the workflow and Pi's repository resources. Its built-in harness guidance keeps Pi on the triggering target, gives Pi the commit/push/PR lifecycle for authorized changes, applies read-only working-tree behavior when repository content writes are unavailable, and makes the Bonk harness the sole owner of posting Pi's final response.
+Bonk is configured through the workflow and Pi's repository resources. The Action has three ownership stages:
+
+1. **Prepare** validates the trigger and actor, resolves the authoritative target, structures the prompt, prepares the exact branch, and removes checkout credentials before Pi starts.
+2. **Run Pi** loads the selected agent and repository skills, inspects or edits the worktree, and submits one structured answer, review, or change result. Its child environment excludes GitHub tokens, Actions OIDC credentials, and runner command files.
+3. **Finalize** validates the result and worktree, then owns comments, reviews, commits, pushes, pull requests, and run tracking.
+
+These stages make credentials and side effects explicit, but a composite Action still runs on one GitHub Actions runner; the filtered Pi process is a credential-minimization boundary, not a general-purpose sandbox.
 
 ### Workflow Inputs
 
@@ -292,9 +299,9 @@ Bonk loads Pi's normal repository context and system prompts, including `AGENTS.
 
 Set `agent: reviewer` to append `.pi/agents/reviewer.md` as a named system-prompt profile. For compatibility during migration, Bonk also reads `.agents/agents/<name>.md` and legacy `.opencode/agents/<name>.md` files. If the selected file has YAML frontmatter, Bonk appends only its Markdown body.
 
-For same-repository runs, Bonk passes `--approve` so non-interactive Pi loads repository context, system prompts, and skills. Fork runs pass `--no-approve`; Bonk still discovers `.agents/skills/**/SKILL.md` itself and loads each skill explicitly, but does not trust fork-controlled `.pi/settings.json`, packages, system prompts, or startup resources. All runs pass `--no-extensions`, `--no-prompt-templates`, and `--no-themes`, so repository-controlled executable Pi extensions do not run inside the Action. See Pi's [context](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#context-files), [system prompt](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#system-prompt), and [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) documentation.
+For same-repository runs, Bonk passes `--approve` so non-interactive Pi loads repository context, system prompts, and skills. Fork runs pass `--no-approve`; Bonk still discovers `.agents/skills/**/SKILL.md` itself and loads each skill explicitly, but does not trust fork-controlled `.pi/settings.json`, packages, system prompts, or startup resources. All runs pass `--no-extensions`, `--no-prompt-templates`, and `--no-themes`, then explicitly load Bonk's single `submit_result` extension. Repository-controlled executable Pi extensions do not run inside the Action. See Pi's [context](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#context-files), [system prompt](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#system-prompt), [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md), and [explicit extension loading](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md#resource-options) documentation.
 
-Bonk also loads its built-in `cross-repo` skill. For an explicitly requested same-organization task, the skill runs `gh` or `git` through Bonk's existing OIDC exchange and keeps the short-lived target-repository token out of the model output and repository config.
+The extension has one job: validate and atomically write the structured result for Finalize. It has no GitHub client, credential exchange, prompt framework, or publication logic. Cross-repository changes are intentionally unavailable because they would require giving Pi GitHub authority or expanding the result/finalizer contract beyond the authoritative repository.
 
 ## Self-Hosting
 

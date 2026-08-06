@@ -636,6 +636,7 @@ interface PromptResult {
   detectionFailed: boolean;
   mode: "review-only" | "write-capable";
   value: string;
+  headSha?: string;
 }
 
 function requestedTokenPermissions(): unknown {
@@ -708,6 +709,7 @@ export async function buildPrompt(): Promise<PromptResult> {
       detectionFailed: detection.detectionFailed ?? false,
       mode,
       value: "",
+      headSha,
     };
   }
 
@@ -728,7 +730,9 @@ export async function buildPrompt(): Promise<PromptResult> {
     `target: ${escapePromptValue(target)}`,
     `working_tree: ${mode === "write-capable" ? "write-capable" : "read-only"}`,
     `working_tree_reason: ${modeReason}`,
-    "git_lifecycle_owner: pi_agent",
+    "git_lifecycle_owner: bonk_harness",
+    "github_mutation_owner: bonk_harness",
+    "result_contract: submit_result tool",
     "top_level_response_owner: bonk_harness",
     `default_branch: ${escapePromptValue(process.env.DEFAULT_BRANCH || "unknown")}`,
     `run_id: ${escapePromptValue(process.env.GITHUB_RUN_ID || "unknown")}`,
@@ -740,6 +744,7 @@ export async function buildPrompt(): Promise<PromptResult> {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
     mode,
+    headSha,
     value: [
       contextLines.join("\n"),
       `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
@@ -1056,6 +1061,7 @@ async function main() {
     core.setOutput("is_fork", String(promptResult.isFork));
     core.setOutput("mode", promptResult.mode);
     core.setOutput("value", promptResult.value);
+    core.setOutput("head_sha", promptResult.headSha || "");
     return core.setFailed("Fork status could not be verified; refusing to proceed.");
   }
 
@@ -1068,6 +1074,7 @@ async function main() {
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("mode", promptResult.mode);
   core.setOutput("value", promptResult.value);
+  core.setOutput("head_sha", promptResult.headSha || "");
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);

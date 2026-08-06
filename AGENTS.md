@@ -77,9 +77,9 @@ When `package.json` changes, run `bun install` and commit `package.json` with `b
 ## GitHub Action Pitfalls
 
 - Composite action steps do not share environment variables unless values are written to `GITHUB_ENV`. Outputs require `core.setOutput()` and `steps.<id>.outputs.*`.
-- `finalize.ts` must never call `core.setFailed()`. It runs under `if: always()` and must not mask the real Pi failure.
+- `finalize.ts` must never call `core.setFailed()`. It runs under `if: always()` and must not mask a real Pi failure; it may exit nonzero when Pi succeeded but trusted publication failed.
 - GitHub reports downstream skipped steps as `skipped`, not `failure`; keep the client-side and server-side remapping/treatment as failure.
-- `actions/checkout` persists `GITHUB_TOKEN` in `http.https://github.com/.extraheader`. The action must replace it with the App installation token so Bonk pushes trigger CI.
+- `actions/checkout` persists `GITHUB_TOKEN` in `http.https://github.com/.extraheader`. Prepare must remove it before Pi starts. Finalize uses the App installation token only through an ephemeral Git extraheader so Bonk pushes trigger CI without persisting credentials.
 - Multiline `GITHUB_ENV` and step output writes use random `BONK_<uuid>` delimiters to avoid injection.
 
 ## Error Handling And Logging

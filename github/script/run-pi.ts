@@ -1,17 +1,17 @@
-// Runs Pi and delivers its final response to the triggering GitHub thread.
+// Runs Pi and validates the structured result consumed by the trusted finalizer.
 
 import { execFileSync } from "child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync } from "fs";
 import { dirname, resolve } from "path";
 import { pathToFileURL } from "url";
 import { appendGitHubValue } from "./context";
+import { parseBonkResult } from "../extensions/bonk-result";
 
 const DEFAULT_TIMEOUT = "45m";
 const DEFAULT_RETRIES = 2;
 const DEFAULT_BASE_DELAY_MS = 15_000;
 const OUTPUT_TAIL_LIMIT = 64_000;
 const STREAM_DRAIN_GRACE_MS = 1_000;
-const MAX_GITHUB_COMMENT_LENGTH = 65_000;
 
 const NON_RETRYABLE_EXIT_CODES = new Set([
   124, // Pi timed out
@@ -91,6 +91,7 @@ export interface PiArguments {
   agentPrompt?: string | null;
   thinking?: string;
   skills?: string[];
+  extension?: string;
   approveProject?: boolean;
 }
 
@@ -101,6 +102,7 @@ export function buildPiArgs({
   agentPrompt,
   thinking,
   skills = [],
+  extension,
   approveProject = true,
 }: PiArguments): string[] {
   const args = [
@@ -129,11 +131,55 @@ export function buildPiArgs({
   for (const skill of skills) {
     args.push("--skill", skill);
   }
+  if (extension) {
+    args.push("--extension", extension);
+  }
 
   // Prefixing prevents a user prompt beginning with '-' or '@' from being
   // interpreted as a Pi flag or file argument.
   args.push(`GitHub task:\n\n${prompt}`);
   return args;
+}
+
+const BLOCKED_PI_ENVIRONMENT_KEYS = new Set([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "OIDC_BASE_URL",
+  "ACTIONS_ID_TOKEN_REQUEST_URL",
+  "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+  "ACTIONS_RUNTIME_TOKEN",
+  "ACTIONS_CACHE_URL",
+  "ACTIONS_RESULTS_URL",
+  "GITHUB_ENV",
+  "GITHUB_OUTPUT",
+  "GITHUB_PATH",
+  "GITHUB_STEP_SUMMARY",
+  "GIT_ASKPASS",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "SSH_ASKPASS",
+  "SSH_AUTH_SOCK",
+]);
+
+export function buildPiEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (BLOCKED_PI_ENVIRONMENT_KEYS.has(key)) continue;
+    if (key.startsWith("GH_") || key.startsWith("GITHUB_") || key.startsWith("ACTIONS_")) {
+      continue;
+    }
+    if (key.startsWith("RUNNER_")) continue;
+    if (key.startsWith("GIT_CONFIG_")) continue;
+    if (key.startsWith("BONK_") && key !== "BONK_RESULT_PATH") continue;
+    environment[key] = value;
+  }
+  environment.CI = "true";
+  environment.GIT_TERMINAL_PROMPT = "0";
+  environment.PI_SKIP_VERSION_CHECK = "1";
+  return environment;
 }
 
 function collectSkillFiles(path: string, includeRootMarkdown = false, depth = 0): string[] {
@@ -359,13 +405,7 @@ async function runPiAttempt(timeoutMs: number, args: string[]): Promise<PiFailur
   try {
     proc = Bun.spawn(args, {
       detached: true,
-      env: {
-        ...process.env,
-        GITHUB_TOKEN: process.env.GH_TOKEN || "",
-        CLOUDFLARE_API_KEY:
-          process.env.CLOUDFLARE_API_KEY || process.env.CLOUDFLARE_API_TOKEN || "",
-        PI_SKIP_VERSION_CHECK: "1",
-      },
+      env: buildPiEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -425,42 +465,11 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function deliverFinalResponse(response: string): Promise<void> {
-  const issueNumber = process.env.ISSUE_NUMBER;
-  if (!issueNumber) {
-    const stepSummary = process.env.GITHUB_STEP_SUMMARY;
-    if (stepSummary) appendFileSync(stepSummary, `## Bonk\n\n${response}\n`);
-    console.log(response);
-    return;
+function validateStructuredResult(resultPath: string): void {
+  if (!existsSync(resultPath)) {
+    throw new Error("Pi completed without calling submit_result");
   }
-
-  const repository = process.env.GITHUB_REPOSITORY || process.env.REPOSITORY;
-  const token = process.env.GH_TOKEN;
-  if (!repository || !token) {
-    throw new Error("Missing repository or GitHub token for final response delivery");
-  }
-
-  const body =
-    response.length > MAX_GITHUB_COMMENT_LENGTH
-      ? `${response.slice(0, MAX_GITHUB_COMMENT_LENGTH)}\n\n[Response truncated by Bonk]`
-      : response;
-  const result = await fetch(
-    `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      body: JSON.stringify({ body }),
-    },
-  );
-  if (!result.ok) {
-    const detail = await result.text();
-    throw new Error(`GitHub comment failed (${result.status}): ${detail}`);
-  }
+  parseBonkResult(JSON.parse(readFileSync(resultPath, "utf8")));
 }
 
 export async function runPiWithRetry(): Promise<number> {
@@ -485,6 +494,18 @@ export async function runPiWithRetry(): Promise<number> {
   const model = process.env.MODEL;
   if (!model?.trim()) {
     console.error("Bonk requires a Pi model.");
+    writeExitCode(2);
+    return 2;
+  }
+  const resultPath = process.env.BONK_RESULT_PATH;
+  if (!resultPath) {
+    console.error("Bonk structured result path is missing.");
+    writeExitCode(2);
+    return 2;
+  }
+  const actionPath = process.env.BONK_ACTION_PATH;
+  if (!actionPath) {
+    console.error("Bonk action path is missing.");
     writeExitCode(2);
     return 2;
   }
@@ -515,10 +536,8 @@ export async function runPiWithRetry(): Promise<number> {
     thinking,
     skills: [
       ...discoverProjectSkills(),
-      ...(process.env.BONK_ACTION_PATH
-        ? [`${process.env.BONK_ACTION_PATH}/skills/cross-repo/SKILL.md`]
-        : []),
     ],
+    extension: `${actionPath}/extensions/bonk-result.ts`,
     approveProject: shouldApproveProject(),
   });
 
@@ -536,19 +555,20 @@ export async function runPiWithRetry(): Promise<number> {
     }
     if (attempt > 1) console.log(`Retrying Pi (${attempt}/${maxAttempts})`);
 
+    try {
+      unlinkSync(resultPath);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+
     const result = await runPiAttempt(remainingMs, args);
     if (result.exitCode === 0) {
-      if (!result.finalResponse) {
-        console.error("Pi completed without a final response.");
-        writeExitCode(2);
-        return 2;
-      }
       try {
-        await deliverFinalResponse(result.finalResponse);
+        validateStructuredResult(resultPath);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
-        writeExitCode(1);
-        return 1;
+        writeExitCode(2);
+        return 2;
       }
       writeExitCode(0);
       return 0;

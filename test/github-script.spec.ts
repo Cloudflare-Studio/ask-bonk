@@ -122,7 +122,9 @@ describe("GitHub Action preflight prompt", () => {
     expect(result.mode).toBe("write-capable");
     expect(result.value).toContain("repository: owner/repo");
     expect(result.value).toContain("target: issue #42");
-    expect(result.value).toContain("mode: write-capable");
+    expect(result.value).toContain("working_tree: write-capable");
+    expect(result.value).toContain("git_lifecycle_owner: opencode_github_run");
+    expect(result.value).toContain("top_level_response_owner: opencode_github_run");
     expect(result.value).toContain(
       "<bonk_user_request>\n/bonk summarize this issue\n</bonk_user_request>",
     );
@@ -207,6 +209,7 @@ describe("GitHub Action preflight prompt", () => {
 
     expect(result.isFork).toBe(false);
     expect(result.mode).toBe("review-only");
+    expect(result.value).toContain("working_tree: read-only");
     expect(result.value).toContain("head_sha: def456");
   });
 
@@ -230,7 +233,8 @@ describe("GitHub Action preflight prompt", () => {
 
     expect(result.isFork).toBe(true);
     expect(result.mode).toBe("review-only");
-    expect(result.value).toContain("mode_reason: fork pull request");
+    expect(result.value).toContain("working_tree: read-only");
+    expect(result.value).toContain("working_tree_reason: fork pull request");
     expect(result.value).toContain("head_sha: abc123");
     expect(result.value).toContain(
       "<bonk_user_request>\nReview this pull request.\n</bonk_user_request>",

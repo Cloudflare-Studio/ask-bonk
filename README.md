@@ -269,7 +269,7 @@ ask-bonk/ask-bonk (finalize)  | ████████████            
 
 ## Config
 
-Bonk is configured via your workflow file and OpenCode's config. Its built-in harness guidance keeps OpenCode on the triggering target, delegates commit/push/PR lifecycle to `opencode github run`, and applies review-only behavior when repository writes are unavailable. Repository instructions and custom OpenCode instructions still apply.
+Bonk is configured via your workflow file and OpenCode's config. Its built-in harness guidance keeps OpenCode on the triggering target, assigns commit/push/PR lifecycle and top-level response delivery to `opencode github run`, and applies read-only working-tree behavior when repository writes are unavailable. Repository instructions and custom OpenCode instructions still apply.
 
 ### Workflow Inputs
 

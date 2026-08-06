@@ -1,7 +1,24 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+
+// Keep the extension independent of a repository dependency on Pi. The Action
+// installs Pi globally, and this is the only API surface the extension uses.
+interface ExtensionAPI {
+  registerTool(tool: {
+    name: string;
+    label: string;
+    description: string;
+    parameters: unknown;
+    execute(
+      toolCallId: string,
+      params: unknown,
+    ): Promise<{
+      content: Array<{ type: "text"; text: string }>;
+      details: Record<string, unknown>;
+    }>;
+  }): void;
+}
 
 const MAX_BODY_LENGTH = 65_000;
 const MAX_FINDINGS = 100;

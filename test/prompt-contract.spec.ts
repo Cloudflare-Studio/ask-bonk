@@ -46,7 +46,7 @@ describe("Bonk Pi prompt contract", () => {
   });
 
   it("keeps one explicit Bonk extension and GitHub credentials out of the Pi step", () => {
-    expect(resultExtension.match(/registerTool\(/g)).toHaveLength(1);
+    expect(resultExtension.match(/pi\.registerTool\(/g)).toHaveLength(1);
     expect(resultExtension).toContain('name: "submit_result"');
     expect(runPiScript.match(/extensions\/bonk-result\.ts/g)).toHaveLength(1);
 

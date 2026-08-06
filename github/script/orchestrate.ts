@@ -729,8 +729,10 @@ export async function buildPrompt(): Promise<PromptResult> {
     `repository: ${escapePromptValue(owner && repo ? `${owner}/${repo}` : repository || "unknown")}`,
     `event: ${escapePromptValue(process.env.EVENT_NAME || "unknown")}`,
     `target: ${escapePromptValue(target)}`,
-    `mode: ${mode}`,
-    `mode_reason: ${modeReason}`,
+    `working_tree: ${mode === "write-capable" ? "write-capable" : "read-only"}`,
+    `working_tree_reason: ${modeReason}`,
+    "git_lifecycle_owner: opencode_github_run",
+    "top_level_response_owner: opencode_github_run",
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
   contextLines.push("</bonk_execution_context>");

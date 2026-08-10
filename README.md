@@ -250,10 +250,10 @@ A public endpoint that displays event metrics as an ASCII bar chart (or JSON).
 
 ```bash
 # ASCII bar chart (default)
-curl https://ask-bonk.silverlock.workers.dev/stats
+curl https://ask-bonk.cloudflare-exponent.workers.dev/stats
 
 # JSON format
-curl https://ask-bonk.silverlock.workers.dev/stats?format=json
+curl https://ask-bonk.cloudflare-exponent.workers.dev/stats?format=json
 ```
 
 **Example output:**
@@ -303,8 +303,12 @@ Deploy your own Bonk instance to Cloudflare Workers:
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ask-bonk/ask-bonk)
 
+For the maintained `ask-bonk.cloudflare-exponent.workers.dev` deployment, see
+[DEPLOYMENT.md](./DEPLOYMENT.md).
+
 You'll need to [create a GitHub App](https://docs.github.com/en/apps/creating-github-apps) with the following permissions:
 
+- Actions: Read
 - Contents: Read & Write
 - Issues: Read & Write
 - Metadata: Read

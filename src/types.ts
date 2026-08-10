@@ -19,7 +19,7 @@ export interface Env {
   // Allowed orgs/users for GitHub App installation - JSON array binding
   ALLOWED_ORGS: Cloudflare.Env["ALLOWED_ORGS"];
   // Analytics Engine query API credentials (for /stats endpoint)
-  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_ACCOUNT_ID: Cloudflare.Env["CLOUDFLARE_ACCOUNT_ID"];
   ANALYTICS_TOKEN?: string;
   // Enable PAT-to-installation-token exchange (for local development/testing)
   // Set to "true" to enable - disabled by default in production

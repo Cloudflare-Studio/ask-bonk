@@ -5,7 +5,7 @@
 
 import { execSync, spawnSync } from "child_process";
 
-const OIDC_BASE_URL = "https://ask-bonk.silverlock.workers.dev/auth";
+const OIDC_BASE_URL = "https://ask-bonk.cloudflare-exponent.workers.dev/auth";
 
 export function commandExists(cmd: string): boolean {
   try {

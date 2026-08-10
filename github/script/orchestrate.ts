@@ -742,13 +742,7 @@ export async function buildPrompt(): Promise<PromptResult> {
     `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
   ];
 
-  // suppress_lgtm: on standalone reviews, tell OpenCode to post nothing when a
-  // review has no actionable findings, instead of the default `LGTM!`. The
-  // hidden HTML marker keeps the final response non-empty (so opencode github
-  // run still delivers it like today) while rendering invisibly on GitHub,
-  // mirroring the fork-unsupported marker used in handleFork below. Inline
-  // review-thread replies are excluded: a human asked a question and expects an
-  // answer, not an empty comment.
+  // With suppress_lgtm, a review with no findings returns a hidden marker so no visible comment posts; thread replies still get answers.
   const isReviewEvent = process.env.EVENT_NAME === "pull_request_review";
   if (process.env.SUPPRESS_LGTM === "true" && isReviewEvent) {
     promptParts.push(

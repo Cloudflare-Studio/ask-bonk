@@ -37,6 +37,11 @@ inputs:
     required: false
     default: "true"
 
+  suppress_lgtm:
+    description: "Post no comment on reviews with no actionable findings. Set to 'true' to suppress the default LGTM! comment."
+    required: false
+    default: "false"
+
   variant:
     description: "Model variant for provider-specific reasoning effort (e.g., high, max, minimal)"
     required: false
@@ -141,6 +146,8 @@ runs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # fork-comment
         FORKS: ${{ inputs.forks }}
+        # lgtm suppression
+        SUPPRESS_LGTM: ${{ inputs.suppress_lgtm }}
         ACTOR: ${{ github.event.comment.user.login || github.event.review.user.login || github.actor }}
         # track
         GITHUB_RUN_ID: ${{ github.run_id }}

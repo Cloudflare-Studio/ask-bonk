@@ -737,14 +737,34 @@ export async function buildPrompt(): Promise<PromptResult> {
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
   contextLines.push("</bonk_execution_context>");
 
+  const promptParts = [
+    contextLines.join("\n"),
+    `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
+  ];
+
+  // suppress_lgtm: on standalone reviews, tell OpenCode to post nothing when a
+  // review has no actionable findings, instead of the default `LGTM!`. The
+  // hidden HTML marker keeps the final response non-empty (so opencode github
+  // run still delivers it like today) while rendering invisibly on GitHub,
+  // mirroring the fork-unsupported marker used in handleFork below. Inline
+  // review-thread replies are excluded: a human asked a question and expects an
+  // answer, not an empty comment.
+  const isReviewEvent = process.env.EVENT_NAME === "pull_request_review";
+  if (process.env.SUPPRESS_LGTM === "true" && isReviewEvent) {
+    promptParts.push(
+      "<bonk_instruction>suppress_lgtm is enabled: if this review finds no actionable issues, " +
+        "do not return 'LGTM!'. Return exactly the hidden HTML comment " +
+        "'<!-- bonk: no actionable findings -->' as the final text so no visible comment posts. " +
+        "Only return a normal final response when there are actual nits, issues, or warnings to report." +
+        "</bonk_instruction>",
+    );
+  }
+
   return {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
     mode,
-    value: [
-      contextLines.join("\n"),
-      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
-    ].join("\n\n"),
+    value: promptParts.join("\n\n"),
   };
 }
 

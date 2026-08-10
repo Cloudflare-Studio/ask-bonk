@@ -130,6 +130,107 @@ describe("GitHub Action preflight prompt", () => {
     );
   });
 
+  it("adds the suppression directive on standalone reviews when suppress_lgtm is enabled", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request_review",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: undefined,
+        REVIEW_BODY: "/bonk",
+        MENTIONS: "/bonk,@ask-bonk",
+        PR_NUMBER: "12",
+        ISSUE_NUMBER: "12",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: "owner/repo",
+        PR_BASE_REPO: "owner/repo",
+        PR_URL: undefined,
+        GH_TOKEN: undefined,
+        HEAD_SHA: undefined,
+        TOKEN_PERMISSIONS: undefined,
+        SUPPRESS_LGTM: "true",
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result.value).toContain("suppress_lgtm is enabled");
+    expect(result.value).toContain("<!-- bonk: no actionable findings -->");
+    expect(result.value).toContain("do not return 'LGTM!'");
+  });
+
+  it("keeps the default behavior when suppress_lgtm is absent", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request_review",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: undefined,
+        REVIEW_BODY: "/bonk",
+        MENTIONS: "/bonk,@ask-bonk",
+        PR_NUMBER: "12",
+        ISSUE_NUMBER: "12",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: "owner/repo",
+        PR_BASE_REPO: "owner/repo",
+        PR_URL: undefined,
+        GH_TOKEN: undefined,
+        HEAD_SHA: undefined,
+        TOKEN_PERMISSIONS: undefined,
+        SUPPRESS_LGTM: undefined,
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result.value).not.toContain("suppress_lgtm is enabled");
+  });
+
+  it("does not add the suppression directive on inline review-thread replies", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request_review_comment",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: "/bonk why does this fail",
+        REVIEW_BODY: undefined,
+        MENTIONS: "/bonk,@ask-bonk",
+        PR_NUMBER: "12",
+        ISSUE_NUMBER: "12",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: "owner/repo",
+        PR_BASE_REPO: "owner/repo",
+        PR_URL: undefined,
+        GH_TOKEN: undefined,
+        HEAD_SHA: undefined,
+        TOKEN_PERMISSIONS: undefined,
+        SUPPRESS_LGTM: "true",
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result.value).not.toContain("suppress_lgtm is enabled");
+  });
+
+  it("does not add the suppression directive on non-review events", async () => {
+    const result = await withEnv(
+      {
+        EVENT_NAME: "issue_comment",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: "/bonk summarize this issue",
+        REVIEW_BODY: undefined,
+        MENTIONS: "/bonk,@ask-bonk",
+        PR_NUMBER: undefined,
+        ISSUE_NUMBER: "42",
+        REPOSITORY: "owner/repo",
+        PR_HEAD_REPO: undefined,
+        PR_BASE_REPO: undefined,
+        PR_URL: undefined,
+        GH_TOKEN: undefined,
+        TOKEN_PERMISSIONS: undefined,
+        SUPPRESS_LGTM: "true",
+      },
+      () => buildPrompt(),
+    );
+
+    expect(result.value).not.toContain("suppress_lgtm is enabled");
+  });
+
   it.each([
     { label: "omitted action input", tokenPermissions: "", contents: "write" },
     { label: "WRITE preset", tokenPermissions: "WRITE", contents: "write" },

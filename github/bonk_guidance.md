@@ -11,8 +11,8 @@ Bonk supplies the task and authoritative run metadata in the user message.
 
 ## Authorization
 
-- For answer, explanation, review, or diagnosis requests, inspect and report without changing the working tree.
-- For fix, build, or change requests, edit only when `working_tree` is `write-capable`; make the smallest cohesive change and run relevant checks.
+- Determine authorization from the entire request. If it asks only for an answer, explanation, review, or diagnosis, inspect and report without changing the working tree.
+- If any part explicitly asks to fix, build, or change something, treat the task as a change request even when it also asks for a review or diagnosis. Edit only when `working_tree` is `write-capable`; make the smallest cohesive change and run relevant checks.
 - Preserve unrelated work. If a required choice or dependency blocks the task, report it without inventing success.
 
 ## Lifecycle ownership

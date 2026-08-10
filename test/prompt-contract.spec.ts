@@ -19,6 +19,13 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("If the review found no actionable issues at all");
   });
 
+  it("gives explicit change requests precedence in mixed review-and-fix tasks", () => {
+    expect(guidance).toContain("Determine authorization from the entire request.");
+    expect(guidance).toContain(
+      "treat the task as a change request even when it also asks for a review or diagnosis",
+    );
+  });
+
   it.each([
     ["repository workflow", repositoryReviewWorkflow],
     ["generated workflow", generatedReviewWorkflow],

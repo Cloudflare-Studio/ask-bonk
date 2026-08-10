@@ -84,6 +84,18 @@ the old KV contents do not need to be copied.
 The webhook URL and secret belong to the GitHub App registration, not to each installation. Existing
 repository and organization installations do not need to be reinstalled or updated.
 
+The action's OIDC endpoint is separate from the GitHub App webhook. Consumer workflows that use
+`ask-bonk/ask-bonk/github@main` inherit the new default after this repository change merges.
+Workflows pinned to an older tag or commit continue calling the personal-account Worker unless they
+set:
+
+```yaml
+with:
+  oidc_base_url: https://ask-bonk.cloudflare-exponent.workers.dev/auth
+```
+
+Keep the personal-account Worker available until active pinned workflows have migrated.
+
 Use this order to avoid interrupting current deliveries:
 
 1. Generate a new GitHub App private key. Keep the existing private key active for the old Worker.
@@ -92,8 +104,8 @@ Use this order to avoid interrupting current deliveries:
 4. In one GitHub App settings update, change both the webhook URL to the canonical target URL and
    the webhook secret to the value already stored on the target Worker.
 5. Send a GitHub test delivery and confirm a successful response.
-6. After the cutover is stable, remove the old GitHub App private key and retire the personal-account
-   Worker.
+6. After the webhook cutover is stable and pinned OIDC callers have migrated, remove the old GitHub
+   App private key and retire the personal-account Worker.
 
 Do not replace the personal-account Worker's webhook secret before the GitHub App cutover. Until the
 App setting changes, GitHub deliveries are still signed with the old secret and the old Worker must

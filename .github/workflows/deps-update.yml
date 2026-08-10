@@ -29,7 +29,7 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/claude-sonnet-4-6
-          oidc_base_url: "https://ask-bonk.silverlock.workers.dev/auth"
+          oidc_base_url: "https://ask-bonk.cloudflare-exponent.workers.dev/auth"
           prompt: |
             Update all dependencies to their latest compatible versions.
 

@@ -30,7 +30,7 @@ inputs:
   oidc_base_url:
     description: "Base URL for OIDC token exchange"
     required: false
-    default: "https://ask-bonk.silverlock.workers.dev/auth"
+    default: "https://ask-bonk.cloudflare-exponent.workers.dev/auth"
 
   forks:
     description: "Post a 'not supported' comment on fork PRs. Set to 'false' to silently skip fork PRs."

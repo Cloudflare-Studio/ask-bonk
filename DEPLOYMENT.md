@@ -28,14 +28,23 @@ The deployment token is not a Worker secret. Scope it to account
 
 These are declared in `wrangler.jsonc` and must exist before a deployment can succeed:
 
-| Secret                   | Source                                            | Notes                                                                                                                                |
-| ------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `GITHUB_APP_ID`          | GitHub App settings                               | An identifier, not a secret. The existing `ask-bonk` App ID is `2454580`; reuse it while retaining that App.                         |
-| `GITHUB_APP_PRIVATE_KEY` | Generate a private key in the GitHub App settings | Store the complete PEM, including its header and footer. Generate a new key for the migration rather than copying an old local file. |
-| `GITHUB_WEBHOOK_SECRET`  | Generate a new high-entropy value                 | Configure the same value in the GitHub App webhook settings and the Worker secret.                                                   |
+| Secret                   | Source                                            | Notes                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GITHUB_APP_ID`          | GitHub App settings                               | An identifier, not a secret. The existing `ask-bonk` App ID is `2454580`; reuse it while retaining that App.                                                                                                       |
+| `GITHUB_APP_PRIVATE_KEY` | Generate a private key in the GitHub App settings | Upload an unencrypted PKCS#8 PEM whose header is `-----BEGIN PRIVATE KEY-----`. If the downloaded key uses `-----BEGIN RSA PRIVATE KEY-----`, convert it through `openssl pkcs8` while streaming it into Wrangler. |
+| `GITHUB_WEBHOOK_SECRET`  | Generate a new high-entropy value                 | Configure the same value in the GitHub App webhook settings and the Worker secret.                                                                                                                                 |
 
 The application does not use a GitHub OAuth client secret, OAuth callback URL, personal access
 token, or static GitHub API key.
+
+Do not recreate these legacy personal-account Worker secrets:
+
+- `ASK_SECRET`: removed with the old `/ask` endpoint.
+- `ANTHROPIC_API_KEY`: the Worker does not call Anthropic; consumer repositories supply their own
+  model credentials.
+- `CLOUDFLARE_ACCOUNT_ID`: configured as a non-secret Worker variable in `wrangler.jsonc`.
+
+`ANALYTICS_TOKEN` is the only optional Worker secret.
 
 ### Optional stats credential
 
@@ -131,27 +140,29 @@ set the new secret on it only after the cutover succeeds.
    bunx wrangler whoami
    ```
 
-2. Set each Worker secret directly through Wrangler. Wrangler prompts for the value without putting
-   it in shell history:
+2. Set each Worker secret directly through Wrangler. Wrangler prompts for single-line values
+   without putting them in shell history:
 
    ```bash
    bunx wrangler secret put GITHUB_APP_ID --config wrangler.jsonc
-   bunx wrangler secret put GITHUB_APP_PRIVATE_KEY --config wrangler.jsonc
    bunx wrangler secret put GITHUB_WEBHOOK_SECRET --config wrangler.jsonc
    ```
 
-   Paste `2454580` for `GITHUB_APP_ID`. Paste the complete newly generated PEM for
-   `GITHUB_APP_PRIVATE_KEY`. Paste the new high-entropy webhook value for
+   Paste `2454580` for `GITHUB_APP_ID`. Paste the new high-entropy webhook value for
    `GITHUB_WEBHOOK_SECRET`, then configure that same value in the GitHub App webhook settings.
 
-   If the Wrangler prompt cannot accept the multiline PEM, pass the private-key download through
-   standard input without copying its contents into another file:
+   If the downloaded App key has a `-----BEGIN RSA PRIVATE KEY-----` header, it is PKCS#1. The
+   GitHub App JWT library used by the Worker requires PKCS#8. Convert the key in memory and stream
+   the PKCS#8 PEM directly into Wrangler:
 
    ```bash
-   bunx wrangler secret put GITHUB_APP_PRIVATE_KEY --config wrangler.jsonc \
-     < ~/Downloads/ask-bonk.private-key.pem
+   openssl pkcs8 -topk8 -nocrypt \
+     -in ~/Downloads/ask-bonk.private-key.pem |
+     bunx wrangler secret put GITHUB_APP_PRIVATE_KEY --config wrangler.jsonc
    ```
 
+   Do not upload the downloaded PKCS#1 file directly. It passes `openssl rsa -check`, but runtime
+   authentication fails with `Private Key is in PKCS#1 format, but only PKCS#8 is supported`.
    Protect and remove the downloaded private-key file after Wrangler confirms the upload.
 
    To enable `/stats`, also set the optional read-only token:

@@ -31,11 +31,11 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Build Flue worker
+      - name: Build Worker
         run: bun run build
 
       - name: Check Worker types
         run: bunx wrangler types --check
 
-      - name: Validate generated Worker config
-        run: bunx wrangler deploy --dry-run --config dist/ask_bonk/wrangler.json --var BONK_VERSION:ci --var BONK_COMMIT:${GITHUB_SHA}
+      - name: Validate Worker deployment
+        run: bunx wrangler deploy --dry-run --config wrangler.jsonc --var BONK_VERSION:ci --var BONK_COMMIT:${GITHUB_SHA}

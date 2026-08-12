@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Hono } from "hono";
-import { internalWorkflowHeaders, internalWorkflowRoute } from "../src/internal-workflows";
 import { runFinalizeWorkflowJob } from "../src/github-workflow-jobs";
 import type { Env } from "../src/types";
 
@@ -21,7 +19,7 @@ function createWorkflowEnv(): Env {
   } as Env;
 }
 
-describe("GitHub Flue workflow jobs", () => {
+describe("GitHub workflow jobs", () => {
   beforeEach(() => {
     mocks.getAgentByName.mockReset();
   });
@@ -74,37 +72,5 @@ describe("GitHub Flue workflow jobs", () => {
     });
 
     expect(result).toEqual({ status: 200, body: { ok: true, warning: "agent unavailable" } });
-  });
-});
-
-describe("Internal workflow route guard", () => {
-  it("rejects direct workflow calls without the internal header", async () => {
-    const guardApp = new Hono<{ Bindings: Env }>();
-    guardApp.use("/workflows/github-finalize", internalWorkflowRoute);
-    guardApp.post("/workflows/github-finalize", (c) => c.json({ ok: true }));
-
-    const response = await guardApp.fetch(
-      new Request("https://example.com/workflows/github-finalize", { method: "POST" }),
-      createWorkflowEnv(),
-    );
-
-    expect(response.status).toBe(404);
-  });
-
-  it("admits in-process workflow calls with the internal header", async () => {
-    const guardApp = new Hono<{ Bindings: Env }>();
-    guardApp.use("/workflows/github-finalize", internalWorkflowRoute);
-    guardApp.post("/workflows/github-finalize", (c) => c.json({ ok: true }));
-
-    const response = await guardApp.fetch(
-      new Request("https://example.com/workflows/github-finalize", {
-        method: "POST",
-        headers: internalWorkflowHeaders(),
-      }),
-      createWorkflowEnv(),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });

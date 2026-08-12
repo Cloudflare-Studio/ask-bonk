@@ -7,8 +7,8 @@ The maintained deployment targets:
 - URL: `https://ask-bonk.cloudflare-exponent.workers.dev`
 - GitHub webhook URL: `https://ask-bonk.cloudflare-exponent.workers.dev/channels/github/webhook`
 
-`wrangler.jsonc` is the source configuration. `bun run build` generates the deployable Flue
-configuration at `dist/ask_bonk/wrangler.json`.
+`wrangler.jsonc` is the source configuration. `bun run build` uses Wrangler to validate and write a
+dry-run Worker bundle under `dist/ask_bonk`.
 
 ## Credentials and secrets
 
@@ -125,8 +125,9 @@ set the new secret on it only after the cutover succeeds.
 
 - `APP_INSTALLATIONS`: existing target-account KV namespace
   `8209c24d2f364196b1cdbad3654694f1`. The personal-account namespace is not reused.
-- `REPO_AGENT` and Flue Durable Objects: created from the migrations in `wrangler.jsonc` during
-  deployment. Existing Durable Object state is not migrated.
+- `REPO_AGENT`: created from the migrations in `wrangler.jsonc`. The Flue beta registry,
+  control-plane agent, and workflow Durable Object classes are retired by migration `v8`;
+  `RepoAgent` state is not affected.
 - `BONK_EVENTS`: Analytics Engine dataset binding. New metrics start in the target account; old
   metrics are not migrated.
 - `RATE_LIMITER`: account-local rate-limit binding. No key material is required.
@@ -186,7 +187,7 @@ set the new secret on it only after the cutover succeeds.
    bun run lint
    bun run build
    bunx wrangler types --check
-   bunx wrangler deploy --dry-run --config dist/ask_bonk/wrangler.json \
+   bunx wrangler deploy --dry-run --config wrangler.jsonc \
      --var BONK_VERSION:ci \
      --var BONK_COMMIT:local
    ```
@@ -194,8 +195,7 @@ set the new secret on it only after the cutover succeeds.
 4. After all required Worker secrets exist, deploy the code:
 
    ```bash
-   bun run build
-   bunx wrangler deploy --config dist/ask_bonk/wrangler.json \
+   bunx wrangler deploy --config wrangler.jsonc \
      --var BONK_VERSION:"$(git describe --tags --always)" \
      --var BONK_COMMIT:"$(git rev-parse --short HEAD)"
    ```

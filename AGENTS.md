@@ -33,7 +33,7 @@ When `package.json` changes, run `bun install` and commit `package.json` with `b
 - For dependency PR summaries, list the packages that changed, call out major/minor changes and any packages intentionally excluded, and note source or test fixes required by dependency API changes.
 - Wrangler, Workerd, `@cloudflare/vitest-pool-workers`, Flue, binding, migration, compatibility-date, and `wrangler.jsonc` changes can all change generated Worker types. Run `bunx wrangler types` after these changes, commit `worker-configuration.d.ts` when it changes, then run `bunx wrangler types --check`.
 - Treat `worker-configuration.d.ts` header-only runtime changes as real generated output. Recent Wrangler updates have failed checks until the generated `workerd@...` version in this file was refreshed.
-- Dependency update PRs must pass `bun install --frozen-lockfile`, `bun run tsc --noEmit`, `bun run test`, `bun run lint`, `bun run build`, `bunx wrangler types --check`, and the generated-config dry-run deploy command before they are complete.
+- Dependency update PRs must pass `bun install --frozen-lockfile`, `bun run tsc --noEmit`, `bun run test`, `bun run lint`, `bun run build`, `bunx wrangler types --check`, and the source-config dry-run deploy command before they are complete.
 
 ## Architecture
 

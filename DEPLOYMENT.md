@@ -14,7 +14,7 @@ Cloudflare Workers Builds must also deploy from the source configuration:
 
 - Production deploy command: `bunx wrangler deploy --config wrangler.jsonc`
 - Preview deploy command:
-  `bunx wrangler deploy --dry-run --config wrangler.jsonc --var BONK_VERSION:ci --var BONK_COMMIT:$WORKERS_CI_COMMIT_SHA`
+  `bunx wrangler versions upload --config wrangler.jsonc --var BONK_VERSION:ci --var BONK_COMMIT:$WORKERS_CI_COMMIT_SHA`
 
 Do not point Workers Builds at the retired `dist/ask_bonk/wrangler.json` Flue artifact.
 

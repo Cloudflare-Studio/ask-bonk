@@ -21,10 +21,7 @@ import { sanitizeSecrets } from "../src/log";
 import { queryAnalyticsEngine, emitMetric } from "../src/metrics";
 import app from "../src/app";
 import { MetricsError } from "../src/errors";
-import {
-  channel as githubChannel,
-  createGitHubWebhookChannel,
-} from "../src/channels/github";
+import { channel as githubChannel, createGitHubWebhookChannel } from "../src/channels/github";
 import { validateOpenCodeVersion } from "../github/script/context";
 import type { Env } from "../src/types";
 import type { WorkflowRunPayload } from "../src/types";
@@ -105,9 +102,7 @@ async function signGitHubWebhook(body: string, secret: string): Promise<string> 
 function createGitHubChannelApp(webhookSecret?: string): Hono<{ Bindings: Env }> {
   const channelApp = new Hono<{ Bindings: Env }>();
   const channel = webhookSecret ? createGitHubWebhookChannel(webhookSecret) : githubChannel;
-  const webhookRoute = channel.routes[0];
-  expect(webhookRoute).toBeDefined();
-  channelApp.on("POST", "/channels/github/webhook", webhookRoute.handler);
+  channelApp.route("/channels/github", channel.route());
   return channelApp;
 }
 
@@ -692,12 +687,12 @@ describe("PAT Exchange Security", () => {
 // ---------------------------------------------------------------------------
 
 describe("Webhook Verification", () => {
-  it("preserves Flue's canonical GitHub conversation keys", () => {
+  it("preserves Flue's canonical GitHub instance IDs", () => {
     const ref = { owner: "test-org", repo: "test-repo", issueNumber: 123 };
-    const key = githubChannel.conversationKey(ref);
+    const id = githubChannel.instanceId(ref);
 
-    expect(key).toBe("github:v1:owner:test-org:repo:test-repo:issue:123");
-    expect(githubChannel.parseConversationKey(key)).toEqual(ref);
+    expect(id).toBe("github:v1:owner:test-org:repo:test-repo:issue:123");
+    expect(githubChannel.parseInstanceId(id)).toEqual(ref);
   });
 
   it("rejects requests without the JSON webhook content type", async () => {
@@ -761,6 +756,37 @@ describe("Webhook Verification", () => {
     expect(response.status).toBe(200);
   });
 
+  it("mounts the canonical Flue GitHub channel on the application", async () => {
+    const env = createMockEnv();
+    const body = JSON.stringify({
+      action: "created",
+      repository: {
+        name: "test-repo",
+        private: false,
+        owner: { login: "test-org" },
+      },
+      sender: { login: "octocat" },
+      issue: { number: 123 },
+      comment: { body: "hello" },
+    });
+
+    const response = await app.fetch(
+      new Request("https://example.com/channels/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": "test-delivery-id",
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": await signGitHubWebhook(body, env.GITHUB_WEBHOOK_SECRET),
+        },
+        body,
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("does not accept the old public fallback secret on the generated Flue channel", async () => {
     const env = createMockEnv();
     const channelApp = createGitHubChannelApp();
@@ -779,6 +805,26 @@ describe("Webhook Verification", () => {
 
     const response = await channelApp.fetch(request, env);
     expect(response.status).toBe(401);
+  });
+
+  it("fails closed on both webhook paths when the secret binding is missing", async () => {
+    const env = { ...createMockEnv(), GITHUB_WEBHOOK_SECRET: "" };
+    const requestInit = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    };
+
+    const [canonicalResponse, legacyResponse] = await Promise.all([
+      app.fetch(
+        new Request("https://example.com/channels/github/webhook", requestInit),
+        env,
+      ),
+      app.fetch(new Request("https://example.com/webhooks", requestInit), env),
+    ]);
+
+    expect(canonicalResponse.status).toBe(401);
+    expect(legacyResponse.status).toBe(401);
   });
 
   it("keeps the legacy /webhooks URL working", async () => {

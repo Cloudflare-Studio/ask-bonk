@@ -62,6 +62,16 @@
         "FlueGithubFinalizeWorkflow",
       ],
     },
+    {
+      "tag": "v8",
+      "deleted_classes": [
+        "FlueRegistry",
+        "FlueControlPlaneAgent",
+        "FlueGithubSetupWorkflow",
+        "FlueGithubTrackWorkflow",
+        "FlueGithubFinalizeWorkflow",
+      ],
+    },
   ],
   "kv_namespaces": [
     {

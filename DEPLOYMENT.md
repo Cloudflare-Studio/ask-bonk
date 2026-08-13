@@ -14,7 +14,11 @@ Cloudflare Workers Builds must also deploy from the source configuration:
 
 - Production deploy command: `bunx wrangler deploy --config wrangler.jsonc`
 - Preview deploy command:
-  `bunx wrangler versions upload --config wrangler.jsonc --var BONK_VERSION:ci --var BONK_COMMIT:$WORKERS_CI_COMMIT_SHA`
+  `bunx wrangler deploy --dry-run --config wrangler.jsonc --var BONK_VERSION:ci --var BONK_COMMIT:$WORKERS_CI_COMMIT_SHA`
+
+Keep previews on `deploy --dry-run` while a Durable Object migration is pending.
+Wrangler rejects `versions upload` for Workers with unapplied migrations. After the
+production deploy applies the migration, previews can return to `versions upload`.
 
 Do not point Workers Builds at the retired `dist/ask_bonk/wrangler.json` Flue artifact.
 

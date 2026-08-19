@@ -28,7 +28,7 @@
     "@octokit/plugin-throttling": "^11.0.5",
     "@octokit/rest": "^22.0.1",
     "agents": "^0.17.4",
-    "ai": "^7.0.58",
+    "ai": "^7.0.66",
     "better-result": "^2.10.0",
     "hono": "4.12.30",
     "jose": "^6.2.8",
@@ -42,10 +42,10 @@
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^26.2.0",
     "oxfmt": "^0.58.0",
-    "oxlint": "^1.77.0",
+    "oxlint": "^1.78.0",
     "typescript": "^7.0.2",
     "vitest": "~4.1.10",
-    "wrangler": "^4.120.0"
+    "wrangler": "^4.123.0"
   },
   "overrides": {
     "hono": "4.12.30",

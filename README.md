@@ -278,6 +278,8 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `model`              | Model to use (e.g., `opencode/claude-opus-4-5`)                                  | Yes      |
 | `mentions`           | Comma-separated triggers (e.g., `/bonk,@ask-bonk`)                               | No       |
 | `permissions`        | Required permission: `admin`, `write`, `any`, or `CODEOWNERS`                    | No       |
+| `forks`              | Post a 'not supported' comment on fork PRs (`"true"` / `"false"`)                | No       |
+| `suppress_lgtm`      | Post no comment on reviews with no actionable findings (`"true"` / `"false"`)    | No       |
 | `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON                        | No       |
 | `opencode_version`   | Pin to a specific OpenCode version (e.g., `"1.2.16"`). Defaults to `"latest"`.   | No       |
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |

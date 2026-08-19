@@ -737,14 +737,28 @@ export async function buildPrompt(): Promise<PromptResult> {
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
   contextLines.push("</bonk_execution_context>");
 
+  const promptParts = [
+    contextLines.join("\n"),
+    `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
+  ];
+
+  // With suppress_lgtm, a review with no findings returns a hidden marker so no visible comment posts; thread replies still get answers.
+  const isReviewEvent = process.env.EVENT_NAME === "pull_request_review";
+  if (process.env.SUPPRESS_LGTM === "true" && isReviewEvent) {
+    promptParts.push(
+      "<bonk_instruction>suppress_lgtm is enabled: if this review finds no actionable issues, " +
+        "do not return 'LGTM!'. Return exactly the hidden HTML comment " +
+        "'<!-- bonk: no actionable findings -->' as the final text so no visible comment posts. " +
+        "Only return a normal final response when there are actual nits, issues, or warnings to report." +
+        "</bonk_instruction>",
+    );
+  }
+
   return {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
     mode,
-    value: [
-      contextLines.join("\n"),
-      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
-    ].join("\n\n"),
+    value: promptParts.join("\n\n"),
   };
 }
 

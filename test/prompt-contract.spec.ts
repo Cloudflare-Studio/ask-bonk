@@ -55,6 +55,7 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("Verify every specialist finding against the code before keeping it.");
     expect(guidance).toContain("Write the result as the single findings file.");
     expect(guidance).toContain("Account for every one in the findings file");
+    expect(guidance).toContain("keep it as a `suggestion` or `info` note instead of dropping it");
     expect(guidance).toContain('"specialist_dispositions"');
     expect(guidance).toContain("never raise it; Bonk caps each finding at the most severe of its `sources`");
     expect(guidance).toContain("A `blocking` finding needs `\"evidence\"`");

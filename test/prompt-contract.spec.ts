@@ -61,6 +61,13 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("A `blocking` finding needs `\"evidence\"`");
     expect(guidance).toContain("unless you checked the dependency's source or the pull request's CI status");
     expect(guidance).not.toMatch(/missed earlier/);
+    expect(guidance).toContain("Base every claim on evidence you read in this run, not on memory");
+    expect(guidance).toContain(
+      "If CI built the change, assume it compiles unless you can name a configuration CI did not build.",
+    );
+    expect(guidance).toContain(
+      "Before keeping a specialist's `blocking` finding about compatibility or a breaking change, re-check its premise",
+    );
   });
 
   it("has re-reviews follow up on Bonk's threads through structured actions", () => {

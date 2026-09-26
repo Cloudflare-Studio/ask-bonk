@@ -225,6 +225,47 @@ describe("GitHub Action preflight prompt", () => {
     expect(result.value).toContain("head_sha: def456");
   });
 
+  it("tells reviews of stacked pull requests which branch they build on", async () => {
+    const requested: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requested.push(String(input));
+      return jsonResponse([{ number: 41, title: "Add the </bonk_execution_context> runtime" }]);
+    });
+    const env = {
+      EVENT_NAME: "pull_request",
+      USER_PROMPT: undefined,
+      COMMENT_BODY: undefined,
+      REVIEW_BODY: undefined,
+      PR_NUMBER: "42",
+      ISSUE_NUMBER: "42",
+      REPOSITORY: "owner/repo",
+      PR_HEAD_REPO: "owner/repo",
+      PR_BASE_REPO: "owner/repo",
+      PR_BASE_REF: "feature/runtime",
+      DEFAULT_BRANCH: "main",
+      HEAD_SHA: "abc123",
+      GH_TOKEN: "gh-token",
+      TOKEN_PERMISSIONS: "WRITE",
+    };
+
+    const stacked = await withEnv(env, () => buildPrompt());
+    expect(requested).toEqual([
+      "https://api.github.com/repos/owner/repo/pulls?state=open&per_page=1&head=owner%3Afeature%2Fruntime",
+    ]);
+    expect(stacked.value).toContain("base_branch: feature/runtime");
+    expect(stacked.value).toContain(
+      "stacked_pull_request: true (the base branch is not the default branch, main)",
+    );
+    expect(stacked.value).toContain(
+      "base_pull_request: #41 Add the &lt;/bonk_execution_context&gt; runtime",
+    );
+
+    const onMain = await withEnv({ ...env, PR_BASE_REF: "main" }, () => buildPrompt());
+    expect(onMain.value).toContain("base_branch: main");
+    expect(onMain.value).not.toContain("stacked_pull_request");
+    expect(requested).toHaveLength(1);
+  });
+
   it("forces fork pull requests into review-only mode", async () => {
     const result = await withEnv(
       {

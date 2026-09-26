@@ -706,6 +706,28 @@ function diffDirPath(): string {
   return path;
 }
 
+// A pull request whose base branch is not the default branch is part of a
+// stack. Names the open pull request for that base branch, when there is one.
+async function findBasePullRequest(
+  repository: string,
+  baseBranch: string,
+  token: string | undefined,
+): Promise<{ number: number; title: string } | null> {
+  const [owner = ""] = repository.split("/");
+  if (!token || !owner) return null;
+  try {
+    const pulls = await githubApi<Array<{ number?: number; title?: string }>>(
+      `/repos/${repository}/pulls?state=open&per_page=1&head=${encodeURIComponent(`${owner}:${baseBranch}`)}`,
+      token,
+    );
+    const pull = pulls?.[0];
+    return pull?.number ? { number: pull.number, title: pull.title || "" } : null;
+  } catch (error) {
+    core.warning(`Could not look up the pull request for base branch ${baseBranch}: ${error}`);
+    return null;
+  }
+}
+
 function rereviewEnabled(): boolean {
   return process.env.REREVIEW_CONTEXT === "true";
 }
@@ -820,6 +842,26 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
     "top_level_response_owner: opencode_github_run",
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
+  const baseBranch = reviewContext?.baseRef || process.env.PR_BASE_REF || "";
+  const defaultBranch = process.env.DEFAULT_BRANCH || "";
+  if (process.env.PR_NUMBER && baseBranch) {
+    contextLines.push(`base_branch: ${escapePromptValue(baseBranch)}`);
+    if (defaultBranch && baseBranch !== defaultBranch) {
+      contextLines.push(
+        `stacked_pull_request: true (the base branch is not the default branch, ${escapePromptValue(defaultBranch)})`,
+      );
+      const basePull = await findBasePullRequest(
+        repository,
+        baseBranch,
+        options.reviewToken || process.env.GH_TOKEN,
+      );
+      if (basePull) {
+        contextLines.push(
+          `base_pull_request: #${basePull.number} ${escapePromptValue(basePull.title)}`,
+        );
+      }
+    }
+  }
   if (reviewContext?.baseSha) contextLines.push(`base_sha: ${escapePromptValue(reviewContext.baseSha)}`);
   // Review runs hand their findings to review-publish.ts through this file
   // instead of posting to GitHub themselves.

@@ -73,6 +73,7 @@ export interface ReviewThreadNode {
 export interface PullRequestHistory {
   headRefOid?: string;
   baseRefOid?: string;
+  baseRefName?: string;
   comments?: { nodes?: GraphQLComment[] };
   reviews?: { nodes?: GraphQLReview[] };
   reviewThreads?: { nodes?: ReviewThreadNode[] };
@@ -137,6 +138,8 @@ const DELTA_PROMPT_BUDGET = 50_000;
 export interface ReviewContext {
   headSha: string;
   baseSha: string;
+  // The pull request's base branch.
+  baseRef: string;
   lastReviewId: number;
   // Files the author changed since the last review, or null when this review
   // covers the whole pull request.
@@ -499,6 +502,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
     pullRequest(number: $number) {
       headRefOid
       baseRefOid
+      baseRefName
     }
   }
 }`;
@@ -782,6 +786,7 @@ export async function loadReviewContext(
   return {
     headSha: history.headSha,
     baseSha: history.baseSha,
+    baseRef: pr.baseRefName || "",
     lastReviewId: history.lastReviewId,
     changedFiles: reviewScope(delta),
     rereview: history.previous !== null,

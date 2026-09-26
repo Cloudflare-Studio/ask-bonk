@@ -331,6 +331,8 @@ Bonk recognizes its own comments, reviews, and markers by the GitHub App behind 
 
 GitHub only lets App tokens with `contents: write` resolve or reopen review threads. When `token_permissions` withholds that (for example `NO_PUSH`), Bonk requests a second installation token with `contents`, `issues`, and `pull_requests` write for the publish step only. That step runs Bonk's own code after OpenCode has exited; OpenCode never sees the token, so it still cannot push. Fork pull requests do not get the second token, so Bonk replies on threads but cannot resolve them there.
 
+When a pull request's base branch is not the repository's default branch, the prompt marks it as part of a stack (`base_branch`, `stacked_pull_request`, and the open pull request for that base branch, when there is one). Reviews then treat what the base branch introduces as existing code, and a limitation the stack says a follow-up handles is at most `info`. The base branch is known on `pull_request` events, and on other events with `rereview_context` enabled.
+
 With `rereview_context` enabled, the prompt always carries the pull request's current head as `head_sha`. To review on every push, add `synchronize` to the `pull_request` trigger types and serialize runs per pull request:
 
 ```yaml

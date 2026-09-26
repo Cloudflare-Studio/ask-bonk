@@ -176,6 +176,7 @@ runs:
         # prompt
         PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         PR_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url || '' }}

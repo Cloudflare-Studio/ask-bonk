@@ -78,6 +78,13 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("Bonk ignores actions on threads it did not start.");
   });
 
+  it("treats code from the base of a stacked pull request as existing", () => {
+    expect(guidance).toContain(
+      "Apply these rules when `<bonk_execution_context>` has `stacked_pull_request: true`.",
+    );
+    expect(guidance).toContain("says a follow-up handles is `info` at most");
+  });
+
   it("gives explicit change requests precedence in mixed review-and-fix tasks", () => {
     expect(guidance).toContain("Determine authorization from the entire request.");
     expect(guidance).toContain(

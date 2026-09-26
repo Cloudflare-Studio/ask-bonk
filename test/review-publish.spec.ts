@@ -5,11 +5,17 @@ import {
   buildStickyBody,
   isReviewRun,
   parseCommentableLines,
+  partitionFindings,
   parseReviewFile,
   publishReview,
+  type BonkThread,
   type Finding,
 } from "../github/script/review-publish";
-import { formatReviewStateMarker, parseReviewStateMarker } from "../github/script/review-state";
+import {
+  findStickyComment,
+  formatReviewStateMarker,
+  parseReviewStateMarker,
+} from "../github/script/review-state";
 
 const OLD_HEAD = "a".repeat(40);
 const HEAD = "b".repeat(40);
@@ -75,6 +81,19 @@ function mockGitHub(pullRequest: Record<string, unknown>, reviewStatus = 200): R
   return requests;
 }
 
+// A review thread as the paged threads query returns it.
+function thread(id: string, line: number, authors: Array<typeof bonk>) {
+  const comments = authors.map((author, index) => ({ id: `${id}-${index}`, author, body: "x" }));
+  return {
+    id,
+    isResolved: false,
+    path: "src/a.ts",
+    line,
+    first: { nodes: comments.slice(0, 1) },
+    recent: { totalCount: comments.length, nodes: comments },
+  };
+}
+
 function patchedBody(request: Request | undefined): string {
   return (request?.body as { body?: string } | undefined)?.body ?? "";
 }
@@ -86,7 +105,11 @@ function writeReviewFile(name: string, content: unknown): string {
   return path;
 }
 
-function publishEnv(reviewFile: string, extra: Record<string, string | undefined> = {}) {
+function publishEnv(
+  reviewFile: string,
+  extra: Record<string, string | undefined> = {},
+  changedFiles: string[] | null = null,
+) {
   return {
     GH_TOKEN: "token",
     GITHUB_REPOSITORY: "owner/repo",
@@ -95,7 +118,13 @@ function publishEnv(reviewFile: string, extra: Record<string, string | undefined
     GITHUB_RUN_ID: "100",
     EVENT_NAME: "issue_comment",
     WORKSPACE_HEAD_SHA: HEAD,
-    REVIEW_STATE: JSON.stringify({ head: HEAD, base: BASE, lastReviewId: 3, reviewFile }),
+    REVIEW_STATE: JSON.stringify({
+      head: HEAD,
+      base: BASE,
+      lastReviewId: 3,
+      changedFiles,
+      reviewFile,
+    }),
     ...extra,
   };
 }
@@ -137,12 +166,23 @@ describe("Bonk review publishing", () => {
             { path: "src/a.ts", line: 3, body: "  " },
             "garbage",
           ],
+          thread_actions: [
+            { thread_id: "PRRT_1", action: "resolve", body: "Fixed in bbbbbbbb: added the check." },
+            { thread_id: "PRRT_2", action: "unresolve" },
+            { thread_id: "PRRT_3", action: "reply" },
+            { thread_id: "PRRT_4", action: "delete", body: "x" },
+            { action: "resolve" },
+          ],
         }),
       ),
     ).toEqual({
       findings: [
         { path: "src/a.ts", line: 11, side: "RIGHT", body: "Bug" },
         { path: "src/a.ts", line: 12, startLine: 10, side: "LEFT", body: "Range" },
+      ],
+      threadActions: [
+        { threadId: "PRRT_1", action: "resolve", body: "Fixed in bbbbbbbb: added the check." },
+        { threadId: "PRRT_2", action: "unresolve" },
       ],
     });
   });
@@ -169,6 +209,45 @@ describe("Bonk review publishing", () => {
     // A range must stay within one hunk.
     expect(anchorFinding(finding({ line: 40, startLine: 12 }), lines)).toBeNull();
     expect(anchorFinding(finding({ path: "src/other.ts" }), lines)).toBeNull();
+  });
+
+  it("matches findings to Bonk's threads and resolves only unanswered stale ones", () => {
+    const thread = (id: string, overrides: Partial<BonkThread>): BonkThread => ({
+      id,
+      resolved: false,
+      path: "src/a.ts",
+      line: 20,
+      hasHumanReplies: false,
+      ...overrides,
+    });
+    const threads = [
+      thread("open-near", { line: 20 }),
+      thread("resolved", { line: 60, resolved: true }),
+      thread("stale", { line: 90 }),
+      thread("answered", { line: 120, hasHumanReplies: true }),
+      thread("acted", { line: 150 }),
+      thread("untouched-file", { path: "src/b.ts" }),
+    ];
+    const finding = (line: number): Finding => ({
+      path: "src/a.ts",
+      line,
+      side: "RIGHT",
+      body: "x",
+    });
+
+    const result = partitionFindings(
+      [finding(24), finding(58), finding(200)],
+      threads,
+      new Set(["acted"]),
+      ["src/a.ts"],
+    );
+    expect(result.toPost).toEqual([finding(200)]);
+    expect(result.toResolve.map((entry) => entry.id)).toEqual(["stale"]);
+
+    // A full review may resolve stale threads in any file.
+    expect(
+      partitionFindings([], threads, new Set(), null).toResolve.map((entry) => entry.id),
+    ).toEqual(["open-near", "stale", "acted", "untouched-file"]);
   });
 
   it("recognizes review runs", () => {
@@ -275,6 +354,80 @@ describe("Bonk review publishing", () => {
     patch = requests.find((request) => request.method === "PATCH");
     body = patchedBody(patch);
     expect(body).toContain("- `src/a.ts:11`: Null deref");
+  });
+
+  it("follows up on Bonk's own threads and never on anyone else's", async () => {
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: {
+        nodes: [stickyComment, response("Since last review: 1 resolved, 1 still open, 0 new.")],
+      },
+      reviews: { nodes: [{ databaseId: 3, author: bonk }] },
+      reviewThreads: {
+        nodes: [
+          thread("PRRT_fixed", 11, [bonk]),
+          thread("PRRT_open", 40, [bonk]),
+          thread("PRRT_gone", 90, [bonk]),
+          thread("PRRT_discussed", 120, [bonk, human]),
+          thread("PRRT_human", 5, [human]),
+        ],
+      },
+    });
+    const reviewFile = writeReviewFile("threads", {
+      findings: [{ path: "src/a.ts", line: 41, body: "Still leaks" }],
+      thread_actions: [
+        {
+          thread_id: "PRRT_fixed",
+          action: "resolve",
+          body: "Fixed in bbbbbbbb: added the null check.",
+        },
+        { thread_id: "PRRT_human", action: "resolve", body: "Done." },
+      ],
+    });
+
+    await withEnv(publishEnv(reviewFile, {}, ["src/a.ts"]), () => publishReview());
+
+    const mutations = requests
+      .filter((request) => request.url.endsWith("/graphql"))
+      .map((request) => request.body as { query: string; variables: Record<string, string> })
+      .filter((body) => body.query.trimStart().startsWith("mutation"))
+      .map(
+        (body) =>
+          `${body.query.match(/(addPullRequestReviewThreadReply|resolveReviewThread|unresolveReviewThread)/)?.[1]} ${body.variables.id}${body.variables.body ? ` ${body.variables.body}` : ""}`,
+      );
+    expect(mutations).toEqual([
+      "addPullRequestReviewThreadReply PRRT_fixed Fixed in bbbbbbbb: added the null check.",
+      "resolveReviewThread PRRT_fixed",
+      // No finding matches it, nobody replied, and its file changed.
+      "resolveReviewThread PRRT_gone",
+    ]);
+    // The still-open finding matches its thread and is not posted again.
+    expect(requests.some((request) => request.url.endsWith("/pulls/5/reviews"))).toBe(false);
+  });
+
+  it("pages back through comments to find the sticky summary", async () => {
+    const befores: unknown[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const { variables } = JSON.parse(String(init?.body)) as { variables: { before: unknown } };
+      befores.push(variables.before);
+      const older = variables.before === "cursor-1";
+      return jsonResponse({
+        data: {
+          repository: {
+            pullRequest: {
+              comments: {
+                nodes: older ? [stickyComment] : [{ databaseId: 50, author: human, body: "ping" }],
+                pageInfo: { hasPreviousPage: !older, startCursor: "cursor-1" },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    const sticky = await findStickyComment("token", "owner/repo", "5", "ask-bonk");
+    expect(sticky?.databaseId).toBe(10);
+    expect(befores).toEqual([null, "cursor-1"]);
   });
 
   it("leaves non-review answers as normal comments", async () => {

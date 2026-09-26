@@ -804,6 +804,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             head: reviewContext.headSha,
             base: reviewContext.baseSha,
             lastReviewId: reviewContext.lastReviewId,
+            changedFiles: reviewContext.changedFiles,
             reviewFile,
           },
         }
@@ -823,7 +824,13 @@ interface OidcResult {
 interface OidcExchangeOptions {
   forceNoPush: boolean;
   codeownersTeamGroups?: string[][];
+  // Overrides TOKEN_PERMISSIONS for tokens that never reach OpenCode.
+  permissions?: Record<string, string>;
 }
+
+// GitHub gates resolveReviewThread/unresolveReviewThread behind contents:
+// write on App installation tokens, even though they change no content.
+const PUBLISH_TOKEN_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "write" };
 
 function maskValue(value: string): void {
   if (value) {
@@ -862,7 +869,9 @@ async function exchangeOidc(options: OidcExchangeOptions): Promise<OidcResult> {
   // Accepts a preset name (e.g., "NO_PUSH") or a JSON permissions object.
   const exchangeBody: Record<string, unknown> = {};
   const rawPermissions = process.env.TOKEN_PERMISSIONS;
-  if (options.forceNoPush) {
+  if (options.permissions) {
+    exchangeBody.permissions = options.permissions;
+  } else if (options.forceNoPush) {
     exchangeBody.permissions = "NO_PUSH";
   } else if (rawPermissions?.trim()) {
     const parsed = parseTokenPermissions(rawPermissions);
@@ -1151,6 +1160,23 @@ async function main() {
   }
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);
+  }
+
+  // Publishing resolves Bonk's review threads, which a NO_PUSH token cannot.
+  // The publish step is deterministic, so it gets its own token that never
+  // reaches OpenCode. Fork runs stay comment-only.
+  if (
+    promptResult.reviewState &&
+    oidcResult.token &&
+    !promptResult.isFork &&
+    !tokenAllowsContentWrites(requestedTokenPermissions())
+  ) {
+    const publish = await exchangeOidc({
+      forceNoPush: false,
+      codeownersTeamGroups: codeownersCheck?.teamGroups,
+      permissions: PUBLISH_TOKEN_PERMISSIONS,
+    });
+    if (publish.token) core.setOutput("publish_token", publish.token);
   }
 
   // Step 4: Handle fork PRs

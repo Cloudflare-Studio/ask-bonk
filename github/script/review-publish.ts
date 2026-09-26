@@ -6,6 +6,11 @@
 // review with an empty body, moves findings that cannot be anchored to a diff
 // line into the summary, and folds the response into Bonk's single sticky
 // review comment, stamped with the review-state marker.
+//
+// On re-reviews it also follows up on Bonk's own threads: it runs the thread
+// actions the model wrote (reply, resolve, unresolve) on threads Bonk started,
+// skips findings that already have a thread, and resolves Bonk's threads whose
+// finding the model no longer reports, when nobody replied to them.
 
 import { existsSync, readFileSync } from "fs";
 import { pathToFileURL } from "url";
@@ -14,16 +19,18 @@ import { fetchWithRetry } from "./http";
 import {
   SHA_PATTERN,
   botLogin,
+  fetchReviewThreads,
+  findStickyComment,
   formatReviewStateMarker,
   githubGraphQL,
   isBonk,
-  parseReviewStateMarker,
   splitRepository,
   stripOpencodeFooter,
   stripReviewState,
   type GraphQLAuthor,
   type GraphQLComment,
   type GraphQLReview,
+  type ReviewThreadNode,
 } from "./review-state";
 
 // The harness guidance makes every review response start with one of these
@@ -46,8 +53,24 @@ export interface Finding {
   body: string;
 }
 
+export interface ThreadAction {
+  threadId: string;
+  action: "reply" | "resolve" | "unresolve";
+  body?: string;
+}
+
 export interface ReviewFile {
   findings: Finding[];
+  threadActions: ThreadAction[];
+}
+
+// A review thread Bonk started, as publishing sees it.
+export interface BonkThread {
+  id: string;
+  resolved: boolean;
+  path: string;
+  line: number | null;
+  hasHumanReplies: boolean;
 }
 
 // Written by preflight as the `review_state` output.
@@ -55,6 +78,9 @@ export interface PublishState {
   head: string;
   base: string;
   lastReviewId: number;
+  // Files the author changed since the last review, or null when the review
+  // covered the whole pull request.
+  changedFiles: string[] | null;
   reviewFile: string;
 }
 
@@ -88,7 +114,19 @@ export function parseReviewFile(text: string): ReviewFile | null {
       body: entry.body,
     });
   }
-  return { findings };
+  const threadActions: ThreadAction[] = [];
+  const rawActions = (raw as { thread_actions?: unknown }).thread_actions;
+  for (const item of Array.isArray(rawActions) ? rawActions : []) {
+    if (typeof item !== "object" || item === null) continue;
+    const entry = item as Record<string, unknown>;
+    const action = entry.action;
+    if (typeof entry.thread_id !== "string" || !entry.thread_id) continue;
+    if (action !== "reply" && action !== "resolve" && action !== "unresolve") continue;
+    const body = typeof entry.body === "string" && entry.body.trim() ? entry.body : undefined;
+    if (action === "reply" && !body) continue;
+    threadActions.push({ threadId: entry.thread_id, action, ...(body ? { body } : {}) });
+  }
+  return { findings, threadActions };
 }
 
 export function parsePublishState(text: string | undefined): PublishState | null {
@@ -100,6 +138,11 @@ export function parsePublishState(text: string | undefined): PublishState | null
       head: raw.head,
       base: typeof raw.base === "string" ? raw.base : "",
       lastReviewId: typeof raw.lastReviewId === "number" ? raw.lastReviewId : 0,
+      changedFiles:
+        Array.isArray(raw.changedFiles) &&
+        raw.changedFiles.every((file) => typeof file === "string")
+          ? raw.changedFiles
+          : null,
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
     };
   } catch {
@@ -297,6 +340,157 @@ async function postFindings(
   return findings;
 }
 
+// A finding within five lines of one of Bonk's threads on the same file is
+// that thread's finding: code moves a little between pushes.
+const THREAD_MATCH_WINDOW = 5;
+
+function matchThread(finding: Finding, threads: BonkThread[]): BonkThread | undefined {
+  let best: BonkThread | undefined;
+  let bestDistance = THREAD_MATCH_WINDOW + 1;
+  for (const thread of threads) {
+    if (thread.path !== finding.path || thread.line === null) continue;
+    const distance = Math.abs(thread.line - finding.line);
+    if (distance < bestDistance) {
+      best = thread;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+export interface Partition {
+  toPost: Finding[];
+  toResolve: BonkThread[];
+}
+
+// Deterministic safety net around the model's judgement. A finding that matches an open Bonk thread is that thread's
+// finding and is not posted again; one that matches a resolved thread stays
+// resolved (the model unresolves it explicitly if the defect is back). An open
+// Bonk thread that no finding matches is resolved, but only when nobody
+// replied to it, the model did not act on it, and its file was part of this
+// review: a file the author did not touch cannot have been fixed.
+export function partitionFindings(
+  findings: Finding[],
+  threads: BonkThread[],
+  actedOn: ReadonlySet<string>,
+  changedFiles: string[] | null,
+): Partition {
+  const open = threads.filter((thread) => !thread.resolved);
+  const resolved = threads.filter((thread) => thread.resolved);
+  const matched = new Set<string>();
+  const toPost: Finding[] = [];
+  for (const finding of findings) {
+    const thread = matchThread(finding, open);
+    if (thread) matched.add(thread.id);
+    else if (!matchThread(finding, resolved)) toPost.push(finding);
+  }
+  const inScope = (path: string) => changedFiles === null || changedFiles.includes(path);
+  const toResolve = open.filter(
+    (thread) =>
+      !matched.has(thread.id) &&
+      !actedOn.has(thread.id) &&
+      !thread.hasHumanReplies &&
+      inScope(thread.path),
+  );
+  return { toPost, toResolve };
+}
+
+const REPLY_MUTATION = `
+mutation($id: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) {
+    comment { id }
+  }
+}`;
+const RESOLVE_MUTATION = `
+mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`;
+const UNRESOLVE_MUTATION = `
+mutation($id: ID!) { unresolveReviewThread(input: { threadId: $id }) { thread { id } } }`;
+
+async function runMutation(
+  token: string,
+  mutation: string,
+  variables: Record<string, unknown>,
+  description: string,
+): Promise<boolean> {
+  try {
+    await githubGraphQL(token, mutation, variables);
+    return true;
+  } catch (error) {
+    core.warning(`Failed to ${description}: ${error}`);
+    return false;
+  }
+}
+
+// Runs the model's thread actions on threads Bonk started; any other thread id
+// is ignored, however the model came by it. Unresolves run first and resolves
+// last, so a reply lands before its thread closes.
+// Returns the ids of the threads acted on and updates their resolved state.
+export async function executeThreadActions(
+  token: string,
+  actions: ThreadAction[],
+  threads: BonkThread[],
+): Promise<Set<string>> {
+  const owned = new Map(threads.map((thread) => [thread.id, thread]));
+  const seen = new Set<string>();
+  const accepted: ThreadAction[] = [];
+  for (const action of actions) {
+    const key = `${action.action}:${action.threadId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!owned.has(action.threadId)) {
+      core.warning(`Ignoring ${action.action} on thread ${action.threadId}: Bonk did not start it`);
+      continue;
+    }
+    accepted.push(action);
+  }
+
+  const actedOn = new Set<string>();
+  const order: ThreadAction["action"][] = ["unresolve", "reply", "resolve"];
+  for (const kind of order) {
+    for (const action of accepted.filter((candidate) => candidate.action === kind)) {
+      const thread = owned.get(action.threadId)!;
+      actedOn.add(thread.id);
+      if (kind === "unresolve" && thread.resolved) {
+        if (await runMutation(token, UNRESOLVE_MUTATION, { id: thread.id }, "unresolve a thread")) {
+          thread.resolved = false;
+        }
+      }
+      if (action.body) {
+        await runMutation(
+          token,
+          REPLY_MUTATION,
+          { id: thread.id, body: action.body },
+          "reply on a thread",
+        );
+      }
+      if (kind === "resolve" && !thread.resolved) {
+        if (await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a thread")) {
+          thread.resolved = true;
+        }
+      }
+    }
+  }
+  return actedOn;
+}
+
+export function bonkThreads(nodes: ReviewThreadNode[], login: string): BonkThread[] {
+  const threads: BonkThread[] = [];
+  for (const node of nodes) {
+    const [first, ...replies] = node.comments?.nodes ?? [];
+    if (!node.id || !first || !isBonk(first.author, login)) continue;
+    threads.push({
+      id: node.id,
+      resolved: Boolean(node.isResolved),
+      path: node.path || "",
+      line: node.line ?? node.originalLine ?? null,
+      // Replies that were not fetched may be a person's, so count them as one.
+      hasHumanReplies:
+        Boolean(node.omittedReplies) || replies.some((reply) => !isBonk(reply.author, login)),
+    });
+  }
+  return threads;
+}
+
 function readReviewFile(path: string): ReviewFile | null {
   if (!path || !existsSync(path)) return null;
   const parsed = parseReviewFile(readFileSync(path, "utf8"));
@@ -385,10 +579,17 @@ export async function publishReview(): Promise<void> {
     // Line numbers refer to a head that is no longer current.
     unanchored = findings;
     unanchoredReason = "Findings not posted inline because the pull request changed";
-  } else if (findings.length > 0) {
-    const commentable = await fetchCommentableLines(token, repository, prNumber);
+  } else if (reviewFile) {
+    const threads = bonkThreads(await fetchReviewThreads(token, repository, prNumber), login);
+    const actedOn = await executeThreadActions(token, reviewFile.threadActions, threads);
+    const { toPost, toResolve } = partitionFindings(findings, threads, actedOn, state.changedFiles);
+    for (const thread of toResolve) {
+      await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a stale thread");
+    }
+    const commentable =
+      toPost.length > 0 ? await fetchCommentableLines(token, repository, prNumber) : new Map();
     const anchored: Finding[] = [];
-    for (const finding of findings) {
+    for (const finding of toPost) {
       const position = anchorFinding(finding, commentable);
       if (position) anchored.push(position);
       else unanchored.push(finding);
@@ -409,14 +610,7 @@ export async function publishReview(): Promise<void> {
 
   // One review summary per pull request: the newest Bonk comment carrying a
   // review-state marker is edited in place, and this run's response goes.
-  const sticky = comments
-    .toReversed()
-    .find(
-      (comment) =>
-        comment.databaseId !== response.databaseId &&
-        isBonk(comment.author, login) &&
-        parseReviewStateMarker(comment.body || "") !== null,
-    );
+  const sticky = await findStickyComment(token, repository, prNumber, login, response.databaseId);
   const target = sticky?.databaseId ?? response.databaseId;
   const patched = await githubRest(
     token,

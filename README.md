@@ -238,11 +238,22 @@ Review runs also publish differently. Instead of calling the GitHub API, OpenCod
 
 - posts the findings as one review with an empty body, pinned to the reviewed commit. A finding whose line is not in the diff moves to the nearest commentable line within five lines; suggestions never move. Findings that still cannot be placed are listed in the summary under "Findings outside the diff";
 - keeps one review summary comment per pull request. The first review's response becomes that comment. Later reviews rewrite it in place and delete their own new response comment, so the pull request never collects a stack of summaries. (`opencode github run` always posts the response first, so watchers may still get a notification for the comment that is then removed.) The comment ends with `Reviewed commit: <sha>` and a hidden `<!-- bonk-review-state:{...} -->` marker recording the reviewed head and base;
-- checks the pull request head first. If it moved during the run, no inline review is posted: the findings go into the summary, with a note naming the commit the review covers.
+- checks the pull request head first. If it moved during the run, no inline review is posted and no threads are touched: the findings go into the summary, with a note naming the commit the review covers.
+
+On re-reviews Bonk also follows up on its own inline threads. Each thread in `<bonk_previous_review>` carries its id, and the model adds `thread_actions` to the findings file:
+
+- a fixed finding gets a short reply (`Fixed in <sha>: ...`) and its thread is resolved;
+- a finding the author or a maintainer declined with a reason gets a one-line acknowledgement and is resolved, unless it is a blocking correctness or security defect;
+- a question or pushback gets a reply;
+- a thread a person resolved is reopened only if the exact defect is still present.
+
+Bonk runs these actions itself and only on threads it started; actions on anyone else's thread are ignored. Two deterministic checks back up the model. A finding within five lines of one of Bonk's threads on the same file belongs to that thread and is not posted again (and a finding matching a resolved thread stays resolved). An open Bonk thread whose finding the model no longer reports is resolved, but only if nobody replied to it and its file changed since the last review, since untouched code cannot have been fixed. Comments and threads are read page by page, with each thread's first comment and newest replies, so busy pull requests work too.
 
 A run counts as a review when OpenCode wrote the findings file, when it was triggered by a `pull_request` event, when Bonk submitted a pull request review during the run, or when the response starts with one of those verdict lines (`LGTM` without the bang is also accepted). Other responses, such as `/bonk explain ...`, stay normal comments and leave the last reviewed head unchanged. Before the first marker exists, Bonk uses the commit of its latest inline review.
 
-Bonk recognizes its own comments, reviews, and markers by the GitHub App behind its installation token (GraphQL `viewer`), so self-hosted Apps need no extra configuration. `NO_PUSH` tokens have everything publishing needs (`issues: write` and `pull_requests: write`).
+Bonk recognizes its own comments, reviews, and markers by the GitHub App behind its installation token (GraphQL `viewer`), so self-hosted Apps need no extra configuration.
+
+GitHub only lets App tokens with `contents: write` resolve or reopen review threads. When `token_permissions` withholds that (for example `NO_PUSH`), Bonk requests a second installation token with `contents`, `issues`, and `pull_requests` write for the publish step only. That step runs Bonk's own code after OpenCode has exited; OpenCode never sees the token, so it still cannot push. Fork pull requests do not get the second token, so Bonk replies on threads but cannot resolve them there.
 
 With `rereview_context` enabled, the prompt always carries the pull request's current head as `head_sha`. To review on every push, add `synchronize` to the `pull_request` trigger types and serialize runs per pull request:
 

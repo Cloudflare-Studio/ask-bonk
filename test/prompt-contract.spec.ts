@@ -34,6 +34,14 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain('{"findings": [{"path": "src/file.ts", "line": 42');
   });
 
+  it("has re-reviews follow up on Bonk's threads through structured actions", () => {
+    expect(guidance).toContain(
+      'fixed: `{"thread_id": "<thread>", "action": "resolve", "body": "Fixed in <short sha>: <one line on how>."}`',
+    );
+    expect(guidance).toContain("Add every previous finding that is still present to `findings` again");
+    expect(guidance).toContain("Bonk ignores actions on threads it did not start.");
+  });
+
   it("gives explicit change requests precedence in mixed review-and-fix tasks", () => {
     expect(guidance).toContain("Determine authorization from the entire request.");
     expect(guidance).toContain(

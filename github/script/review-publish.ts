@@ -96,6 +96,9 @@ export interface BonkThread {
   path: string;
   line: number | null;
   hasHumanReplies: boolean;
+  // Bonk replied on the thread after posting the finding, i.e. an earlier
+  // review already followed up on it.
+  bonkReplied?: boolean;
   // The thread's first comment: the finding as Bonk posted it.
   body: string;
   url?: string;
@@ -707,15 +710,24 @@ async function runMutation(
   }
 }
 
+export interface ThreadActionResult {
+  // Threads the model acted on.
+  actedOn: Set<string>;
+  // Earlier findings this run confirmed fixed: threads it resolved, and
+  // threads a person resolved before Bonk followed up on them, which the
+  // model confirmed with a resolve action.
+  resolved: Set<string>;
+}
+
 // Runs the model's thread actions on threads Bonk started; any other thread id
 // is ignored, however the model came by it. Unresolves run first and resolves
-// last, so a reply lands before its thread closes.
-// Returns the ids of the threads acted on and updates their resolved state.
+// last, so a reply lands before its thread closes. Updates the threads'
+// resolved state.
 export async function executeThreadActions(
   token: string,
   actions: ThreadAction[],
   threads: BonkThread[],
-): Promise<Set<string>> {
+): Promise<ThreadActionResult> {
   const owned = new Map(threads.map((thread) => [thread.id, thread]));
   const seen = new Set<string>();
   const accepted: ThreadAction[] = [];
@@ -731,32 +743,44 @@ export async function executeThreadActions(
   }
 
   const actedOn = new Set<string>();
+  const resolved = new Set<string>();
   const order: ThreadAction["action"][] = ["unresolve", "reply", "resolve"];
   for (const kind of order) {
     for (const action of accepted.filter((candidate) => candidate.action === kind)) {
       const thread = owned.get(action.threadId)!;
       actedOn.add(thread.id);
+      // A person resolved the thread. If Bonk already followed up on it in an
+      // earlier review, confirming the fix again would only repeat itself.
+      const confirming = kind === "resolve" && thread.resolved;
+      if (confirming && thread.bonkReplied) {
+        core.info(`Thread ${thread.id} is resolved and Bonk already followed up on it`);
+        continue;
+      }
       if (kind === "unresolve" && thread.resolved) {
         if (await runMutation(token, UNRESOLVE_MUTATION, { id: thread.id }, "unresolve a thread")) {
           thread.resolved = false;
         }
       }
+      let replied = true;
       if (action.body) {
-        await runMutation(
+        replied = await runMutation(
           token,
           REPLY_MUTATION,
           { id: thread.id, body: action.body },
           "reply on a thread",
         );
       }
-      if (kind === "resolve" && !thread.resolved) {
+      if (confirming) {
+        if (replied) resolved.add(thread.id);
+      } else if (kind === "resolve") {
         if (await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a thread")) {
           thread.resolved = true;
+          resolved.add(thread.id);
         }
       }
     }
   }
-  return actedOn;
+  return { actedOn, resolved };
 }
 
 export function bonkThreads(nodes: ReviewThreadNode[], login: string): BonkThread[] {
@@ -772,6 +796,7 @@ export function bonkThreads(nodes: ReviewThreadNode[], login: string): BonkThrea
       // Replies that were not fetched may be a person's, so count them as one.
       hasHumanReplies:
         Boolean(node.omittedReplies) || replies.some((reply) => !isBonk(reply.author, login)),
+      bonkReplied: replies.some((reply) => isBonk(reply.author, login)),
       body: first.body || "",
       ...(first.url ? { url: first.url } : {}),
     });
@@ -924,14 +949,16 @@ export async function publishReview(): Promise<void> {
     }
   } else if (reviewFile) {
     const threads = bonkThreads(await fetchReviewThreads(token, repository, prNumber), login);
-    const openBefore = new Set(
-      threads.filter((thread) => !thread.resolved).map((thread) => thread.id),
+    const { actedOn, resolved } = await executeThreadActions(
+      token,
+      reviewFile.threadActions,
+      threads,
     );
-    const actedOn = await executeThreadActions(token, reviewFile.threadActions, threads);
     const partition = partitionFindings(findings, threads, actedOn, state.changedFiles);
     for (const thread of partition.toResolve) {
       if (await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a stale thread")) {
         thread.resolved = true;
+        resolved.add(thread.id);
       }
     }
 
@@ -957,12 +984,11 @@ export async function publishReview(): Promise<void> {
       ),
       formatStillPresent(partition.stillPresent),
     );
-    const resolved = threads.filter((thread) => openBefore.has(thread.id) && thread.resolved);
     summary = [
       computeVerdict(
         {
           findings,
-          resolved: resolved.length,
+          resolved: resolved.size,
           stillOpen: partition.kept.length + partition.stillPresent.length,
           added: partition.toPost.length,
         },

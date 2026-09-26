@@ -134,6 +134,14 @@ function publishEnv(
   };
 }
 
+function rereviewEnv(reviewFile: string, changedFiles: string[] | null = null) {
+  const env = publishEnv(reviewFile, {}, changedFiles);
+  return {
+    ...env,
+    REVIEW_STATE: JSON.stringify({ ...JSON.parse(env.REVIEW_STATE), rereview: true }),
+  };
+}
+
 const stickyComment = {
   databaseId: 10,
   author: bonk,
@@ -595,7 +603,7 @@ describe("Bonk review publishing", () => {
       ],
     });
 
-    await withEnv(publishEnv(reviewFile, {}, ["src/a.ts"]), () => publishReview());
+    await withEnv(rereviewEnv(reviewFile, ["src/a.ts"]), () => publishReview());
 
     const mutations = requests
       .filter((request) => request.url.endsWith("/graphql"))
@@ -613,6 +621,62 @@ describe("Bonk review publishing", () => {
     ]);
     // The still-open finding names its thread and is not posted again.
     expect(requests.some((request) => request.url.endsWith("/pulls/5/reviews"))).toBe(false);
+    expect(patchedBody(requests.find((request) => request.method === "PATCH"))).toMatch(
+      /^Since last review: 2 resolved, 1 still open, 0 new\./,
+    );
+  });
+
+  it("counts fixes the author already resolved when Bonk confirms them", async () => {
+    // The author replied "Done" and resolved the threads before the re-review.
+    const resolvedByAuthor = (id: string, line: number, authors: Array<typeof bonk>) => ({
+      ...thread(id, line, authors),
+      isResolved: true,
+    });
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: {
+        nodes: [stickyComment, response("Since last review: 0 resolved, 0 still open, 0 new.")],
+      },
+      reviews: { nodes: [{ databaseId: 3, author: bonk }] },
+      reviewThreads: {
+        nodes: [
+          resolvedByAuthor("PRRT_a", 11, [bonk, human]),
+          resolvedByAuthor("PRRT_b", 40, [bonk, human]),
+          thread("PRRT_c", 12, [bonk]),
+          // Confirmed fixed in an earlier review already.
+          resolvedByAuthor("PRRT_old", 90, [bonk, bonk]),
+        ],
+      },
+    });
+    const fixed = (id: string) => ({
+      thread_id: id,
+      action: "resolve",
+      body: "Fixed in bbbbbbbb: done.",
+    });
+    const reviewFile = writeReviewFile("confirmed", {
+      findings: [],
+      thread_actions: [fixed("PRRT_a"), fixed("PRRT_b"), fixed("PRRT_c"), fixed("PRRT_old")],
+    });
+
+    await withEnv(rereviewEnv(reviewFile, ["src/a.ts"]), () => publishReview());
+
+    const mutations = requests
+      .filter((request) => request.url.endsWith("/graphql"))
+      .map((request) => request.body as { query: string; variables: Record<string, string> })
+      .filter((body) => body.query.trimStart().startsWith("mutation"))
+      .map(
+        (body) =>
+          `${body.query.match(/(addPullRequestReviewThreadReply|resolveReviewThread)/)?.[1]} ${body.variables.id}`,
+      );
+    expect(mutations).toEqual([
+      "addPullRequestReviewThreadReply PRRT_a",
+      "addPullRequestReviewThreadReply PRRT_b",
+      "addPullRequestReviewThreadReply PRRT_c",
+      "resolveReviewThread PRRT_c",
+    ]);
+    expect(patchedBody(requests.find((request) => request.method === "PATCH"))).toMatch(
+      /^Since last review: 3 resolved, 0 still open, 0 new\.\nLGTM!/,
+    );
   });
 
   it("posts a new defect next to an earlier thread instead of folding it in", async () => {

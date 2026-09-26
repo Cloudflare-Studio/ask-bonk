@@ -27,6 +27,7 @@ describe("Bonk precomputed diff", () => {
         ".github/workflows/*.md",
         ".*/work*/x",
         ".github/CODEOWNERS",
+        "src/**/*.c++",
       ].join("\n"),
     );
     expect(rules.map((rule) => rule.pattern)).toEqual([
@@ -34,6 +35,7 @@ describe("Bonk precomputed diff", () => {
       "src/**/*.snap",
       "types/generated-snapshot/*.d.ts",
       ".github/CODEOWNERS",
+      "src/**/*.c++",
     ]);
     expect(warnings).toHaveLength(9);
     const matches = (path: string) => rules.some((rule) => rule.regex.test(path));
@@ -44,6 +46,9 @@ describe("Bonk precomputed diff", () => {
     expect(matches("types/generated-snapshot/a/b.d.ts")).toBe(false);
     expect(matches("types/generated-snapshot/b.d.ts")).toBe(true);
     expect(matches(".github/workflows/ci.yml")).toBe(false);
+    // `+` is literal, as in C++ file names.
+    expect(matches("src/workerd/api/url.c++")).toBe(true);
+    expect(matches("src/workerd/api/url.cc")).toBe(false);
     // Bad input warns but never throws.
     expect(parseIgnorePaths(undefined)).toEqual({ rules: [], warnings: [] });
   });

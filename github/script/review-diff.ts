@@ -118,6 +118,9 @@ export interface IgnoreRule {
   regex: RegExp;
 }
 
+// `+` is common in file names (`.c++`); it is matched literally.
+const PATTERN_CHARS = /^[A-Za-z0-9._\-+@~/*]+$/;
+
 function segmentRegex(segment: string): string {
   return segment
     .split("*")
@@ -142,7 +145,7 @@ function globRegex(segments: string[]): RegExp {
 // used for specialist scopes. Returns null for an invalid pattern.
 export function compileGlob(pattern: string): RegExp | null {
   const trimmed = pattern.trim();
-  if (!/^[A-Za-z0-9._\-/*]+$/.test(trimmed) || trimmed.startsWith("/")) return null;
+  if (!PATTERN_CHARS.test(trimmed) || trimmed.startsWith("/")) return null;
   const segments = (trimmed.endsWith("/") ? `${trimmed}**` : trimmed).split("/");
   if (segments.some((segment) => !segment || segment === "..")) return null;
   if (segments.some((segment) => segment.includes("**") && segment !== "**")) return null;
@@ -171,8 +174,8 @@ export function parseIgnorePaths(input: string | undefined): {
     if (!pattern) continue;
     const reject = (reason: string) =>
       warnings.push(`Ignoring ignore_paths entry "${pattern}": ${reason}`);
-    if (!/^[A-Za-z0-9._\-/*]+$/.test(pattern)) {
-      reject("only letters, digits, '.', '_', '-', '/', and '*' are allowed");
+    if (!PATTERN_CHARS.test(pattern)) {
+      reject("only letters, digits, '.', '_', '-', '+', '@', '~', '/', and '*' are allowed");
       continue;
     }
     const expanded = pattern.endsWith("/") ? `${pattern}**` : pattern;

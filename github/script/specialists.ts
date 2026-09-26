@@ -194,6 +194,11 @@ export function parseSpecialistFile(text: string, fileName: string): SpecialistD
   };
 }
 
+// A README can document the directory without becoming a specialist.
+function isSpecialistFile(name: string): boolean {
+  return name.endsWith(".md") && name.toLowerCase() !== "readme.md";
+}
+
 // Specialist definitions come from the pull request's base commit, so a pull
 // request cannot rewrite the instructions its own review runs with.
 export async function fetchRepoSpecialists(
@@ -210,7 +215,9 @@ export async function fetchRepoSpecialists(
   if (!listing.ok) throw new Error(`Listing specialists returned ${listing.status}`);
   const entries = (await listing.json()) as Array<{ name: string; type: string; path: string }>;
   mkdirSync(dir, { recursive: true });
-  for (const entry of entries.filter((item) => item.type === "file" && item.name.endsWith(".md"))) {
+  for (const entry of entries.filter(
+    (item) => item.type === "file" && isSpecialistFile(item.name),
+  )) {
     const resp = await fetchWithRetry(
       `https://api.github.com/repos/${repository}/contents/${entry.path}?ref=${ref}`,
       { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw" } },
@@ -224,7 +231,7 @@ export function loadRepoSpecialists(dir: string): { defs: SpecialistDef[]; warni
   const warnings: string[] = [];
   if (!dir || !existsSync(dir)) return { defs, warnings };
   for (const name of readdirSync(dir)
-    .filter((file) => file.endsWith(".md"))
+    .filter((file) => isSpecialistFile(file))
     .sort()) {
     const parsed = parseSpecialistFile(readFileSync(join(dir, name), "utf8"), name);
     if (typeof parsed === "string") warnings.push(`Skipping specialist ${parsed}`);

@@ -244,7 +244,7 @@ A built-in filter leaves out files that rarely need review and lists them at the
       src/**/*.snap
 ```
 
-Patterns are relative to the repository root and match whole paths: `*` stays within one path segment, `**` (a whole segment) spans any number of segments, and a trailing `/` covers a directory. Leading `/`, `..`, `?`, brackets, and negation are not allowed, and no pattern may cover `.github/workflows/`. Invalid patterns are skipped with a warning.
+Patterns are relative to the repository root and match whole paths: `*` stays within one path segment, `**` (a whole segment) spans any number of segments, and a trailing `/` covers a directory. Patterns may use letters, digits, `.`, `_`, `-`, `+`, `@`, `~`, `/`, and `*`; leading `/`, `..`, `?`, brackets, and negation are not allowed, and no pattern may cover `.github/workflows/`. Invalid patterns are skipped with a warning.
 
 #### Specialists
 
@@ -277,7 +277,7 @@ What to look for, in plain language. This becomes the specialist's instructions.
 
 On re-reviews, the review-state marker records each specialist's result, and a specialist whose files the author has not changed since its last successful run is not run again: its earlier findings stand (their threads stay as they are) and the summary lists it as carried forward. Correctness and security always run, and any doubt (a first review, an unknown change set, or a specialist that did not finish last time) means the specialist runs.
 
-A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
+A `README.md` in that directory is ignored, so it can document the specialists. A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
 
 | Input                    | Default | Description                                                     |
 | ------------------------ | ------- | --------------------------------------------------------------- |

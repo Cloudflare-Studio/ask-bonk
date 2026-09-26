@@ -61,6 +61,7 @@ describe("Bonk specialists", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(`${dir}/jsg.md`, REPO_SPECIALIST);
     writeFileSync(`${dir}/broken.md`, "---\nname: x\n---\n");
+    writeFileSync(`${dir}/README.md`, "# Our specialists\n");
     const { defs, warnings } = loadRepoSpecialists(dir);
     expect(names(defs)).toEqual(["jsg-safety"]);
     expect(warnings).toHaveLength(1);

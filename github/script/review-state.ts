@@ -503,7 +503,7 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
           line
           originalLine
           first: comments(first: 1) {
-            nodes { id author { __typename login } body originalCommit { oid } }
+            nodes { id author { __typename login } body url originalCommit { oid } }
           }
           recent: comments(last: ${THREAD_REPLIES}) {
             totalCount

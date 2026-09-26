@@ -51,6 +51,8 @@ export interface Finding {
   startLine?: number;
   side: Side;
   body: string;
+  // Set when the finding re-reports one of Bonk's earlier threads.
+  threadId?: string;
 }
 
 export interface ThreadAction {
@@ -71,6 +73,9 @@ export interface BonkThread {
   path: string;
   line: number | null;
   hasHumanReplies: boolean;
+  // The thread's first comment: the finding as Bonk posted it.
+  body: string;
+  url?: string;
 }
 
 // Written by preflight as the `review_state` output.
@@ -112,6 +117,9 @@ export function parseReviewFile(text: string): ReviewFile | null {
       ...(startLine && startLine < line ? { startLine } : {}),
       side: entry.side === "LEFT" ? "LEFT" : "RIGHT",
       body: entry.body,
+      ...(typeof entry.thread_id === "string" && entry.thread_id
+        ? { threadId: entry.thread_id }
+        : {}),
     });
   }
   const threadActions: ThreadAction[] = [];
@@ -340,59 +348,90 @@ async function postFindings(
   return findings;
 }
 
-// A finding within five lines of one of Bonk's threads on the same file is
-// that thread's finding: code moves a little between pushes.
-const THREAD_MATCH_WINDOW = 5;
+function normalizeFindingText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
 
-function matchThread(finding: Finding, threads: BonkThread[]): BonkThread | undefined {
-  let best: BonkThread | undefined;
-  let bestDistance = THREAD_MATCH_WINDOW + 1;
-  for (const thread of threads) {
-    if (thread.path !== finding.path || thread.line === null) continue;
-    const distance = Math.abs(thread.line - finding.line);
-    if (distance < bestDistance) {
-      best = thread;
-      bestDistance = distance;
+// A re-reported finding names its thread by id. The fallback only catches a
+// finding copied verbatim onto the same line of the same file without its id;
+// anything less certain is a new finding and gets posted.
+function matchThread(finding: Finding, threads: Map<string, BonkThread>): BonkThread | undefined {
+  if (finding.threadId) {
+    const thread = threads.get(finding.threadId);
+    if (!thread)
+      core.warning(`Finding names unknown thread ${finding.threadId}; posting it as new`);
+    return thread;
+  }
+  const text = normalizeFindingText(finding.body);
+  for (const thread of threads.values()) {
+    if (
+      thread.path === finding.path &&
+      thread.line === finding.line &&
+      normalizeFindingText(thread.body) === text
+    ) {
+      return thread;
     }
   }
-  return best;
+  return undefined;
 }
 
 export interface Partition {
+  // New findings, to post inline or list in the summary.
   toPost: Finding[];
+  // Re-reported findings whose thread is resolved; listed in the summary so
+  // they stay visible without reopening a thread a person closed.
+  stillPresent: Array<{ finding: Finding; thread: BonkThread }>;
+  // Open threads re-reported by a finding; they stay as they are.
+  kept: BonkThread[];
   toResolve: BonkThread[];
 }
 
-// Deterministic safety net around the model's judgement. A finding that matches an open Bonk thread is that thread's
-// finding and is not posted again; one that matches a resolved thread stays
-// resolved (the model unresolves it explicitly if the defect is back). An open
-// Bonk thread that no finding matches is resolved, but only when nobody
-// replied to it, the model did not act on it, and its file was part of this
-// review: a file the author did not touch cannot have been fixed.
+// Deterministic safety net around the model's judgement. No finding is
+// dropped: each one either keeps its open thread, is listed in the summary,
+// or is posted. An open Bonk thread that no finding references is resolved,
+// but only when nobody replied to it, the model did not act on it, and its
+// file was part of this review: a file the author did not touch cannot have
+// been fixed.
 export function partitionFindings(
   findings: Finding[],
   threads: BonkThread[],
   actedOn: ReadonlySet<string>,
   changedFiles: string[] | null,
 ): Partition {
-  const open = threads.filter((thread) => !thread.resolved);
-  const resolved = threads.filter((thread) => thread.resolved);
-  const matched = new Set<string>();
-  const toPost: Finding[] = [];
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const referenced = new Set<string>();
+  const result: Partition = { toPost: [], stillPresent: [], kept: [], toResolve: [] };
   for (const finding of findings) {
-    const thread = matchThread(finding, open);
-    if (thread) matched.add(thread.id);
-    else if (!matchThread(finding, resolved)) toPost.push(finding);
+    const thread = matchThread(finding, byId);
+    if (!thread) {
+      result.toPost.push(finding);
+    } else if (thread.resolved) {
+      result.stillPresent.push({ finding, thread });
+    } else if (!referenced.has(thread.id)) {
+      result.kept.push(thread);
+    }
+    if (thread) referenced.add(thread.id);
   }
   const inScope = (path: string) => changedFiles === null || changedFiles.includes(path);
-  const toResolve = open.filter(
+  result.toResolve = threads.filter(
     (thread) =>
-      !matched.has(thread.id) &&
+      !thread.resolved &&
+      !referenced.has(thread.id) &&
       !actedOn.has(thread.id) &&
       !thread.hasHumanReplies &&
       inScope(thread.path),
   );
-  return { toPost, toResolve };
+  return result;
+}
+
+export function formatStillPresent(entries: Partition["stillPresent"]): string {
+  if (entries.length === 0) return "";
+  const items = entries.map(({ finding, thread }) => {
+    const location = `${finding.path}:${finding.line}`;
+    const link = thread.url ? `[\`${location}\`](${thread.url})` : `\`${location}\``;
+    return `- ${link}: ${finding.body.trim().replace(/\n/g, "\n  ")}`;
+  });
+  return ["**Earlier findings still present (thread resolved)**", "", ...items].join("\n");
 }
 
 const REPLY_MUTATION = `
@@ -486,6 +525,8 @@ export function bonkThreads(nodes: ReviewThreadNode[], login: string): BonkThrea
       // Replies that were not fetched may be a person's, so count them as one.
       hasHumanReplies:
         Boolean(node.omittedReplies) || replies.some((reply) => !isBonk(reply.author, login)),
+      body: first.body || "",
+      ...(first.url ? { url: first.url } : {}),
     });
   }
   return threads;
@@ -573,6 +614,7 @@ export async function publishReview(): Promise<void> {
     Boolean(liveHead) && liveHead !== state.head && liveHead !== process.env.WORKSPACE_HEAD_SHA;
 
   const findings = reviewFile?.findings ?? [];
+  let stillPresent = "";
   let unanchored: Finding[] = [];
   let unanchoredReason = "Findings outside the diff";
   if (stale) {
@@ -582,7 +624,9 @@ export async function publishReview(): Promise<void> {
   } else if (reviewFile) {
     const threads = bonkThreads(await fetchReviewThreads(token, repository, prNumber), login);
     const actedOn = await executeThreadActions(token, reviewFile.threadActions, threads);
-    const { toPost, toResolve } = partitionFindings(findings, threads, actedOn, state.changedFiles);
+    const partition = partitionFindings(findings, threads, actedOn, state.changedFiles);
+    const { toPost, toResolve } = partition;
+    stillPresent = formatStillPresent(partition.stillPresent);
     for (const thread of toResolve) {
       await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a stale thread");
     }
@@ -599,7 +643,9 @@ export async function publishReview(): Promise<void> {
 
   const body = buildStickyBody({
     summary: stripOpencodeFooter(stripReviewState(response.body)),
-    unanchored: formatUnanchoredFindings(unanchored, unanchoredReason),
+    unanchored: [stillPresent, formatUnanchoredFindings(unanchored, unanchoredReason)]
+      .filter(Boolean)
+      .join("\n\n"),
     head: state.head,
     base: state.base,
     liveHead,

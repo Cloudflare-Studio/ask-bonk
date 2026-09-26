@@ -211,43 +211,61 @@ describe("Bonk review publishing", () => {
     expect(anchorFinding(finding({ path: "src/other.ts" }), lines)).toBeNull();
   });
 
-  it("matches findings to Bonk's threads and resolves only unanswered stale ones", () => {
+  it("matches findings to Bonk's threads by id and never drops a finding", () => {
     const thread = (id: string, overrides: Partial<BonkThread>): BonkThread => ({
       id,
       resolved: false,
       path: "src/a.ts",
       line: 20,
       hasHumanReplies: false,
+      body: "Old finding",
       ...overrides,
     });
     const threads = [
-      thread("open-near", { line: 20 }),
+      thread("open", { line: 20 }),
       thread("resolved", { line: 60, resolved: true }),
       thread("stale", { line: 90 }),
       thread("answered", { line: 120, hasHumanReplies: true }),
       thread("acted", { line: 150 }),
       thread("untouched-file", { path: "src/b.ts" }),
     ];
-    const finding = (line: number): Finding => ({
+    const finding = (line: number, overrides: Partial<Finding> = {}): Finding => ({
       path: "src/a.ts",
       line,
       side: "RIGHT",
-      body: "x",
+      body: "New defect",
+      ...overrides,
     });
 
+    const reReported = finding(24, { threadId: "open", body: "Old finding, still there" });
+    const stillPresent = finding(61, { threadId: "resolved", body: "Old finding" });
+    // Distinct defects next to an open and a resolved thread, without ids.
+    const nearOpen = finding(22);
+    const nearResolved = finding(60);
+    const unknownId = finding(300, { threadId: "PRRT_elsewhere" });
     const result = partitionFindings(
-      [finding(24), finding(58), finding(200)],
+      [reReported, stillPresent, nearOpen, nearResolved, unknownId],
       threads,
       new Set(["acted"]),
       ["src/a.ts"],
     );
-    expect(result.toPost).toEqual([finding(200)]);
+    expect(result.toPost).toEqual([nearOpen, nearResolved, unknownId]);
+    expect(result.kept.map((entry) => entry.id)).toEqual(["open"]);
+    expect(result.stillPresent.map((entry) => entry.thread.id)).toEqual(["resolved"]);
+    // "stale" has no finding referencing it, no replies, and its file changed.
     expect(result.toResolve.map((entry) => entry.id)).toEqual(["stale"]);
 
-    // A full review may resolve stale threads in any file.
+    // Without an id, only a verbatim copy on the same line counts as the thread's finding.
+    const copy = partitionFindings([finding(20, { body: " old  FINDING " })], threads, new Set(), [
+      "src/a.ts",
+    ]);
+    expect(copy.toPost).toEqual([]);
+    expect(copy.kept.map((entry) => entry.id)).toEqual(["open"]);
+
+    // A full review may resolve unreferenced threads in any file.
     expect(
       partitionFindings([], threads, new Set(), null).toResolve.map((entry) => entry.id),
-    ).toEqual(["open-near", "stale", "acted", "untouched-file"]);
+    ).toEqual(["open", "stale", "acted", "untouched-file"]);
   });
 
   it("recognizes review runs", () => {
@@ -374,7 +392,7 @@ describe("Bonk review publishing", () => {
       },
     });
     const reviewFile = writeReviewFile("threads", {
-      findings: [{ path: "src/a.ts", line: 41, body: "Still leaks" }],
+      findings: [{ path: "src/a.ts", line: 41, body: "Still leaks", thread_id: "PRRT_open" }],
       thread_actions: [
         {
           thread_id: "PRRT_fixed",
@@ -401,8 +419,54 @@ describe("Bonk review publishing", () => {
       // No finding matches it, nobody replied, and its file changed.
       "resolveReviewThread PRRT_gone",
     ]);
-    // The still-open finding matches its thread and is not posted again.
+    // The still-open finding names its thread and is not posted again.
     expect(requests.some((request) => request.url.endsWith("/pulls/5/reviews"))).toBe(false);
+  });
+
+  it("posts a new defect next to an earlier thread instead of folding it in", async () => {
+    // A distinct defect two lines from an open Bonk thread and one line from a
+    // resolved one, reported without a thread id.
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: { nodes: [stickyComment, response("Review: 1 findings.")] },
+      reviews: { nodes: [{ databaseId: 3, author: bonk }] },
+      reviewThreads: {
+        nodes: [
+          thread("PRRT_open", 40, [bonk]),
+          { ...thread("PRRT_done", 12, [bonk]), isResolved: true },
+        ],
+      },
+    });
+    const reviewFile = writeReviewFile("nearby", {
+      findings: [
+        { path: "src/a.ts", line: 41, body: "Off-by-one in the new loop bound" },
+        { path: "src/a.ts", line: 11, body: "Unchecked null in the new branch" },
+        { path: "src/a.ts", line: 40, body: "x", thread_id: "PRRT_open" },
+        { path: "src/a.ts", line: 12, body: "Still unchecked", thread_id: "PRRT_done" },
+      ],
+    });
+
+    await withEnv(publishEnv(reviewFile, {}, ["src/a.ts"]), () => publishReview());
+
+    const review = requests.find((request) => request.url.endsWith("/pulls/5/reviews"));
+    const posted = review?.body as { comments?: Array<{ line: number; body: string }> } | undefined;
+    expect(posted?.comments).toEqual([
+      expect.objectContaining({ line: 41, body: "Off-by-one in the new loop bound" }),
+      expect.objectContaining({ line: 11, body: "Unchecked null in the new branch" }),
+    ]);
+    // The re-reported finding keeps its thread, so nothing resolves it.
+    const mutations = requests.filter(
+      (request) =>
+        request.url.endsWith("/graphql") &&
+        String((request.body as { query: string }).query)
+          .trimStart()
+          .startsWith("mutation"),
+    );
+    expect(mutations).toEqual([]);
+    // A re-reported finding on a resolved thread stays visible in the summary.
+    expect(patchedBody(requests.find((request) => request.method === "PATCH"))).toContain(
+      "**Earlier findings still present (thread resolved)**\n\n- `src/a.ts:12`: Still unchecked",
+    );
   });
 
   it("pages back through comments to find the sticky summary", async () => {

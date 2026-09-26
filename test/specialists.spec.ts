@@ -73,7 +73,7 @@ describe("Bonk specialists", () => {
       selectSpecialists(defs, manifest(files), { request });
 
     // Trivial: the main run reviews alone.
-    expect(select([file("src/a.ts", 5)])).toEqual({ tier: "trivial", selected: [] });
+    expect(select([file("src/a.ts", 5)])).toEqual({ tier: "trivial", selected: [], skipped: [] });
     // ... unless it touches sensitive paths.
     expect(names(select([file("src/auth/session.ts", 3)]).selected)).toEqual(["security"]);
 
@@ -213,6 +213,58 @@ describe("Bonk specialists", () => {
       }),
     ).toBe(
       "**Not reviewed**\n\n- performance: not reviewed (timed out after 5 min)\n- docs: not reviewed (stalled)",
+    );
+    expect(formatNotReviewed({ tests: { status: "ok", reason: "carried forward" } })).toBe(
+      "**Carried forward from the last review:** tests (no author changes in their files since then; earlier findings stand)",
+    );
+  });
+
+  it("carries forward specialists whose files the author did not touch", () => {
+    const repo = parseSpecialistFile(REPO_SPECIALIST, "jsg.md") as SpecialistDef;
+    const diff = manifest([file("src/workerd/jsg/jsg.h", 200), file("src/api/url.c++", 200)]);
+    const previous = {
+      correctness: "ok",
+      security: "ok",
+      performance: "issues",
+      "api-compat": "timed_out",
+      tests: "ok",
+      "jsg-safety": "ok",
+    };
+    const select = (
+      changedFiles: string[] | null,
+      prior: Record<string, string> | null = previous,
+    ) =>
+      selectSpecialists([...BUILTIN_SPECIALISTS, repo], diff, {
+        request: "auto",
+        changedFiles,
+        previous: prior,
+      });
+
+    const rereview = select(["src/api/url.c++"]);
+    // Correctness and security always run; api-compat failed last time; jsg-safety's files are untouched.
+    expect(names(rereview.selected)).toEqual([
+      "correctness",
+      "security",
+      "performance",
+      "api-compat",
+      "tests",
+    ]);
+    expect(rereview.skipped).toEqual([{ name: "jsg-safety", status: "ok" }]);
+
+    const nothingChanged = select([]);
+    expect(names(nothingChanged.selected)).toEqual(["correctness", "security", "api-compat"]);
+    expect(nothingChanged.skipped.map((skip) => skip.name)).toEqual([
+      "performance",
+      "tests",
+      "jsg-safety",
+    ]);
+
+    // Unknown delta or no earlier statuses: everything runs.
+    expect(select(null).skipped).toEqual([]);
+    expect(select([], null).skipped).toEqual([]);
+
+    expect(formatSpecialistFindings([], [{ name: "docs", status: "ok" }])).toContain(
+      "specialist: docs (not re-run: the author did not change its files since the last review; its earlier findings stand)",
     );
   });
 });

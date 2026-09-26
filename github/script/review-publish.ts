@@ -119,6 +119,8 @@ export interface PublishState {
   diffDir: string;
   // Repository specialist definitions from the base commit; empty if none.
   specialistsDir: string;
+  // Specialist statuses recorded with the last review.
+  previousSpecialists: Record<string, string> | null;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -198,6 +200,12 @@ export function parsePublishState(text: string | undefined): PublishState | null
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
       diffDir: typeof raw.diffDir === "string" ? raw.diffDir : "",
       specialistsDir: typeof raw.specialistsDir === "string" ? raw.specialistsDir : "",
+      previousSpecialists:
+        raw.previousSpecialists &&
+        typeof raw.previousSpecialists === "object" &&
+        !Array.isArray(raw.previousSpecialists)
+          ? raw.previousSpecialists
+          : null,
     };
   } catch {
     return null;
@@ -447,22 +455,42 @@ export function parseSpecialistStatuses(
 }
 
 const REVIEWED_STATUSES = new Set(["ok", "issues", "partial"]);
+export const CARRIED_FORWARD = "carried forward";
 
 // Specialists that did not finish are named in the summary, so a missing
-// area is visible rather than silently absent.
+// area is visible rather than silently absent; so are specialists whose
+// earlier result was reused because the author did not touch their files.
 export function formatNotReviewed(
   statuses: Record<string, { status: string; reason?: string }>,
 ): string {
-  const missing = Object.entries(statuses).filter(([, entry]) => !REVIEWED_STATUSES.has(entry.status));
-  if (missing.length === 0) return "";
-  return [
-    "**Not reviewed**",
-    "",
-    ...missing.map(([name, entry]) => `- ${name}: not reviewed (${entry.reason ?? entry.status.replace(/_/g, " ")})`),
-  ].join("\n");
+  const entries = Object.entries(statuses);
+  const carried = entries
+    .filter(([, entry]) => entry.reason === CARRIED_FORWARD)
+    .map(([name]) => name);
+  const missing = entries.filter(([, entry]) => !REVIEWED_STATUSES.has(entry.status));
+  const sections: string[] = [];
+  if (missing.length > 0) {
+    sections.push(
+      [
+        "**Not reviewed**",
+        "",
+        ...missing.map(
+          ([name, entry]) =>
+            `- ${name}: not reviewed (${entry.reason ?? entry.status.replace(/_/g, " ")})`,
+        ),
+      ].join("\n"),
+    );
+  }
+  if (carried.length > 0) {
+    sections.push(
+      `**Carried forward from the last review:** ${carried.join(", ")} (no author changes in their files since then; earlier findings stand)`,
+    );
+  }
+  return sections.join("\n\n");
 }
 
 export interface StickyBodyParts {
+  specialists?: Record<string, string>;
   summary: string;
   unanchored: string;
   head: string;
@@ -484,7 +512,7 @@ export function buildStickyBody(parts: StickyBodyParts): string {
     );
   }
   const footer = `<sub>Reviewed commit: [${parts.head.slice(0, 8)}](${parts.commitUrl}) · [github run](${parts.runUrl})</sub>`;
-  return `${sections.join("\n\n")}\n\n---\n${footer}\n\n${formatReviewStateMarker({ head: parts.head, base: parts.base })}`;
+  return `${sections.join("\n\n")}\n\n---\n${footer}\n\n${formatReviewStateMarker({ head: parts.head, base: parts.base, specialists: parts.specialists })}`;
 }
 
 async function githubRest(
@@ -935,9 +963,13 @@ export async function publishReview(): Promise<void> {
       .join("\n\n");
   }
 
-  sections.push(formatNotReviewed(parseSpecialistStatuses(process.env.SPECIALIST_STATUS)));
+  const specialistStatuses = parseSpecialistStatuses(process.env.SPECIALIST_STATUS);
+  sections.push(formatNotReviewed(specialistStatuses));
 
   const body = buildStickyBody({
+    specialists: Object.fromEntries(
+      Object.entries(specialistStatuses).map(([name, entry]) => [name, entry.status]),
+    ),
     summary,
     unanchored: sections.filter(Boolean).join("\n\n"),
     head: state.head,

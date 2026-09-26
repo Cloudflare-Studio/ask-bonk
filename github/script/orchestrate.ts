@@ -851,6 +851,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             reviewFile,
             diffDir: diff ? diffDir : "",
             specialistsDir,
+            previousSpecialists: reviewContext.previousSpecialists,
           },
         }
       : {}),

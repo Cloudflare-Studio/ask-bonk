@@ -275,6 +275,8 @@ variant: high             # optional
 What to look for, in plain language. This becomes the specialist's instructions.
 ```
 
+On re-reviews, the review-state marker records each specialist's result, and a specialist whose files the author has not changed since its last successful run is not run again: its earlier findings stand (their threads stay as they are) and the summary lists it as carried forward. Correctness and security always run, and any doubt (a first review, an unknown change set, or a specialist that did not finish last time) means the specialist runs.
+
 A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
 
 | Input                    | Default | Description                                                     |

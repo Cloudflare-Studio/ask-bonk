@@ -24,7 +24,12 @@ import {
   type DiffFile,
   type DiffManifest,
 } from "./review-diff";
-import { parsePublishState, parseReviewFile, type Finding } from "./review-publish";
+import {
+  CARRIED_FORWARD,
+  parsePublishState,
+  parseReviewFile,
+  type Finding,
+} from "./review-publish";
 
 const MINUTE = 60_000;
 const DEFAULT_BUDGET_MS = 5 * MINUTE;
@@ -252,14 +257,32 @@ export function scopedFiles(def: SpecialistDef, manifest: DiffManifest): DiffFil
   );
 }
 
+// Correctness and security can be affected by a change anywhere, so they
+// are never carried forward.
+export const NEVER_SKIP = new Set(["correctness", "security"]);
+// Statuses that mean a specialist's last review of its files is still good.
+const CARRIED_STATUSES = new Set(["ok", "issues"]);
+
+export interface SkippedSpecialist {
+  name: string;
+  // The status carried forward from the last review.
+  status: string;
+}
+
 export interface Selection {
   tier: Tier;
   selected: SpecialistDef[];
+  skipped: SkippedSpecialist[];
 }
 
 export interface SelectionOptions {
   // "auto", "off", or a comma-separated list of specialist names.
   request: string;
+  // Files the author changed since the last review; null when unknown or
+  // this is a first review.
+  changedFiles?: string[] | null;
+  // Specialist statuses recorded with the last review.
+  previous?: Record<string, string> | null;
 }
 
 export function selectSpecialists(
@@ -269,7 +292,7 @@ export function selectSpecialists(
 ): Selection {
   const tier = sizeTier(manifest);
   const request = options.request.trim().toLowerCase() || "auto";
-  const empty = { tier, selected: [] };
+  const empty = { tier, selected: [], skipped: [] };
   if (request === "off") return empty;
 
   const byName = new Map(defs.map((def) => [def.name, def]));
@@ -302,7 +325,23 @@ export function selectSpecialists(
       .map((name) => byName.get(name))
       .filter((def): def is SpecialistDef => Boolean(def));
   }
-  return { tier, selected: wanted.filter(inScope) };
+  // Re-review: a specialist whose files the author has not touched since its
+  // last successful run keeps that result. Any doubt means it runs.
+  const selected: SpecialistDef[] = [];
+  const skipped: SkippedSpecialist[] = [];
+  for (const def of wanted.filter(inScope)) {
+    const previous = options.previous?.[def.name];
+    const changed = options.changedFiles;
+    const untouched =
+      Array.isArray(changed) &&
+      !scopedFiles(def, manifest).some((file) => changed.includes(file.path));
+    if (!NEVER_SKIP.has(def.name) && previous && CARRIED_STATUSES.has(previous) && untouched) {
+      skipped.push({ name: def.name, status: previous });
+    } else {
+      selected.push(def);
+    }
+  }
+  return { tier, selected, skipped };
 }
 
 // OpenCode config for one specialist: the consumer's config (providers and
@@ -487,7 +526,10 @@ export function notReviewed(result: SpecialistResult): boolean {
 
 // The block the judge (the main run) receives. Findings are model output and
 // escaped like any other untrusted text.
-export function formatSpecialistFindings(results: SpecialistResult[]): string {
+export function formatSpecialistFindings(
+  results: SpecialistResult[],
+  skipped: SkippedSpecialist[] = [],
+): string {
   const lines = [
     "<bonk_specialist_findings>",
     "Specialist reviewers looked at parts of this pull request. Their findings are unverified claims.",
@@ -510,6 +552,11 @@ export function formatSpecialistFindings(results: SpecialistResult[]): string {
         `- [${finding.severity}] ${escapePromptValue(location)}: ${escapePromptValue(finding.body.trim()).replace(/\n/g, "\n    ")}${escapePromptValue(quote)}${justified}`,
       );
     }
+  }
+  for (const skip of skipped) {
+    lines.push(
+      `specialist: ${skip.name} (not re-run: the author did not change its files since the last review; its earlier findings stand)`,
+    );
   }
   lines.push("</bonk_specialist_findings>");
   return lines.join("\n");
@@ -758,15 +805,20 @@ export async function runSpecialists(): Promise<void> {
 
   const selection = selectSpecialists([...defs.values()], manifest, {
     request: process.env.SPECIALISTS || "auto",
+    changedFiles: state.rereview ? state.changedFiles : null,
+    previous: state.previousSpecialists,
   });
   core.info(
-    `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}`,
+    `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}${selection.skipped.length > 0 ? `; carried forward: ${selection.skipped.map((skip) => skip.name).join(", ")}` : ""}`,
   );
-  if (selection.selected.length === 0) return;
+  if (selection.selected.length === 0 && selection.skipped.length === 0) return;
 
   const dir = join(runnerTemp, `bonk-specialists-${process.env.GITHUB_RUN_ID || "local"}`);
   mkdirSync(dir, { recursive: true });
-  const cwd = await prepareHeadWorktree(join(dir, "head"), state.head);
+  const cwd =
+    selection.selected.length > 0
+      ? await prepareHeadWorktree(join(dir, "head"), state.head)
+      : process.cwd();
   const stepTimeout = parseDuration(process.env.SPECIALIST_TIMEOUT) ?? DEFAULT_STEP_TIMEOUT_MS;
   const parallelism = Math.max(
     1,
@@ -795,13 +847,16 @@ export async function runSpecialists(): Promise<void> {
       ...(notReviewed(result) && result.reason ? { reason: result.reason } : {}),
     };
   }
+  for (const skip of selection.skipped) {
+    statuses[skip.name] = { status: skip.status, reason: CARRIED_FORWARD };
+  }
 
   const outputFile = process.env.GITHUB_OUTPUT;
   if (!outputFile) return;
   appendGitHubValue(
     outputFile,
     "prompt",
-    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results)}`,
+    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped)}`,
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
 }

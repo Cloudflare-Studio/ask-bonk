@@ -442,7 +442,15 @@ describe("Bonk review publishing", () => {
       ],
     });
 
-    await withEnv(publishEnv(reviewFile), () => publishReview());
+    await withEnv(
+      publishEnv(reviewFile, {
+        SPECIALIST_STATUS: JSON.stringify({
+          correctness: { status: "issues" },
+          docs: { status: "ok", reason: "carried forward" },
+        }),
+      }),
+      () => publishReview(),
+    );
 
     const review = requests.find((request) => request.url.endsWith("/pulls/5/reviews"));
     expect(review?.body).toEqual({
@@ -468,7 +476,12 @@ describe("Bonk review publishing", () => {
       "**Other findings**\n\n- **[SUGGESTION]** `src/a.ts:12`: Consider a clearer name",
     );
     expect(body).not.toContain("[github run](/owner/repo/actions/runs/100)\n");
-    expect(parseReviewStateMarker(body)).toEqual({ head: HEAD, base: BASE });
+    expect(parseReviewStateMarker(body)).toEqual({
+      head: HEAD,
+      base: BASE,
+      specialists: { correctness: "issues", docs: "ok" },
+    });
+    expect(body).toContain("**Carried forward from the last review:** docs");
 
     const deleted = requests.find((request) => request.method === "DELETE");
     expect(deleted?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");

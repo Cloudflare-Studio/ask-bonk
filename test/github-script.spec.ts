@@ -323,6 +323,22 @@ describe("GitHub Action re-review context", () => {
     expect(parseReviewStateMarker(`LGTM!\n\n${marker}`)).toEqual({ head: OLD_HEAD, base: BASE });
     expect(parseReviewStateMarker('<!-- bonk-review-state:{"head":"HEAD"} -->')).toBeNull();
     expect(parseReviewStateMarker("<!-- bonk-review-state:{not json} -->")).toBeNull();
+    // Specialist statuses ride along for re-review skips; junk entries are dropped.
+    const withSpecialists = formatReviewStateMarker({
+      head: OLD_HEAD,
+      base: BASE,
+      specialists: { correctness: "ok", docs: "timed_out" },
+    });
+    expect(parseReviewStateMarker(withSpecialists)).toEqual({
+      head: OLD_HEAD,
+      base: BASE,
+      specialists: { correctness: "ok", docs: "timed_out" },
+    });
+    expect(
+      parseReviewStateMarker(
+        `<!-- bonk-review-state:{"head":"${OLD_HEAD}","base":"${BASE}","specialists":{"a":1}} -->`,
+      ),
+    ).toEqual({ head: OLD_HEAD, base: BASE });
   });
 
   it("trusts review state only from Bonk and keeps thread state", () => {
@@ -564,6 +580,7 @@ describe("GitHub Action re-review context", () => {
       reviewFile,
       diffDir: "/tmp/bonk-runner/bonk-diff-77",
       specialistsDir: "/tmp/bonk-runner/bonk-diff-77/specialists",
+      previousSpecialists: null,
     });
     expect(result.value).toContain(`review_output_file: ${reviewFile}`);
     expect(result.value).toContain(`head_sha: ${NEW_HEAD}`);

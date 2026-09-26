@@ -32,6 +32,9 @@ const MAX_LISTED_FILES = 100;
 export interface ReviewState {
   head: string;
   base: string;
+  // Each specialist's status in that review, used to skip specialists whose
+  // files the author has not touched since.
+  specialists?: Record<string, string>;
 }
 
 export interface GraphQLAuthor {
@@ -78,6 +81,7 @@ export interface PullRequestHistory {
 export interface PreviousReview {
   head: string;
   base: string;
+  specialists?: Record<string, string>;
   source: "state_marker" | "inline_review";
   summary?: string;
   summaryUrl?: string;
@@ -139,11 +143,25 @@ export interface ReviewContext {
   changedFiles: string[] | null;
   // Bonk reviewed this pull request before.
   rereview: boolean;
+  // Specialist statuses from the last review's marker.
+  previousSpecialists: Record<string, string> | null;
   block: string | null;
 }
 
 export function formatReviewStateMarker(state: ReviewState): string {
-  return `<!-- bonk-review-state:${JSON.stringify({ head: state.head, base: state.base })} -->`;
+  const specialists =
+    state.specialists && Object.keys(state.specialists).length > 0
+      ? { specialists: state.specialists }
+      : {};
+  return `<!-- bonk-review-state:${JSON.stringify({ head: state.head, base: state.base, ...specialists })} -->`;
+}
+
+function parseSpecialistMap(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 // Returns the last well-formed marker in the body. Callers must only pass
@@ -154,9 +172,11 @@ export function parseReviewStateMarker(body: string): ReviewState | null {
     try {
       const parsed = JSON.parse(match[1]) as Partial<ReviewState>;
       if (typeof parsed.head === "string" && SHA_PATTERN.test(parsed.head)) {
+        const specialists = parseSpecialistMap(parsed.specialists);
         state = {
           head: parsed.head,
           base: typeof parsed.base === "string" && SHA_PATTERN.test(parsed.base) ? parsed.base : "",
+          ...(specialists ? { specialists } : {}),
         };
       }
     } catch {
@@ -754,6 +774,7 @@ export async function loadReviewContext(
     lastReviewId: history.lastReviewId,
     changedFiles: reviewScope(delta),
     rereview: history.previous !== null,
+    previousSpecialists: history.previous?.specialists ?? null,
     block: formatPreviousReviewBlock(history, delta, deltaPaths),
   };
 }

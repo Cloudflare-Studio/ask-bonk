@@ -23,9 +23,7 @@ import {
   computeReviewDelta,
   formatPreviousReviewBlock,
   formatReviewStateMarker,
-  isReviewRun,
   parseReviewStateMarker,
-  recordReviewState,
   summarizeReviewHistory,
 } from "../github/script/review-state";
 import { resolvePermissions } from "../src/oidc";
@@ -521,11 +519,15 @@ describe("GitHub Action re-review context", () => {
         HEAD_SHA: OLD_HEAD,
         TOKEN_PERMISSIONS: "WRITE",
         REREVIEW_CONTEXT: "true",
+        RUNNER_TEMP: "/tmp/bonk-runner",
+        GITHUB_RUN_ID: "77",
       },
       () => buildPrompt({ detection: { isFork: false }, reviewToken: "app-token" }),
     );
 
-    expect(result.reviewState).toEqual({ head: NEW_HEAD, base: BASE, lastReviewId: 0 });
+    const reviewFile = "/tmp/bonk-runner/bonk-review-77.json";
+    expect(result.reviewState).toEqual({ head: NEW_HEAD, base: BASE, lastReviewId: 0, reviewFile });
+    expect(result.value).toContain(`review_output_file: ${reviewFile}`);
     expect(result.value).toContain(`head_sha: ${NEW_HEAD}`);
     expect(result.value).toContain(`last_reviewed_head: ${OLD_HEAD}`);
     expect(result.value).toContain("changes_since_last_review: author_changes");
@@ -557,77 +559,6 @@ describe("GitHub Action re-review context", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.reviewState).toBeUndefined();
     expect(result.value).not.toContain("bonk_previous_review");
-  });
-
-  it("treats only review runs as reviews", () => {
-    expect(isReviewRun("pull_request", 5, [], "Found two issues.")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5, 6], "Posted 1 inline finding.")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5], "LGTM!")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5], "LGTM")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5], "Review: 2 findings.\n\n1. **P1:** ...")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5], "Since last review: 1 resolved, 0 still open, 0 new.")).toBe(true);
-    expect(isReviewRun("issue_comment", 5, [5], "The auth flow works like this: ...")).toBe(false);
-    expect(isReviewRun("issue_comment", 5, [5], "LGTMs are cheap; here is how retries work.")).toBe(false);
-    expect(isReviewRun("issue_comment", 5, [5], "I'm Bonk. Review: 2 findings.")).toBe(false);
-  });
-
-  it.each([
-    { label: "a review verdict", response: "LGTM!", patched: true },
-    { label: "a non-review answer", response: "It retries three times.", patched: false },
-  ])("stamps the response only for $label", async ({ response, patched }) => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      requests.push({ url: String(input), init });
-      if (String(input) === "https://api.github.com/graphql") {
-        return jsonResponse({
-          data: {
-            viewer: { login: "ask-bonk[bot]" },
-            repository: {
-              pullRequest: {
-                headRefOid: NEW_HEAD,
-                comments: {
-                  nodes: [
-                    { databaseId: 10, author: bonk, body: "LGTM!\n\n[github run](/owner/repo/actions/runs/99)" },
-                    {
-                      databaseId: 11,
-                      author: bonk,
-                      body: `${response}\n\n[github run](/owner/repo/actions/runs/100)`,
-                    },
-                  ],
-                },
-                reviews: { nodes: [{ databaseId: 3, author: bonk }] },
-              },
-            },
-          },
-        });
-      }
-      return jsonResponse({});
-    });
-
-    await withEnv(
-      {
-        GH_TOKEN: "token",
-        GITHUB_REPOSITORY: "owner/repo",
-        PR_NUMBER: "5",
-        GITHUB_RUN_ID: "100",
-        EVENT_NAME: "issue_comment",
-        LAST_REVIEW_ID: "3",
-        REVIEWED_HEAD_SHA: OLD_HEAD,
-        REVIEWED_BASE_SHA: BASE,
-        WORKSPACE_HEAD_SHA: OLD_HEAD,
-      },
-      () => recordReviewState(),
-    );
-
-    const patch = requests.find((request) => request.init?.method === "PATCH");
-    if (!patched) {
-      expect(patch).toBeUndefined();
-      return;
-    }
-    expect(patch?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");
-    const body = (JSON.parse(String(patch?.init?.body)) as { body: string }).body;
-    expect(body).toContain("the pull request head has since moved to bbbbbbbbbbbb");
-    expect(parseReviewStateMarker(body)).toEqual({ head: OLD_HEAD, base: BASE });
   });
 });
 

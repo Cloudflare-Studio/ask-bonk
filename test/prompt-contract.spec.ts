@@ -26,6 +26,14 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("A first review with findings starts with `Review: <count> findings.`");
   });
 
+  it("routes review output through Bonk instead of direct GitHub writes", () => {
+    expect(guidance).toContain("When `review_output_file` is present, make no GitHub writes for a review");
+    expect(guidance).toContain(
+      "Do not post reviews, review comments, or issue or pull request comments yourself",
+    );
+    expect(guidance).toContain('{"findings": [{"path": "src/file.ts", "line": 42');
+  });
+
   it("gives explicit change requests precedence in mixed review-and-fix tasks", () => {
     expect(guidance).toContain("Determine authorization from the entire request.");
     expect(guidance).toContain(

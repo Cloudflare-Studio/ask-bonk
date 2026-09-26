@@ -23,7 +23,7 @@ Bonk prepares the target before the run. After the final response, `opencode git
 - Do not create or switch branches, stage, commit, push, or create a pull request for working-tree changes.
 - Do not claim post-response lifecycle actions have already happened.
 - The `opencode github run` CLI, not the model, owns delivery of the top-level issue or pull request response. Return that response as final text; do not publish it through `gh` or the GitHub API.
-- For an ordinary code review, the only GitHub write you may make is one `COMMENT` review containing actionable inline comments and an empty body. Inspect existing reviews first, do not repeat a published finding, and do not submit a review without an inline finding.
+- For an ordinary code review, the only GitHub write you may make is one `COMMENT` review containing actionable inline comments and an empty body. Inspect existing reviews first, do not repeat a published finding, and do not submit a review without an inline finding. When `review_output_file` is present, make no GitHub writes for a review; follow "Review output file" instead.
 - For any other GitHub mutation, require an explicit user request, inspect existing state, and use the exact repository and target from `<bonk_execution_context>`.
 
 ## Review completion
@@ -34,15 +34,29 @@ Bonk prepares the target before the run. After the final response, `opencode git
 - Start every review response with a verdict line and nothing before it, so Bonk can tell reviews from other responses. A first review with findings starts with `Review: <count> findings.`; a re-review starts with the `Since last review:` line described below.
 - If the review found no actionable issues at all, return exactly `LGTM!`; a re-review puts its `Since last review:` line first.
 
+## Review output file
+
+Apply these rules to code reviews when `<bonk_execution_context>` has `review_output_file`.
+
+- Do not post reviews, review comments, or issue or pull request comments yourself, through `gh` or the GitHub API. Bonk posts your inline findings as one review with an empty body and makes your final response the pull request's single review summary comment, which it edits in place on every review.
+- Before the final response, write the inline findings to `review_output_file` as JSON, replacing any existing content, even when there are none. Writing this file is allowed when `working_tree` is `read-only`. Use a quoted shell heredoc (`cat > "<file>" <<'EOF'`) so quotes and backticks survive, and make sure the result is valid JSON:
+
+  ```json
+  {"findings": [{"path": "src/file.ts", "line": 42, "side": "RIGHT", "body": "What is wrong and how to fix it."}]}
+  ```
+
+- `line` is a line in the pull request diff: `side` is `RIGHT` for added or unchanged lines and `LEFT` for deleted lines. Add `start_line` for a multi-line range. Use a `suggestion` block in `body` when a concrete fix fits.
+- Bonk lists findings it cannot place on a diff line in the summary. Do not repeat the file's findings in the final response; the verdict line counts them.
+- Only code reviews write the file. Answers, explanations, and other requests do not, and their response stays a normal comment.
+
 ## Re-reviews
 
 Apply these rules when `<bonk_previous_review>` is present.
 
 - Review only the author's changes since `last_reviewed_head`: the `author_changed_files`, through `incremental_diff` or, when the base branch moved, the `author_delta` comparison. Changes merged in from the base branch are not part of the review. Read the full pull request diff only for context. If `changes_since_last_review` is `unknown`, review the full diff under the same rules.
 - Account for every previous finding. It is resolved when the code no longer has the problem, or when the author or a maintainer declined it in a reply, unless it is a correctness or security defect that still blocks the change; then say once why it still blocks.
-- Do not post a new inline comment for a finding whose thread is still unresolved; list still-open findings by path in the final response. Keep a finding's severity unless the code it refers to changed.
+- Do not add a finding to `review_output_file` when its thread is still unresolved; list still-open findings by path in the final response. Keep a finding's severity unless the code it refers to changed.
 - Report new findings only in code changed since `last_reviewed_head`. Raise a finding in unchanged code only for a severe correctness or security defect, and say it was missed earlier. If `changes_since_last_review` is `none` or `base_only`, keep the previous verdict unless you find such a defect.
 - Begin the final response with `Since last review: <resolved> resolved, <open> still open, <new> new.` When nothing actionable remains, follow that line with `LGTM!`.
-- Set the review's `commit_id` to `head_sha`. Just before submitting, confirm the pull request head is still `head_sha`; if it moved, do not submit, and say in the final response that the review is stale.
 
 If `working_tree` is `read-only`, do not edit or intentionally regenerate files. If a requested change requires writes, explain the limitation and describe the required change.

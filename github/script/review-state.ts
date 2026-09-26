@@ -2,16 +2,14 @@
 //
 // Preflight loads what Bonk said about the pull request before: the head it
 // last reviewed, its previous summary, and its inline threads with GitHub's
-// resolved/outdated state. After OpenCode posts its response, this script runs
-// again as its own step and stamps that response with a hidden state marker so
-// the next run knows which head was reviewed.
+// resolved/outdated state. review-publish.ts writes the state marker this
+// reads back.
 
-import { pathToFileURL } from "url";
-import { core, escapePromptValue } from "./context";
+import { escapePromptValue } from "./context";
 import { fetchWithRetry } from "./http";
 
 const MARKER_PATTERN = /<!-- bonk-review-state:(\{[^\n]*?\}) -->/g;
-const SHA_PATTERN = /^[0-9a-f]{40}$/;
+export const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const STALE_NOTE_PATTERN =
   /\n*> \[!NOTE\]\n> This response reflects [0-9a-f]+; the pull request head has since moved to [0-9a-f]+\./g;
 // opencode appends `[github run](/owner/repo/actions/runs/<id>)`, optionally
@@ -23,11 +21,6 @@ const DEFAULT_BOT_LOGIN = "ask-bonk";
 // Compare API responses list at most this many files; a diff at the cap may be
 // incomplete, so its delta cannot be trusted.
 const COMPARE_FILE_LIMIT = 300;
-// The harness guidance makes every review response start with one of these
-// verdict lines. `LGTM` without the bang is accepted because repository prompts
-// sometimes ask for it.
-const REVIEW_VERDICT_PATTERN =
-  /^\s*(?:LGTM!?(?=\s|$)|Review: \d+ findings?\.|Since last review: \d+ resolved, \d+ still open, \d+ new\.)/;
 const MAX_SUMMARY_CHARS = 6000;
 const MAX_COMMENT_CHARS = 1500;
 const MAX_THREADS = 50;
@@ -38,12 +31,12 @@ export interface ReviewState {
   base: string;
 }
 
-interface GraphQLAuthor {
+export interface GraphQLAuthor {
   __typename?: string;
   login?: string;
 }
 
-interface GraphQLComment {
+export interface GraphQLComment {
   databaseId?: number;
   author?: GraphQLAuthor | null;
   body?: string;
@@ -51,7 +44,7 @@ interface GraphQLComment {
   originalCommit?: { oid?: string } | null;
 }
 
-interface GraphQLReview {
+export interface GraphQLReview {
   databaseId?: number;
   author?: GraphQLAuthor | null;
   commit?: { oid?: string } | null;
@@ -155,8 +148,12 @@ export function parseReviewStateMarker(body: string): ReviewState | null {
   return state;
 }
 
-function stripReviewState(body: string): string {
+export function stripReviewState(body: string): string {
   return body.replace(MARKER_PATTERN, "").replace(STALE_NOTE_PATTERN, "").trimEnd();
+}
+
+export function stripOpencodeFooter(body: string): string {
+  return body.replace(OPENCODE_FOOTER_PATTERN, "");
 }
 
 function normalizeLogin(login: string): string {
@@ -169,11 +166,11 @@ function normalizeLogin(login: string): string {
 // Bonk's own comments are recognized by GitHub App identity: `viewer` on an
 // installation token is the App's bot account, so self-hosted Apps need no
 // configuration.
-function botLogin(viewer: GraphQLAuthor | null | undefined): string {
+export function botLogin(viewer: GraphQLAuthor | null | undefined): string {
   return normalizeLogin(viewer?.login || DEFAULT_BOT_LOGIN);
 }
 
-function isBonk(author: GraphQLAuthor | null | undefined, login: string): boolean {
+export function isBonk(author: GraphQLAuthor | null | undefined, login: string): boolean {
   return author?.__typename === "Bot" && normalizeLogin(author.login || "") === login;
 }
 
@@ -194,7 +191,7 @@ export function summarizeReviewHistory(pr: PullRequestHistory, login: string): R
     previous = {
       ...state,
       source: "state_marker",
-      summary: stripReviewState(comment.body || "").replace(OPENCODE_FOOTER_PATTERN, ""),
+      summary: stripOpencodeFooter(stripReviewState(comment.body || "")),
       summaryUrl: comment.url,
     };
   }
@@ -368,7 +365,7 @@ export function formatPreviousReviewBlock(
   return lines.join("\n");
 }
 
-async function githubGraphQL<T>(
+export async function githubGraphQL<T>(
   token: string,
   query: string,
   variables: Record<string, unknown>,
@@ -390,7 +387,7 @@ async function githubGraphQL<T>(
   return payload.data;
 }
 
-function splitRepository(repository: string): { owner: string; repo: string } {
+export function splitRepository(repository: string): { owner: string; repo: string } {
   const [owner = "", repo = ""] = repository.split("/");
   if (!owner || !repo) throw new Error(`Invalid repository: ${repository}`);
   return { owner, repo };
@@ -490,116 +487,4 @@ export async function loadReviewContext(
     lastReviewId: history.lastReviewId,
     block: formatPreviousReviewBlock(history, delta),
   };
-}
-
-const RESPONSE_QUERY = `
-query($owner: String!, $repo: String!, $number: Int!) {
-  viewer { login }
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) {
-      headRefOid
-      comments(last: 30) { nodes { databaseId author { __typename login } body } }
-      reviews(last: 20) { nodes { databaseId author { __typename login } } }
-    }
-  }
-}`;
-
-// Only review runs move the last reviewed head; a `/bonk explain` answer must
-// not hide unreviewed commits from the next review. Signals, most
-// deterministic first: the run was triggered by a pull_request event (which
-// always asks for a review), Bonk submitted a review during the run, or the
-// response starts with a verdict line.
-export function isReviewRun(
-  eventName: string,
-  lastReviewId: number,
-  reviewIds: number[],
-  responseBody: string,
-): boolean {
-  return (
-    eventName === "pull_request" ||
-    reviewIds.some((id) => id > lastReviewId) ||
-    REVIEW_VERDICT_PATTERN.test(responseBody)
-  );
-}
-
-// Stamps this run's OpenCode response with the head it reviewed. Runs after
-// OpenCode, so it is best-effort and never fails the job.
-export async function recordReviewState(): Promise<void> {
-  const token = process.env.GH_TOKEN;
-  const repository = process.env.GITHUB_REPOSITORY || "";
-  const prNumber = process.env.PR_NUMBER || "";
-  const runId = process.env.GITHUB_RUN_ID || "";
-  const head = process.env.REVIEWED_HEAD_SHA || "";
-  const base = process.env.REVIEWED_BASE_SHA || "";
-  if (!token || !repository || !prNumber || !runId || !SHA_PATTERN.test(head)) {
-    core.info("Review state context incomplete; skipping.");
-    return;
-  }
-
-  const { owner, repo } = splitRepository(repository);
-  const data = await githubGraphQL<{
-    viewer?: GraphQLAuthor | null;
-    repository?: {
-      pullRequest?: {
-        headRefOid?: string;
-        comments?: { nodes?: GraphQLComment[] };
-        reviews?: { nodes?: GraphQLReview[] };
-      } | null;
-    };
-  }>(token, RESPONSE_QUERY, { owner, repo, number: Number.parseInt(prNumber, 10) });
-  const pr = data.repository?.pullRequest;
-  const login = botLogin(data.viewer);
-
-  // opencode links every response it posts to the run that produced it, so
-  // the run URL identifies this run's comment among Bonk's comments.
-  const runLink = `/${repository}/actions/runs/${runId})`;
-  const response = (pr?.comments?.nodes ?? [])
-    .toReversed()
-    .find((comment) => isBonk(comment.author, login) && comment.body?.includes(runLink));
-  if (!response?.databaseId || !response.body) {
-    core.info("No Bonk response for this run found; skipping review state.");
-    return;
-  }
-
-  const reviewIds = (pr?.reviews?.nodes ?? [])
-    .filter((review) => isBonk(review.author, login))
-    .map((review) => review.databaseId ?? 0);
-  const lastReviewId = Number.parseInt(process.env.LAST_REVIEW_ID || "0", 10) || 0;
-  if (!isReviewRun(process.env.EVENT_NAME || "", lastReviewId, reviewIds, response.body)) {
-    core.info(
-      "This run did not review the pull request; leaving the last reviewed head unchanged.",
-    );
-    return;
-  }
-
-  let body = stripReviewState(response.body);
-  const liveHead = pr?.headRefOid || "";
-  if (liveHead && liveHead !== head && liveHead !== process.env.WORKSPACE_HEAD_SHA) {
-    body += `\n\n> [!NOTE]\n> This response reflects ${head.slice(0, 12)}; the pull request head has since moved to ${liveHead.slice(0, 12)}.`;
-  }
-  body += `\n\n${formatReviewStateMarker({ head, base })}`;
-
-  const resp = await fetchWithRetry(
-    `https://api.github.com/repos/${repository}/issues/comments/${response.databaseId}`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ body }),
-    },
-  );
-  if (!resp.ok) {
-    core.warning(`Failed to record review state (${resp.status}): ${await resp.text()}`);
-    return;
-  }
-  core.info(`Recorded review state for ${head} on comment ${response.databaseId}`);
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  recordReviewState().catch((error) => {
-    core.warning(`Failed to record review state: ${error}`);
-  });
 }

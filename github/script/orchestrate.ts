@@ -8,6 +8,8 @@
 // Still executed via `bun run` — no pre-bundled dist/ needed.
 // finalize.ts remains separate because it runs with `if: always()`.
 
+import { rmSync } from "fs";
+import { join } from "path";
 import { pathToFileURL } from "url";
 import {
   getContext,
@@ -22,6 +24,7 @@ import {
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
+import type { PublishState } from "./review-publish";
 import { loadReviewContext, type ReviewContext } from "./review-state";
 
 // ---------------------------------------------------------------------------
@@ -643,7 +646,7 @@ interface PromptResult {
   mode: "review-only" | "write-capable";
   value: string;
   detection: ForkDetectionResult;
-  reviewState?: { head: string; base: string; lastReviewId: number };
+  reviewState?: PublishState;
 }
 
 interface BuildPromptOptions {
@@ -672,6 +675,20 @@ function tokenAllowsContentWrites(requested: unknown): boolean {
   );
   if (Object.keys(permissions).length > 0 && !hasAcceptedValue) return false;
   return permissions.contents !== "read";
+}
+
+// RUNNER_TEMP is per job, so the file cannot leak between runs; it is still
+// cleared so an OpenCode retry cannot publish a previous attempt's findings.
+function reviewFilePath(): string {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) return "";
+  const path = join(runnerTemp, `bonk-review-${process.env.GITHUB_RUN_ID || "local"}.json`);
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // Nothing to clear.
+  }
+  return path;
 }
 
 function rereviewEnabled(): boolean {
@@ -765,6 +782,10 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
   if (reviewContext?.baseSha) contextLines.push(`base_sha: ${escapePromptValue(reviewContext.baseSha)}`);
+  // Review runs hand their findings to review-publish.ts through this file
+  // instead of posting to GitHub themselves.
+  const reviewFile = reviewContext ? reviewFilePath() : "";
+  if (reviewFile) contextLines.push(`review_output_file: ${escapePromptValue(reviewFile)}`);
   contextLines.push("</bonk_execution_context>");
 
   return {
@@ -783,6 +804,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             head: reviewContext.headSha,
             base: reviewContext.baseSha,
             lastReviewId: reviewContext.lastReviewId,
+            reviewFile,
           },
         }
       : {}),
@@ -1125,9 +1147,7 @@ async function main() {
   core.setOutput("value", promptResult.value);
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
   if (promptResult.reviewState) {
-    core.setOutput("reviewed_head_sha", promptResult.reviewState.head);
-    core.setOutput("reviewed_base_sha", promptResult.reviewState.base);
-    core.setOutput("last_review_id", String(promptResult.reviewState.lastReviewId));
+    core.setOutput("review_state", JSON.stringify(promptResult.reviewState));
   }
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);

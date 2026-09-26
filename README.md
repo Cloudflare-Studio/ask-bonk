@@ -234,11 +234,17 @@ On pull request runs, Bonk then adds a `<bonk_previous_review>` block to the pro
 
 The harness guidance tells OpenCode to review only the author's delta, account for every previous finding, treat declined findings as resolved unless they block correctness or security, avoid new non-blocking findings on unchanged code, keep its verdict when only the base branch moved, and start its response with `Since last review: N resolved, M still open, K new.` Every review response, first or repeat, starts with a fixed verdict line: `LGTM!`, `Review: N findings.`, or `Since last review: …`.
 
-After a review run, Bonk appends a hidden `<!-- bonk-review-state:{...} -->` marker with the reviewed head and base to OpenCode's response. A run counts as a review when it was triggered by a `pull_request` event, when Bonk submitted a pull request review during the run, or when the response starts with one of those verdict lines (`LGTM` without the bang is also accepted). Other responses, such as `/bonk explain ...`, leave the last reviewed head unchanged. If the pull request head moved while the run was in progress, Bonk also adds a note saying which commit the response covers. Before the first marker exists, Bonk uses the commit of its latest inline review.
+Review runs also publish differently. Instead of calling the GitHub API, OpenCode writes its inline findings to a JSON file whose path Bonk puts in the prompt (`review_output_file`). After OpenCode finishes, Bonk:
 
-Bonk recognizes its own comments, reviews, and markers by the GitHub App behind its installation token (GraphQL `viewer`), so self-hosted Apps need no extra configuration.
+- posts the findings as one review with an empty body, pinned to the reviewed commit. A finding whose line is not in the diff moves to the nearest commentable line within five lines; suggestions never move. Findings that still cannot be placed are listed in the summary under "Findings outside the diff";
+- keeps one review summary comment per pull request. The first review's response becomes that comment. Later reviews rewrite it in place and delete their own new response comment, so the pull request never collects a stack of summaries. (`opencode github run` always posts the response first, so watchers may still get a notification for the comment that is then removed.) The comment ends with `Reviewed commit: <sha>` and a hidden `<!-- bonk-review-state:{...} -->` marker recording the reviewed head and base;
+- checks the pull request head first. If it moved during the run, no inline review is posted: the findings go into the summary, with a note naming the commit the review covers.
 
-With `rereview_context` enabled, the prompt always carries the pull request's current head as `head_sha`, and OpenCode is told to pin its inline review to that commit and to skip submitting it if the head moves first. To review on every push, add `synchronize` to the `pull_request` trigger types and serialize runs per pull request:
+A run counts as a review when OpenCode wrote the findings file, when it was triggered by a `pull_request` event, when Bonk submitted a pull request review during the run, or when the response starts with one of those verdict lines (`LGTM` without the bang is also accepted). Other responses, such as `/bonk explain ...`, stay normal comments and leave the last reviewed head unchanged. Before the first marker exists, Bonk uses the commit of its latest inline review.
+
+Bonk recognizes its own comments, reviews, and markers by the GitHub App behind its installation token (GraphQL `viewer`), so self-hosted Apps need no extra configuration. `NO_PUSH` tokens have everything publishing needs (`issues: write` and `pull_requests: write`).
+
+With `rereview_context` enabled, the prompt always carries the pull request's current head as `head_sha`. To review on every push, add `synchronize` to the `pull_request` trigger types and serialize runs per pull request:
 
 ```yaml
 on:
@@ -364,7 +370,7 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
 | `timeout`            | Total OpenCode time budget including retries (e.g., `"30m"`). Defaults to `45m`. | No       |
 | `retries`            | Retries after transient provider/network failures. Defaults to `2`.              | No       |
-| `rereview_context`   | Give pull request re-reviews Bonk's previous review (`"true"` / `"false"`)       | No       |
+| `rereview_context`   | Context-aware re-reviews and one sticky review comment per PR (`"true"` / `"false"`) | No       |
 | `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
 | `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
 | `variant`            | Model variant for provider-specific reasoning effort (e.g., `high`, `max`)       | No       |

@@ -16,10 +16,12 @@ import { existsSync, readFileSync } from "fs";
 import { relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { core } from "./context";
+import { fetchPullRequestFiles, isTestPath, readManifest, readPatch } from "./review-diff";
 import { fetchWithRetry } from "./http";
 import {
   SHA_PATTERN,
   botLogin,
+  fetchBonkReviews,
   fetchReviewThreads,
   findStickyComment,
   formatReviewStateMarker,
@@ -30,7 +32,6 @@ import {
   stripReviewState,
   type GraphQLAuthor,
   type GraphQLComment,
-  type GraphQLReview,
   type ReviewThreadNode,
 } from "./review-state";
 
@@ -114,6 +115,8 @@ export interface PublishState {
   // one), so a run that ends without one has failed.
   expectReview: boolean;
   reviewFile: string;
+  // Where preflight wrote the pull request diff; empty when it did not.
+  diffDir: string;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -191,6 +194,7 @@ export function parsePublishState(text: string | undefined): PublishState | null
       rereview: raw.rereview === true,
       expectReview: raw.expectReview === true,
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
+      diffDir: typeof raw.diffDir === "string" ? raw.diffDir : "",
     };
   } catch {
     return null;
@@ -332,13 +336,6 @@ const DEMOTION: Record<Severity, Severity> = {
   question: "question",
 };
 
-const TEST_PATH_PATTERN =
-  /(?:^|\/)(?:tests?|__tests__|spec|testdata|fixtures?)\/|[._-](?:test|spec)s?\.[^/]+$|\.wd-test$/i;
-
-export function isTestPath(path: string): boolean {
-  return TEST_PATH_PATTERN.test(path);
-}
-
 // Checks that a quoted rule appears verbatim in the repository file it names.
 export function verifyQuote(quote: RuleQuote, workspace: string): boolean {
   const file = resolve(workspace, quote.path);
@@ -466,23 +463,23 @@ async function githubRest(
   });
 }
 
-async function fetchCommentableLines(
+// Places comments on the hunks preflight wrote for the prompt, so the model
+// and the publisher agree on the diff. Without a manifest (no RUNNER_TEMP) it
+// lists the files from GitHub. Filtered files have no patch and so no
+// commentable lines; their findings go to the summary.
+async function loadCommentableLines(
   token: string,
   repository: string,
   prNumber: string,
+  diffDir: string,
 ): Promise<CommentableLines> {
-  const files: Array<{ filename: string; patch?: string }> = [];
-  for (let page = 1; page <= 30; page += 1) {
-    const resp = await githubRest(
-      token,
-      "GET",
-      `/repos/${repository}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+  const manifest = readManifest(diffDir);
+  if (manifest) {
+    return parseCommentableLines(
+      manifest.files.map((file) => ({ filename: file.path, patch: readPatch(file) })),
     );
-    if (!resp.ok) throw new Error(`Listing pull request files returned ${resp.status}`);
-    const batch = (await resp.json()) as Array<{ filename: string; patch?: string }>;
-    files.push(...batch);
-    if (batch.length < 100) break;
   }
+  const { files } = await fetchPullRequestFiles(token, repository, prNumber);
   return parseCommentableLines(files);
 }
 
@@ -766,14 +763,12 @@ query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       headRefOid
-      reviews(last: 20) { nodes { databaseId author { __typename login } } }
     }
   }
 }`;
 
 interface PublishPullRequest {
   headRefOid?: string;
-  reviews?: { nodes?: GraphQLReview[] };
 }
 
 // Best-effort: runs after OpenCode and never fails the job.
@@ -802,9 +797,9 @@ export async function publishReview(): Promise<void> {
   }
 
   const reviewFile = readReviewFile(state.reviewFile);
-  const reviewIds = (pr?.reviews?.nodes ?? [])
-    .filter((review) => isBonk(review.author, login))
-    .map((review) => review.databaseId ?? 0);
+  const reviewIds = (
+    await fetchBonkReviews(token, repository, prNumber, login, state.lastReviewId)
+  ).map((review) => review.databaseId ?? 0);
   if (
     !isReviewRun(
       process.env.EVENT_NAME || "",
@@ -862,7 +857,9 @@ export async function publishReview(): Promise<void> {
 
     const inline = partition.toPost.filter(isInline);
     const commentable =
-      inline.length > 0 ? await fetchCommentableLines(token, repository, prNumber) : new Map();
+      inline.length > 0
+        ? await loadCommentableLines(token, repository, prNumber, state.diffDir)
+        : new Map();
     const anchored: Finding[] = [];
     const unanchored: Finding[] = [];
     for (const finding of inline) {

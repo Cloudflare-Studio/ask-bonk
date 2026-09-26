@@ -5,7 +5,6 @@ import {
   applySeverityRules,
   buildStickyBody,
   computeVerdict,
-  isTestPath,
   stripVerdict,
   isReviewRun,
   parseCommentableLines,
@@ -15,6 +14,7 @@ import {
   type BonkThread,
   type Finding,
 } from "../github/script/review-publish";
+import { isTestPath, writeDiff } from "../github/script/review-diff";
 import { checkReviewCompletion } from "../github/script/run-opencode";
 import {
   findStickyComment,
@@ -474,6 +474,41 @@ describe("Bonk review publishing", () => {
     expect(deleted?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");
   });
 
+  it("places comments on the same hunks the prompt showed", async () => {
+    const diffDir = `/tmp/bonk-test/diff-${crypto.randomUUID()}`;
+    writeDiff(
+      diffDir,
+      [
+        {
+          filename: "src/a.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -70 +70,2 @@\n x\n+y",
+        },
+      ],
+      [],
+      false,
+    );
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: { nodes: [response("Review: 1 findings.")] },
+    });
+    const reviewFile = writeReviewFile("manifest", {
+      findings: [{ path: "src/a.ts", line: 71, body: "Bug", severity: "warning" }],
+    });
+    const env = publishEnv(reviewFile);
+    const state = { ...JSON.parse(env.REVIEW_STATE), diffDir };
+
+    await withEnv({ ...env, REVIEW_STATE: JSON.stringify(state) }, () => publishReview());
+
+    expect(requests.some((request) => request.url.includes("/pulls/5/files"))).toBe(false);
+    const review = requests.find((request) => request.url.endsWith("/pulls/5/reviews"));
+    expect((review?.body as { comments?: unknown[] } | undefined)?.comments).toEqual([
+      { path: "src/a.ts", line: 71, side: "RIGHT", body: "**[WARNING]** Bug" },
+    ]);
+  });
+
   it("keeps findings visible when the pull request moved or GitHub rejects the review", async () => {
     const findings = { findings: [{ path: "src/a.ts", line: 11, body: "Null deref" }] };
 
@@ -633,7 +668,11 @@ describe("Bonk review publishing", () => {
     { label: "neither", file: false, text: "I looked at the diff and", complete: false },
   ])("treats a review run with $label as complete: $complete", async ({ file, text, complete }) => {
     const path = "/tmp/bonk-test/completion.json";
-    rmSync(path, { force: true });
+    try {
+      rmSync(path);
+    } catch {
+      // Not there yet.
+    }
     if (file) writeReviewFile("completion", { findings: [] });
     const requests = mockGitHub({ comments: { nodes: [response(text)] } });
     const env = publishEnv(path);

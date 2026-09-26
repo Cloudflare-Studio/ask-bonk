@@ -428,10 +428,15 @@ describe("GitHub Action re-review context", () => {
       lastMergeBase: OLD_MERGE_BASE,
       currentMergeBase: NEW_MERGE_BASE,
       files: [
-        { filename: "big.json", status: "modified" },
+        { filename: "big.json", status: "modified", before: "@@ -1 +1 @@\n-a\n+b" },
         { filename: "huge.bin", status: "modified" },
-        { filename: "src/fixed.ts", status: "modified" },
-        { filename: "src/new.ts", status: "added to pull request" },
+        {
+          filename: "src/fixed.ts",
+          status: "modified",
+          before: "@@ -4 +4 @@\n-x\n+y",
+          after: "@@ -4 +4 @@\n-x\n+z",
+        },
+        { filename: "src/new.ts", status: "added to pull request", after: "@@ -0,0 +1 @@\n+n" },
       ],
     });
 
@@ -447,10 +452,11 @@ describe("GitHub Action re-review context", () => {
     );
     expect(block).toContain("changes_since_last_review: author_changes");
     expect(block).not.toContain("src/author.ts");
-    expect(block).not.toContain("incremental_diff");
-    expect(block).toContain(
-      `compare \`git diff ${OLD_MERGE_BASE} ${OLD_HEAD} -- <file>\` with \`git diff ${NEW_MERGE_BASE} ${NEW_HEAD} -- <file>\``,
-    );
+    // The author delta is given as before/after patches, never as git commands.
+    expect(block).not.toContain("git diff");
+    expect(block).toContain("=== src/fixed.ts (before) ===\n@@ -4 +4 @@\n-x\n+y");
+    expect(block).toContain("=== src/fixed.ts (after) ===\n@@ -4 +4 @@\n-x\n+z");
+    expect(block).toContain("=== src/new.ts (before) ===\n(not in the pull request)");
 
     const mergeOnly = computeReviewDelta(
       { mergeBase: OLD_MERGE_BASE, files: [{ filename: "src/author.ts", status: "modified", patch: authorPatch }] },
@@ -512,6 +518,12 @@ describe("GitHub Action re-review context", () => {
           files: [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+c" }],
         });
       }
+      if (url.includes("/pulls/5/files")) {
+        return jsonResponse([
+          { filename: "src/a.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b" },
+          { filename: "package-lock.json", status: "modified", additions: 9, deletions: 9, patch: "@@ -1 +1 @@\n-x\n+y" },
+        ]);
+      }
       if (url.endsWith(`/compare/${BASE}...${NEW_HEAD}`)) {
         return jsonResponse({
           merge_base_commit: { sha: OLD_MERGE_BASE },
@@ -549,12 +561,18 @@ describe("GitHub Action re-review context", () => {
       rereview: true,
       expectReview: true,
       reviewFile,
+      diffDir: "/tmp/bonk-runner/bonk-diff-77",
     });
     expect(result.value).toContain(`review_output_file: ${reviewFile}`);
     expect(result.value).toContain(`head_sha: ${NEW_HEAD}`);
     expect(result.value).toContain(`last_reviewed_head: ${OLD_HEAD}`);
     expect(result.value).toContain("changes_since_last_review: author_changes");
-    expect(result.value).toContain(`incremental_diff: git diff ${OLD_HEAD} ${NEW_HEAD}`);
+    expect(result.value).toContain("=== src/a.ts (after) ===\n@@ -1 +1 @@\n-a\n+b");
+    // The pull request diff is precomputed from GitHub and inlined.
+    expect(result.value).toContain("<bonk_diff>");
+    expect(result.value).toContain("- modified src/a.ts +1/-1 [code]");
+    expect(result.value).toContain("=== src/a.ts ===\n@@ -1 +1 @@\n-a\n+b");
+    expect(result.value).toContain("- package-lock.json (lockfile)");
     expect(result.value).toContain("- modified src/a.ts");
     expect(result.value).toContain("- [resolved] src/a.ts:4");
     expect(result.value).toContain("  thread: PRRT_a");

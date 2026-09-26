@@ -5,8 +5,11 @@
 // resolved/outdated state. review-publish.ts writes the state marker this
 // reads back.
 
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { escapePromptValue } from "./context";
 import { fetchWithRetry } from "./http";
+import { neutralizeTags, patchFileName } from "./review-diff";
 
 const MARKER_PATTERN = /<!-- bonk-review-state:(\{[^\n]*?\}) -->/g;
 export const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -121,8 +124,11 @@ export interface ReviewDelta {
   kind: "none" | "base_only" | "author_changes" | "unknown";
   lastMergeBase?: string;
   currentMergeBase?: string;
-  files: Array<{ filename: string; status: string }>;
+  files: Array<{ filename: string; status: string; before?: string; after?: string }>;
 }
+
+// Inline the author delta's patches below this many bytes.
+const DELTA_PROMPT_BUDGET = 50_000;
 
 export interface ReviewContext {
   headSha: string;
@@ -297,6 +303,8 @@ export function computeReviewDelta(
     files.push({
       filename,
       status: now ? (old ? now.status : "added to pull request") : "removed from pull request",
+      ...(old?.patch !== undefined ? { before: old.patch } : {}),
+      ...(now?.patch !== undefined ? { after: now.patch } : {}),
     });
   }
   const kind =
@@ -312,9 +320,35 @@ function indent(text: string, prefix: string): string {
   return escapePromptValue(text).replace(/\r?\n/g, `\n${prefix}`);
 }
 
+// Writes each author-changed file's pull request patch at the last review
+// ("before") and now ("after"). Both are against the file's merge base, so
+// changes from the base branch cancel out when they are compared.
+export function writeDeltaPatches(
+  dir: string,
+  delta: ReviewDelta,
+): Map<string, { before?: string; after?: string }> {
+  const paths = new Map<string, { before?: string; after?: string }>();
+  mkdirSync(dir, { recursive: true });
+  for (const file of delta.files) {
+    const base = join(dir, patchFileName(file.filename).replace(/\.patch$/, ""));
+    const entry: { before?: string; after?: string } = {};
+    if (file.before !== undefined) {
+      entry.before = `${base}.before.patch`;
+      writeFileSync(entry.before, file.before);
+    }
+    if (file.after !== undefined) {
+      entry.after = `${base}.after.patch`;
+      writeFileSync(entry.after, file.after);
+    }
+    paths.set(file.filename, entry);
+  }
+  return paths;
+}
+
 export function formatPreviousReviewBlock(
   history: ReviewHistory,
   delta: ReviewDelta | null,
+  deltaPaths?: Map<string, { before?: string; after?: string }>,
 ): string | null {
   const { previous, threads } = history;
   if (!previous && threads.length === 0) return null;
@@ -343,15 +377,32 @@ export function formatPreviousReviewBlock(
     if (delta.files.length > MAX_LISTED_FILES) {
       lines.push(`- … ${delta.files.length - MAX_LISTED_FILES} more`);
     }
-    // With an unchanged merge base, the tree diff between the two heads is
-    // exactly the author's change. Otherwise it would include the base
-    // branch's changes, so compare each file's pull request diff instead.
-    if (delta.lastMergeBase === delta.currentMergeBase) {
-      lines.push(`incremental_diff: git diff ${previous.head} ${history.headSha}`);
-    } else {
-      lines.push(
-        `author_delta: for each listed file, compare \`git diff ${delta.lastMergeBase} ${previous.head} -- <file>\` with \`git diff ${delta.currentMergeBase} ${history.headSha} -- <file>\``,
-      );
+    lines.push(
+      "author_delta: for each listed file, compare its pull request patch at the last review (before) with its patch now (after). Both are against the file's merge base, so base-branch changes cancel out.",
+    );
+    const bytes = delta.files.reduce(
+      (sum, file) =>
+        sum + Buffer.byteLength(file.before ?? "") + Buffer.byteLength(file.after ?? ""),
+      0,
+    );
+    if (bytes <= DELTA_PROMPT_BUDGET) {
+      for (const file of delta.files.slice(0, MAX_LISTED_FILES)) {
+        for (const side of ["before", "after"] as const) {
+          lines.push(`=== ${escapePromptValue(file.filename)} (${side}) ===`);
+          lines.push(
+            file[side] === undefined
+              ? "(not in the pull request)"
+              : neutralizeTags(file[side].trimEnd()),
+          );
+        }
+      }
+    } else if (deltaPaths) {
+      for (const file of delta.files.slice(0, MAX_LISTED_FILES)) {
+        const paths = deltaPaths.get(file.filename);
+        lines.push(
+          `- ${escapePromptValue(file.filename)}: before ${escapePromptValue(paths?.before ?? "(none)")}, after ${escapePromptValue(paths?.after ?? "(none)")}`,
+        );
+      }
     }
   }
 
@@ -423,7 +474,6 @@ query($owner: String!, $repo: String!, $number: Int!) {
     pullRequest(number: $number) {
       headRefOid
       baseRefOid
-      reviews(last: 50) { nodes { databaseId author { __typename login } commit { oid } } }
     }
   }
 }`;
@@ -490,6 +540,53 @@ export async function findStickyComment(
     before = comments.pageInfo.startCursor;
   }
   return null;
+}
+
+const REVIEWS_PAGE_QUERY = `
+query($owner: String!, $repo: String!, $number: Int!, $before: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviews(last: 100, before: $before) {
+        nodes { databaseId author { __typename login } commit { oid } }
+        pageInfo { hasPreviousPage startCursor }
+      }
+    }
+  }
+}`;
+
+// Bonk's reviews, oldest first, paging back from the newest. Without
+// `sinceId` it stops at the newest Bonk review; with it, at the first review
+// at or below that id, so every Bonk review after it is returned.
+export async function fetchBonkReviews(
+  token: string,
+  repository: string,
+  prNumber: string,
+  login: string,
+  sinceId?: number,
+): Promise<GraphQLReview[]> {
+  const { owner, repo } = splitRepository(repository);
+  const found: GraphQLReview[] = [];
+  let before: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data = await githubGraphQL<{
+      repository?: { pullRequest?: { reviews?: Page<GraphQLReview> } | null };
+    }>(token, REVIEWS_PAGE_QUERY, {
+      owner,
+      repo,
+      number: Number.parseInt(prNumber, 10),
+      before: before ?? null,
+    });
+    const reviews = data.repository?.pullRequest?.reviews;
+    for (const review of (reviews?.nodes ?? []).toReversed()) {
+      if (sinceId !== undefined && (review.databaseId ?? 0) <= sinceId) return found.toReversed();
+      if (!isBonk(review.author, login)) continue;
+      found.push(review);
+      if (sinceId === undefined) return found;
+    }
+    if (!reviews?.pageInfo?.hasPreviousPage || !reviews.pageInfo.startCursor) break;
+    before = reviews.pageInfo.startCursor;
+  }
+  return found.toReversed();
 }
 
 const THREADS_PAGE_QUERY = `
@@ -621,6 +718,7 @@ export async function loadReviewContext(
   repository: string,
   prNumber: string,
   token: string,
+  diffDir?: string,
 ): Promise<ReviewContext> {
   const { owner, repo } = splitRepository(repository);
   const data = await githubGraphQL<{
@@ -631,21 +729,31 @@ export async function loadReviewContext(
   if (!pr?.headRefOid) throw new Error(`Pull request #${prNumber} not found`);
 
   const login = botLogin(data.viewer);
-  const [sticky, threads] = await Promise.all([
+  const [sticky, threads, reviews] = await Promise.all([
     findStickyComment(token, repository, prNumber, login),
     fetchReviewThreads(token, repository, prNumber),
+    fetchBonkReviews(token, repository, prNumber, login),
   ]);
   const history = summarizeReviewHistory(
-    { ...pr, comments: { nodes: sticky ? [sticky] : [] }, reviewThreads: { nodes: threads } },
+    {
+      ...pr,
+      comments: { nodes: sticky ? [sticky] : [] },
+      reviews: { nodes: reviews },
+      reviewThreads: { nodes: threads },
+    },
     login,
   );
   const delta = await loadReviewDelta(repository, history, token);
+  const deltaPaths =
+    diffDir && delta?.kind === "author_changes"
+      ? writeDeltaPatches(join(diffDir, "delta"), delta)
+      : undefined;
   return {
     headSha: history.headSha,
     baseSha: history.baseSha,
     lastReviewId: history.lastReviewId,
     changedFiles: reviewScope(delta),
     rereview: history.previous !== null,
-    block: formatPreviousReviewBlock(history, delta),
+    block: formatPreviousReviewBlock(history, delta, deltaPaths),
   };
 }

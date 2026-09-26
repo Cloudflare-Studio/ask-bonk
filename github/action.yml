@@ -68,6 +68,10 @@ inputs:
     required: false
     default: "false"
 
+  ignore_paths:
+    description: "Comma- or newline-separated paths to leave out of reviews, relative to the repository root ('*' within a segment, '**' across segments, trailing '/' for a directory). Can never cover .github/workflows/."
+    required: false
+
   rereview_context:
     description: "On pull requests, give OpenCode Bonk's previous review (reviewed head, summary, inline threads with resolved state) keep one review summary comment updated in place, and post findings from a file the model writes"
     required: false
@@ -171,6 +175,7 @@ runs:
         TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
         # re-review
         REREVIEW_CONTEXT: ${{ inputs.rereview_context }}
+        IGNORE_PATHS: ${{ inputs.ignore_paths }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
     - name: Install opencode

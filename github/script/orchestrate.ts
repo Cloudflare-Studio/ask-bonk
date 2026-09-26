@@ -24,6 +24,7 @@ import {
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
+import { formatDiffBlock, prepareDiff, type DiffManifest } from "./review-diff";
 import type { PublishState } from "./review-publish";
 import { loadReviewContext, type ReviewContext } from "./review-state";
 
@@ -691,6 +692,19 @@ function reviewFilePath(): string {
   return path;
 }
 
+// Fresh per run for the same reason as the review file.
+function diffDirPath(): string {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) return "";
+  const path = join(runnerTemp, `bonk-diff-${process.env.GITHUB_RUN_ID || "local"}`);
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    // Nothing to clear.
+  }
+  return path;
+}
+
 function rereviewEnabled(): boolean {
   return process.env.REREVIEW_CONTEXT === "true";
 }
@@ -726,15 +740,31 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
   // Re-review context is best-effort: a lookup failure degrades to a
   // first-time review instead of blocking the run.
   let reviewContext: ReviewContext | null = null;
+  let diff: DiffManifest | null = null;
+  const diffDir = options.reviewToken && rereviewEnabled() ? diffDirPath() : "";
   if (options.reviewToken && rereviewEnabled() && process.env.PR_NUMBER && userRequest) {
     try {
       reviewContext = await loadReviewContext(
         repository,
         process.env.PR_NUMBER,
         options.reviewToken,
+        diffDir || undefined,
       );
     } catch (error) {
       core.warning(`Could not load previous review context: ${error}`);
+    }
+    if (reviewContext && diffDir) {
+      try {
+        diff = await prepareDiff(
+          options.reviewToken,
+          repository,
+          process.env.PR_NUMBER,
+          diffDir,
+          process.env.IGNORE_PATHS,
+        );
+      } catch (error) {
+        core.warning(`Could not precompute the pull request diff: ${error}`);
+      }
     }
   }
 
@@ -794,6 +824,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
     mode,
     value: [
       contextLines.join("\n"),
+      ...(diff ? [formatDiffBlock(diff)] : []),
       ...(reviewContext?.block ? [reviewContext.block] : []),
       `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
     ].join("\n\n"),
@@ -809,6 +840,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             expectReview:
               process.env.EVENT_NAME === "pull_request" || /\breview\b/i.test(userRequest),
             reviewFile,
+            diffDir: diff ? diffDir : "",
           },
         }
       : {}),

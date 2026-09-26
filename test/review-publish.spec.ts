@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   anchorFinding,
   applySeverityRules,
+  checkJudgeSeverities,
   buildStickyBody,
   computeVerdict,
   stripVerdict,
@@ -396,6 +397,50 @@ describe("Bonk review publishing", () => {
     expect(isTestPath("src/workerd/api/url.c++")).toBe(false);
   });
 
+  it("never lets the judge raise a specialist's severity or block without evidence", () => {
+    const records = [
+      { id: "correctness#1", specialist: "correctness", severity: "warning" as const, path: "a.rs", body: "x" },
+      { id: "rust-first#2", specialist: "rust-first", severity: "info" as const, path: "a.rs", body: "y" },
+      { id: "memory-safety#1", specialist: "memory-safety", severity: "blocking" as const, path: "a.rs", body: "z" },
+    ];
+    const finding = (overrides: Partial<Finding>): Finding => ({
+      path: "a.rs",
+      line: 3,
+      side: "RIGHT",
+      body: "Generics printing omits the angle brackets",
+      severity: "blocking",
+      evidence: "read syn's ToTokens for Generics",
+      ...overrides,
+    });
+    const severities = checkJudgeSeverities(
+      [
+        // A specialist's warning escalated to blocking goes back to warning.
+        finding({ sources: ["correctness#1"] }),
+        // The most severe source sets the cap.
+        finding({ sources: ["rust-first#2", "memory-safety#1"] }),
+        finding({ severity: "warning", sources: ["rust-first#2"] }),
+        // Lowering is always allowed.
+        finding({ severity: "suggestion", sources: ["memory-safety#1"] }),
+        // Unknown ids set no cap.
+        finding({ sources: ["docs#9"] }),
+        // A new blocking finding without evidence is a warning ...
+        finding({ evidence: undefined }),
+        // ... but a re-reported one keeps its thread's severity.
+        finding({ evidence: undefined, threadId: "PRRT_1" }),
+      ],
+      records,
+    ).map((entry) => entry.severity);
+    expect(severities).toEqual([
+      "warning",
+      "blocking",
+      "info",
+      "suggestion",
+      "blocking",
+      "warning",
+      "blocking",
+    ]);
+  });
+
   it("computes the verdict from the findings", () => {
     const finding = (severity: Finding["severity"]): Finding => ({
       path: "src/a.ts",
@@ -478,7 +523,13 @@ describe("Bonk review publishing", () => {
     });
     const reviewFile = writeReviewFile("sticky", {
       findings: [
-        { path: "src/a.ts", line: 11, body: "Null deref", severity: "blocking" },
+        {
+          path: "src/a.ts",
+          line: 11,
+          body: "Null deref",
+          severity: "blocking",
+          evidence: "src/a.ts:9 assigns null on the error path",
+        },
         { path: "docs/missing.md", line: 1, body: "Document the flag", severity: "warning" },
         { path: "src/a.ts", line: 12, body: "Consider a clearer name", severity: "suggestion" },
       ],

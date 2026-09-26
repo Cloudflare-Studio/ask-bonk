@@ -79,6 +79,8 @@ export interface Finding {
   threadId?: string;
   // The specialist findings (e.g. "correctness#2") the judge built this from.
   sources?: string[];
+  // How a blocking finding was verified.
+  evidence?: string;
 }
 
 export interface ThreadAction {
@@ -200,6 +202,9 @@ export function parseReviewFile(text: string): ReviewFile | null {
         ? { threadId: entry.thread_id }
         : {}),
       ...sourcesOf(entry.sources),
+      ...(typeof entry.evidence === "string" && entry.evidence.trim()
+        ? { evidence: entry.evidence.trim() }
+        : {}),
     });
   }
   const threadActions: ThreadAction[] = [];
@@ -510,6 +515,52 @@ export function verifyQuote(quote: RuleQuote, workspace: string): boolean {
   } catch {
     return false;
   }
+}
+
+// How severe a finding is, for comparing: a question weighs like info.
+const SEVERITY_RANK: Record<Severity, number> = {
+  blocking: 0,
+  warning: 1,
+  info: 2,
+  question: 2,
+  suggestion: 3,
+};
+
+// Rules for the judge, applied in code where the file makes them checkable.
+// The judge may keep or lower a specialist's severity but never raise it, so
+// a finding built from specialist findings is capped at the most severe of
+// them. A new blocking finding must say how it was verified; without
+// `evidence` it becomes a warning. Re-reported findings keep the severity
+// their thread has.
+export function checkJudgeSeverities(
+  findings: Finding[],
+  records: SpecialistFindingRecord[],
+): Finding[] {
+  const byId = new Map(records.map((record) => [record.id, record]));
+  return findings.map((finding) => {
+    let severity = finding.severity;
+    const sources = (finding.sources ?? [])
+      .map((id) => byId.get(id))
+      .filter((record): record is SpecialistFindingRecord => Boolean(record));
+    if (sources.length > 0) {
+      const cap = sources.reduce((most, record) =>
+        SEVERITY_RANK[record.severity] < SEVERITY_RANK[most.severity] ? record : most,
+      );
+      if (SEVERITY_RANK[severity] < SEVERITY_RANK[cap.severity]) {
+        core.info(
+          `Keeping ${cap.id}'s severity ${cap.severity} for a finding the judge raised to ${severity}`,
+        );
+        severity = cap.severity;
+      }
+    }
+    if (severity === "blocking" && !finding.evidence && !finding.threadId) {
+      core.info(
+        `Lowering a blocking finding without evidence${finding.path ? ` in ${finding.path}` : ""} to warning`,
+      );
+      severity = "warning";
+    }
+    return severity === finding.severity ? finding : { ...finding, severity };
+  });
 }
 
 // Severity rules the model is told about, applied in code so they hold
@@ -1089,7 +1140,11 @@ export async function publishReview(): Promise<void> {
     Boolean(liveHead) && liveHead !== state.head && liveHead !== process.env.WORKSPACE_HEAD_SHA;
 
   const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-  const findings = applySeverityRules(reviewFile?.findings ?? [], workspace);
+  const specialistFindings = readSpecialistFindings(process.env.SPECIALIST_FINDINGS);
+  const findings = applySeverityRules(
+    checkJudgeSeverities(reviewFile?.findings ?? [], specialistFindings),
+    workspace,
+  );
   const sections: string[] = [];
   let summary = stripOpencodeFooter(stripReviewState(response.body));
   if (stale) {
@@ -1161,10 +1216,7 @@ export async function publishReview(): Promise<void> {
   const specialistStatuses = parseSpecialistStatuses(process.env.SPECIALIST_STATUS);
   sections.push(formatNotReviewed(specialistStatuses));
   if (reviewFile) {
-    const accounts = accountSpecialistFindings(
-      readSpecialistFindings(process.env.SPECIALIST_FINDINGS),
-      reviewFile,
-    );
+    const accounts = accountSpecialistFindings(specialistFindings, reviewFile);
     logSpecialistAccounts(accounts);
     sections.push(formatNotPosted(accounts));
   }

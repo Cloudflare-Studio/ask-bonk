@@ -47,6 +47,8 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
   ```
 
 - `line` is a line in the pull request diff: `side` is `RIGHT` for added or unchanged lines and `LEFT` for deleted lines. Add `start_line` for a multi-line range. Use a `suggestion` block in `body` when a concrete fix fits. Omit `line` for a finding about a whole file, and `path` too for one about the change as a whole.
+- Verify before you escalate. A `blocking` finding needs `"evidence"`: one line on how you confirmed it, such as the lines you read, a command you ran, or a failing CI check. Bonk lowers a new blocking finding without evidence to `warning`.
+- Never claim that code fails to compile, expand, link, or type-check at `warning` or above unless you checked the dependency's source or the pull request's CI status (`gh pr checks`). Existing tests that exercise the path are evidence against such a claim.
 - `severity` is one of:
   - `blocking`: must be fixed before merging, such as a correctness bug, security hole, data loss, or compatibility break;
   - `warning`: a real defect with limited impact that should be fixed;
@@ -56,6 +58,7 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 - Blocking and warning findings are posted inline; info, suggestion, and question findings are listed in the summary.
 - Set `"justified": true` when the code carries an explicit comment justifying what you flag. Bonk lowers the severity of justified findings by one level, never below `suggestion`.
 - Report a finding only if a maintainer reading it would agree it is right and worth changing. When in doubt, leave it out.
+- Describe the defect itself. Never frame a finding as something an earlier review missed.
 - In test files, report only a test that can pass while the code under test is broken, a test that is flaky or can hang or crash CI, or a missing test for behavior the pull request changes. Bonk drops test-file findings below `warning`.
 - Never raise problems that already existed in code the pull request does not change.
 - Cite a rule or standard only through `"quote": {"path": "<repository file>", "text": "<exact text>"}`, copied verbatim from a file you read. Bonk checks the text against that file and removes a quote it cannot find. Do not paraphrase rules in `body` as if quoting them, and never attach a quote that says something different from the finding's own body.
@@ -69,8 +72,8 @@ Apply these rules when `<bonk_specialist_findings>` is present. Specialist revie
 
 - Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, or about code the pull request does not change. Merge findings about the same defect, from one specialist or several, into one finding instead of dropping one of them.
 - Each specialist finding has an id such as `correctness#2`. Account for every one in the findings file: give each finding you write a `"sources"` list of the ids it comes from, and for each id you do not keep add `{"id": "<id>", "decision": "dropped", "reason": "<one line: why it is wrong, duplicated, or out of scope>"}` to a top-level `"specialist_dispositions"` list. Bonk logs this accounting and lists the dropped findings with your reasons, collapsed, in the summary.
-- Correct severities to the definitions under "Review output file", and fix line numbers so they point at the diff.
-- Review the pull request yourself as well and add anything the specialists missed.
+- Keep or lower a specialist's severity to match the definitions under "Review output file", never raise it; Bonk caps each finding at the most severe of its `sources`. Fix line numbers so they point at the diff.
+- Review the pull request yourself as well and add anything the specialists missed, but only defects you verified in the code yourself. A finding without `sources` is your own claim and needs the same verification you apply to theirs.
 - Write the result as the single findings file. The specialists' own files are not published.
 - A specialist marked "not reviewed" did not finish; Bonk lists it in the summary, so do not repeat that.
 - `disabled_areas` names specialists the repository turned off. Raise no findings in those areas yourself.
@@ -89,7 +92,7 @@ Apply these rules when `<bonk_previous_review>` is present.
   - a question or pushback you disagree with: `reply` with a short answer, and keep the finding if it still applies;
   - resolved by a person although the exact defect is still present: `unresolve` with a one-line reason, and keep the finding. Otherwise leave threads people resolved alone.
 - A still-open thread needs no action beyond re-reporting its finding. Bonk resolves an open Bonk thread without replies when no finding carries its `thread_id` and its file changed since the last review, so leave a finding out only when it no longer applies. Bonk ignores actions on threads it did not start.
-- Unless the scope is the whole pull request, report new findings only in code changed since `last_reviewed_head`. Raise a finding in unchanged code only for a severe correctness or security defect, and say it was missed earlier. If `changes_since_last_review` is `none` or `base_only`, keep the previous verdict unless you find such a defect.
+- Unless the scope is the whole pull request, report new findings only in code changed since `last_reviewed_head`. Raise a finding in unchanged code only for a severe correctness or security defect. If `changes_since_last_review` is `none` or `base_only`, keep the previous verdict unless you find such a defect.
 - Begin the final response with `Since last review: <resolved> resolved, <open> still open, <new> new.` When nothing actionable remains, follow that line with `LGTM!`.
 
 If `working_tree` is `read-only`, do not edit or intentionally regenerate files. If a requested change requires writes, explain the limitation and describe the required change.

@@ -56,6 +56,10 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("Write the result as the single findings file.");
     expect(guidance).toContain("Account for every one in the findings file");
     expect(guidance).toContain('"specialist_dispositions"');
+    expect(guidance).toContain("never raise it; Bonk caps each finding at the most severe of its `sources`");
+    expect(guidance).toContain("A `blocking` finding needs `\"evidence\"`");
+    expect(guidance).toContain("unless you checked the dependency's source or the pull request's CI status");
+    expect(guidance).not.toMatch(/missed earlier/);
   });
 
   it("has re-reviews follow up on Bonk's threads through structured actions", () => {

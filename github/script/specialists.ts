@@ -742,7 +742,7 @@ export function formatSpecialistFindings(
   }
   for (const skip of skipped) {
     lines.push(
-      `specialist: ${skip.name} (not re-run: the author did not change its files since the last review; its earlier findings stand)`,
+      `specialist: ${skip.name} (not re-run: the author did not change its files since the last review; ${skip.status === "issues" ? "its earlier findings stand" : "it had no findings then"})`,
     );
   }
   lines.push("</bonk_specialist_findings>");

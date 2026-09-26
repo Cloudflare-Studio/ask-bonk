@@ -680,6 +680,38 @@ export function parseSpecialistStatuses(
 const REVIEWED_STATUSES = new Set(["ok", "issues", "partial"]);
 export const CARRIED_FORWARD = "carried forward";
 
+// The status each specialist is recorded with in the review-state marker:
+// after the judge, not as the specialist reported it. A specialist has
+// issues only if the judge kept one of its findings. Without the judge's
+// accounting (no `sources` or dispositions), a review with no findings left
+// means none of theirs held up; otherwise the reported status stands.
+// Carried-forward specialists keep the status they were carried with.
+export function judgedStatuses(
+  statuses: Record<string, { status: string; reason?: string }>,
+  accounts: SpecialistAccount[],
+  reviewFile: ReviewFile | null,
+  findings: Finding[],
+): Record<string, string> {
+  const traced =
+    reviewFile !== null &&
+    (reviewFile.dispositions.length > 0 ||
+      reviewFile.findings.some((finding) => (finding.sources ?? []).length > 0));
+  const kept = new Set(
+    accounts
+      .filter((account) => account.decision === "kept")
+      .map((account) => account.record.specialist),
+  );
+  return Object.fromEntries(
+    Object.entries(statuses).map(([name, entry]) => {
+      if (entry.reason === CARRIED_FORWARD || entry.status !== "issues") {
+        return [name, entry.status];
+      }
+      if (traced) return [name, kept.has(name) ? "issues" : "ok"];
+      return [name, reviewFile && findings.length === 0 ? "ok" : entry.status];
+    }),
+  );
+}
+
 // Specialists that did not finish are named in the summary, so a missing
 // area is visible rather than silently absent; so are specialists whose
 // earlier result was reused because the author did not touch their files.
@@ -704,9 +736,17 @@ export function formatNotReviewed(
       ].join("\n"),
     );
   }
-  if (carried.length > 0) {
+  // Earlier findings only stand for specialists that had some.
+  const standing = carried.filter((name) => statuses[name].status === "issues");
+  const clean = carried.filter((name) => statuses[name].status !== "issues");
+  if (standing.length > 0) {
     sections.push(
-      `**Carried forward from the last review:** ${carried.join(", ")} (no author changes in their files since then; earlier findings stand)`,
+      `**Carried forward from the last review:** ${standing.join(", ")} (no author changes in their files since then; earlier findings stand)`,
+    );
+  }
+  if (clean.length > 0) {
+    sections.push(
+      `**Not re-run:** ${clean.join(", ")} (no author changes in their files since the last review)`,
     );
   }
   return sections.join("\n\n");
@@ -1215,16 +1255,19 @@ export async function publishReview(): Promise<void> {
 
   const specialistStatuses = parseSpecialistStatuses(process.env.SPECIALIST_STATUS);
   sections.push(formatNotReviewed(specialistStatuses));
+  const accounts = reviewFile ? accountSpecialistFindings(specialistFindings, reviewFile) : [];
   if (reviewFile) {
-    const accounts = accountSpecialistFindings(specialistFindings, reviewFile);
     logSpecialistAccounts(accounts);
     sections.push(formatNotPosted(accounts));
   }
+  const judged = judgedStatuses(specialistStatuses, accounts, reviewFile, findings);
+  for (const [name, status] of Object.entries(judged)) {
+    const raw = specialistStatuses[name]?.status;
+    if (raw !== status) core.info(`Specialist ${name}: ${raw} as reported, ${status} after the judge`);
+  }
 
   const body = buildStickyBody({
-    specialists: Object.fromEntries(
-      Object.entries(specialistStatuses).map(([name, entry]) => [name, entry.status]),
-    ),
+    specialists: judged,
     summary,
     unanchored: sections.filter(Boolean).join("\n\n"),
     head: state.head,

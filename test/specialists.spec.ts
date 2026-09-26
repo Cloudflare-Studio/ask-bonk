@@ -249,8 +249,12 @@ describe("Bonk specialists", () => {
     ).toBe(
       "**Not reviewed**\n\n- performance: not reviewed (timed out after 5 min)\n- docs: not reviewed (stalled)",
     );
-    expect(formatNotReviewed({ tests: { status: "ok", reason: "carried forward" } })).toBe(
+    expect(formatNotReviewed({ tests: { status: "issues", reason: "carried forward" } })).toBe(
       "**Carried forward from the last review:** tests (no author changes in their files since then; earlier findings stand)",
+    );
+    // A specialist that had no findings has nothing that "stands".
+    expect(formatNotReviewed({ "kj-style": { status: "ok", reason: "carried forward" } })).toBe(
+      "**Not re-run:** kj-style (no author changes in their files since the last review)",
     );
   });
 
@@ -298,8 +302,11 @@ describe("Bonk specialists", () => {
     expect(select(null).skipped).toEqual([]);
     expect(select([], null).skipped).toEqual([]);
 
-    expect(formatSpecialistFindings([], [{ name: "docs", status: "ok" }])).toContain(
+    expect(formatSpecialistFindings([], [{ name: "docs", status: "issues" }])).toContain(
       "specialist: docs (not re-run: the author did not change its files since the last review; its earlier findings stand)",
+    );
+    expect(formatSpecialistFindings([], [{ name: "docs", status: "ok" }])).toContain(
+      "specialist: docs (not re-run: the author did not change its files since the last review; it had no findings then)",
     );
   });
 

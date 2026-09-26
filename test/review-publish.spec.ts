@@ -574,7 +574,10 @@ describe("Bonk review publishing", () => {
       base: BASE,
       specialists: { correctness: "issues", docs: "ok" },
     });
-    expect(body).toContain("**Carried forward from the last review:** docs");
+    // Docs had no findings when it was carried, so nothing of its "stands".
+    expect(body).toContain(
+      "**Not re-run:** docs (no author changes in their files since the last review)",
+    );
 
     const deleted = requests.find((request) => request.method === "DELETE");
     expect(deleted?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");
@@ -624,6 +627,53 @@ describe("Bonk review publishing", () => {
     expect(logged).toContain(
       "Specialist findings: 1 kept, 1 dropped, 1 not accounted for",
     );
+  });
+
+  it("records each specialist's status after the judge in the marker", async () => {
+    const statuses = JSON.stringify({
+      correctness: { status: "issues" },
+      tests: { status: "issues" },
+      docs: { status: "ok" },
+      "kj-style": { status: "issues", reason: "carried forward" },
+    });
+    const specialistFindings = writeReviewFile("judged-specialists", {
+      findings: [
+        { id: "correctness#1", specialist: "correctness", severity: "warning", path: "src/a.ts", line: 11, body: "Null deref" },
+        { id: "tests#1", specialist: "tests", severity: "warning", path: "src/a.ts", body: "Missing test" },
+      ],
+    });
+    const publish = async (review: unknown) => {
+      vi.restoreAllMocks();
+      const requests = mockGitHub({
+        headRefOid: HEAD,
+        comments: { nodes: [stickyComment, response("LGTM!")] },
+        reviews: { nodes: [{ databaseId: 3, author: bonk }] },
+      });
+      await withEnv(
+        publishEnv(writeReviewFile(`judged-${crypto.randomUUID()}`, review), {
+          SPECIALIST_STATUS: statuses,
+          SPECIALIST_FINDINGS: specialistFindings,
+        }),
+        () => publishReview(),
+      );
+      return parseReviewStateMarker(patchedBody(requests.find((r) => r.method === "PATCH")))
+        ?.specialists;
+    };
+
+    // The judge kept correctness's finding and dropped the tests one.
+    expect(
+      await publish({
+        findings: [{ path: "src/a.ts", line: 11, body: "Null deref", sources: ["correctness#1"] }],
+        specialist_dispositions: [{ id: "tests#1", decision: "dropped", reason: "covered" }],
+      }),
+    ).toEqual({ correctness: "issues", tests: "ok", docs: "ok", "kj-style": "issues" });
+    // An LGTM without accounting still records that no specialist finding held up.
+    expect(await publish({ findings: [] })).toEqual({
+      correctness: "ok",
+      tests: "ok",
+      docs: "ok",
+      "kj-style": "issues",
+    });
   });
 
   it("places comments on the same hunks the prompt showed", async () => {

@@ -218,9 +218,17 @@ export function parseSpecialistFile(
   };
 }
 
-// A README can document the directory without becoming a specialist.
+// A README can document the directory without becoming a specialist, and
+// SHARED.md holds rules every specialist and the judge follow.
+const SHARED_FILE = "shared.md";
+
 function isSpecialistFile(name: string): boolean {
-  return name.endsWith(".md") && name.toLowerCase() !== "readme.md";
+  const lower = name.toLowerCase();
+  return lower.endsWith(".md") && lower !== "readme.md" && lower !== SHARED_FILE;
+}
+
+function isSharedFile(name: string): boolean {
+  return name.toLowerCase() === SHARED_FILE;
 }
 
 // Specialist definitions come from the pull request's base commit, so a pull
@@ -240,7 +248,7 @@ export async function fetchRepoSpecialists(
   const entries = (await listing.json()) as Array<{ name: string; type: string; path: string }>;
   mkdirSync(dir, { recursive: true });
   for (const entry of entries.filter(
-    (item) => item.type === "file" && isSpecialistFile(item.name),
+    (item) => item.type === "file" && (isSpecialistFile(item.name) || isSharedFile(item.name)),
   )) {
     const resp = await fetchWithRetry(
       `https://api.github.com/repos/${repository}/contents/${entry.path}?ref=${ref}`,
@@ -254,11 +262,16 @@ export function loadRepoSpecialists(dir: string): {
   defs: SpecialistDef[];
   disabled: string[];
   warnings: string[];
+  shared?: string;
 } {
   const defs: SpecialistDef[] = [];
   const disabled: string[] = [];
   const warnings: string[] = [];
   if (!dir || !existsSync(dir)) return { defs, disabled, warnings };
+  const sharedName = readdirSync(dir).find((file) => isSharedFile(file));
+  const shared = sharedName
+    ? parseFrontmatter(readFileSync(join(dir, sharedName), "utf8")).body.trim()
+    : "";
   for (const name of readdirSync(dir)
     .filter((file) => isSpecialistFile(file))
     .sort()) {
@@ -267,7 +280,7 @@ export function loadRepoSpecialists(dir: string): {
     else if ("disabled" in parsed) disabled.push(parsed.name);
     else defs.push(parsed);
   }
-  return { defs, disabled, warnings };
+  return { defs, disabled, warnings, ...(shared ? { shared } : {}) };
 }
 
 // The specialists a review can use: the built-ins, replaced by repository
@@ -521,6 +534,8 @@ export interface SpecialistContext {
   // changed since the last review, and where preflight wrote their patches at
   // the last review and now.
   sinceLastReview?: { changedFiles: string[]; deltaDir?: string };
+  // The repository's SHARED.md: rules every specialist follows.
+  sharedRules?: string;
 }
 
 // On a re-review limited to the author's changes, a specialist sees only its
@@ -565,6 +580,9 @@ export function buildSpecialistPrompt(
     "- severity: blocking (must fix before merging), warning (real defect, should fix), info (worth knowing), suggestion (optional improvement), or question (you need an answer; at most one).",
     '- Set "justified": true when the code carries an explicit comment justifying what you flag.',
     '- Cite a rule only as "quote": {"path": "<file>", "text": "<exact text>"} copied verbatim from a file you read.',
+    ...(context.sharedRules
+      ? ["", "Repository rules for every specialist:", neutralizeTags(context.sharedRules)]
+      : []),
     ...(since ? rereviewRules(files, since) : []),
     "",
     `Write your findings to ${context.outFile} as JSON with a quoted shell heredoc (cat > "<file>" <<'EOF'), replacing its content:`,
@@ -708,6 +726,7 @@ export function formatSpecialistFindings(
   skipped: SkippedSpecialist[] = [],
   scope: ReviewScope | null = null,
   disabled: Array<Pick<SpecialistDef, "name" | "description">> = [],
+  sharedRules?: string,
 ): string {
   const lines = [
     "<bonk_specialist_findings>",
@@ -721,6 +740,12 @@ export function formatSpecialistFindings(
   if (disabled.length > 0) {
     lines.push(
       `disabled_areas: ${disabled.map((def) => `${def.name} (${escapePromptValue(def.description)})`).join("; ")}. The repository turned these specialists off: raise no findings in these areas.`,
+    );
+  }
+  if (sharedRules) {
+    lines.push(
+      "repository_rules: the repository's rules for every finding, including your own and the specialists' (drop specialist findings that break them):",
+      neutralizeTags(sharedRules),
     );
   }
   for (const result of results) {
@@ -937,6 +962,7 @@ async function runSpecialist(
     model?: string;
     variant?: string;
     sinceLastReview?: SpecialistContext["sinceLastReview"];
+    sharedRules?: string;
   },
 ): Promise<SpecialistResult> {
   const outFile = join(shared.dir, `${def.name}.findings.json`);
@@ -965,6 +991,7 @@ async function runSpecialist(
         outFile,
         budgetMs: deadlineMs,
         sinceLastReview: shared.sinceLastReview,
+        sharedRules: shared.sharedRules,
       }),
     );
     core.info(
@@ -1077,12 +1104,12 @@ export async function runSpecialists(): Promise<void> {
     `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}${selection.skipped.length > 0 ? `; carried forward: ${selection.skipped.map((skip) => skip.name).join(", ")}` : ""}${scope ? `; scope: ${scope.kind === "full" ? `whole pull request (${scope.reason})` : "changes since the last review"}` : ""}`,
   );
   if (selection.selected.length === 0 && selection.skipped.length === 0) {
-    // The judge still needs to know which areas are off.
-    if (disabled.length > 0 && process.env.GITHUB_OUTPUT) {
+    // The judge still needs to know which areas are off and the shared rules.
+    if ((disabled.length > 0 || repo.shared) && process.env.GITHUB_OUTPUT) {
       appendGitHubValue(
         process.env.GITHUB_OUTPUT,
         "prompt",
-        `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings([], [], scope, disabled)}`,
+        `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings([], [], scope, disabled, repo.shared)}`,
       );
     }
     return;
@@ -1117,6 +1144,7 @@ export async function runSpecialists(): Promise<void> {
         model: process.env.SPECIALIST_MODEL || process.env.MODEL || undefined,
         variant: process.env.SPECIALIST_VARIANT || process.env.VARIANT || undefined,
         sinceLastReview,
+        sharedRules: repo.shared,
       }),
     LAUNCH_GAP_MS,
   );
@@ -1141,7 +1169,7 @@ export async function runSpecialists(): Promise<void> {
   appendGitHubValue(
     outputFile,
     "prompt",
-    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope, disabled)}`,
+    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope, disabled, repo.shared)}`,
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
   const findingsFile = join(dir, "specialist-findings.json");

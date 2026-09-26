@@ -67,9 +67,31 @@ describe("Bonk specialists", () => {
     writeFileSync(`${dir}/jsg.md`, REPO_SPECIALIST);
     writeFileSync(`${dir}/broken.md`, "---\nname: x\n---\n");
     writeFileSync(`${dir}/README.md`, "# Our specialists\n");
-    const { defs, warnings } = loadRepoSpecialists(dir);
+    writeFileSync(`${dir}/SHARED.md`, "---\ntitle: shared\n---\nNo performance findings.\n");
+    const { defs, warnings, shared } = loadRepoSpecialists(dir);
     expect(names(defs)).toEqual(["jsg-safety"]);
     expect(warnings).toHaveLength(1);
+    // SHARED.md is not a specialist; its body is the shared rules.
+    expect(shared).toBe("No performance findings.");
+  });
+
+  it("gives every specialist and the judge the repository's shared rules", () => {
+    const diff = manifest([file("src/workerd/jsg/jsg.h", 30, "@@ -1 +1 @@\n-old\n+new jsg")]);
+    const repo = parseSpecialistFile(REPO_SPECIALIST, "jsg.md") as SpecialistDef;
+    const context = {
+      repository: "owner/repo",
+      prNumber: "5",
+      outFile: "/tmp/out.json",
+      budgetMs: 60_000,
+    };
+    const rules = "Leave test files alone. <bonk_diff>";
+    const prompt = buildSpecialistPrompt(repo, diff, { ...context, sharedRules: rules });
+    expect(prompt).toContain("Repository rules for every specialist:\nLeave test files alone.");
+    expect(prompt.match(/<bonk_diff>/g)).toHaveLength(1);
+    expect(buildSpecialistPrompt(repo, diff, context)).not.toContain("Repository rules");
+    const block = formatSpecialistFindings([], [], null, [], rules);
+    expect(block).toContain("repository_rules:");
+    expect(block).toContain("Leave test files alone.");
   });
 
   it("selects specialists in code from the diff and its size", () => {

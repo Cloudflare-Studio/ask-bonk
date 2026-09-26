@@ -68,6 +68,11 @@ inputs:
     required: false
     default: "false"
 
+  rereview_context:
+    description: "On pull requests, give OpenCode Bonk's previous review (reviewed head, summary, inline threads with resolved state) and record the reviewed head on each review response"
+    required: false
+    default: "false"
+
 runs:
   using: "composite"
   steps:
@@ -164,6 +169,8 @@ runs:
         FAILURE_COMMENT: ${{ inputs.failure_comment }}
         # token scoping
         TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
+        # re-review
+        REREVIEW_CONTEXT: ${{ inputs.rereview_context }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
     - name: Install opencode
@@ -245,6 +252,27 @@ runs:
         # discovering and acting on a different PR.
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || '' }}
+
+    - name: Record review state
+      if: |
+        success() && steps.opencode.outcome == 'success'
+        && steps.preflight.outputs.reviewed_head_sha != ''
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
+        REVIEWED_HEAD_SHA: ${{ steps.preflight.outputs.reviewed_head_sha }}
+        REVIEWED_BASE_SHA: ${{ steps.preflight.outputs.reviewed_base_sha }}
+        LAST_REVIEW_ID: ${{ steps.preflight.outputs.last_review_id }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        # When OpenCode pushed this run's own changes, the workspace HEAD is the
+        # new PR head; that is not a newer push by someone else.
+        WORKSPACE_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)" \
+          bun run ${{ github.action_path }}/script/review-state.ts
 
     - name: Finalize Bonk run
       if: |

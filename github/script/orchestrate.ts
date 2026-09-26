@@ -18,9 +18,11 @@ import {
   validateOpenCodeVersion,
   checkPermissionLevel,
   extractMentionPrompt,
+  escapePromptValue,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
+import { loadReviewContext, type ReviewContext } from "./review-state";
 
 // ---------------------------------------------------------------------------
 // Permissions
@@ -601,17 +603,18 @@ async function detectFork(): Promise<ForkDetectionResult> {
   }
 }
 
+// OpenCode checks out the pull request's current head, so prefer the live SHA
+// over the event payload's, which is stale on re-runs and after later pushes.
 async function resolveHeadSha(
   prNumber: string,
   repository: string,
   cachedSha?: string,
 ): Promise<string> {
-  const envSha = process.env.HEAD_SHA;
-  if (envSha) return envSha;
   if (cachedSha) return cachedSha;
 
+  const envSha = process.env.HEAD_SHA || "";
   const ghToken = process.env.GH_TOKEN;
-  if (!prNumber || !repository || !ghToken) return "";
+  if (!prNumber || !repository || !ghToken) return envSha;
 
   try {
     const resp = await fetchWithRetry(
@@ -623,14 +626,14 @@ async function resolveHeadSha(
         },
       },
     );
-    if (!resp.ok) return "";
+    if (!resp.ok) return envSha;
     const pr = (await resp.json()) as { head?: { sha?: string } };
-    return pr.head?.sha || "";
+    return pr.head?.sha || envSha;
   } catch {
     // Best-effort: HEAD SHA is used for inline review context only.
     // Missing SHA means inline review comments may not anchor correctly,
     // but the workflow can still proceed.
-    return "";
+    return envSha;
   }
 }
 
@@ -639,6 +642,16 @@ interface PromptResult {
   detectionFailed: boolean;
   mode: "review-only" | "write-capable";
   value: string;
+  detection: ForkDetectionResult;
+  reviewState?: { head: string; base: string; lastReviewId: number };
+}
+
+interface BuildPromptOptions {
+  // Reuses fork detection from an earlier pass instead of repeating it.
+  detection?: ForkDetectionResult;
+  // The App installation token. Re-review context needs it to learn the App's
+  // own login, which identifies Bonk's earlier comments and reviews.
+  reviewToken?: string;
 }
 
 function requestedTokenPermissions(): unknown {
@@ -661,8 +674,8 @@ function tokenAllowsContentWrites(requested: unknown): boolean {
   return permissions.contents !== "read";
 }
 
-function escapePromptValue(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function rereviewEnabled(): boolean {
+  return process.env.REREVIEW_CONTEXT === "true";
 }
 
 function resolveUserRequest(): string {
@@ -684,8 +697,8 @@ function resolveUserRequest(): string {
   return "";
 }
 
-export async function buildPrompt(): Promise<PromptResult> {
-  const detection = await detectFork();
+export async function buildPrompt(options: BuildPromptOptions = {}): Promise<PromptResult> {
+  const detection = options.detection ?? (await detectFork());
   const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
   const repository = process.env.REPOSITORY || "";
   const [owner = "", repo = ""] = repository.split("/");
@@ -693,8 +706,23 @@ export async function buildPrompt(): Promise<PromptResult> {
   const mode = detection.isFork || !writeCapable ? "review-only" : "write-capable";
   const userRequest = resolveUserRequest();
 
-  let headSha = "";
-  if (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER)) {
+  // Re-review context is best-effort: a lookup failure degrades to a
+  // first-time review instead of blocking the run.
+  let reviewContext: ReviewContext | null = null;
+  if (options.reviewToken && rereviewEnabled() && process.env.PR_NUMBER && userRequest) {
+    try {
+      reviewContext = await loadReviewContext(
+        repository,
+        process.env.PR_NUMBER,
+        options.reviewToken,
+      );
+    } catch (error) {
+      core.warning(`Could not load previous review context: ${error}`);
+    }
+  }
+
+  let headSha = reviewContext?.headSha || "";
+  if (!headSha && (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER))) {
     headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
     if (!headSha) {
       core.warning("Could not resolve PR HEAD SHA; inline review comments may fail");
@@ -711,6 +739,7 @@ export async function buildPrompt(): Promise<PromptResult> {
       detectionFailed: detection.detectionFailed ?? false,
       mode,
       value: "",
+      detection,
     };
   }
 
@@ -735,6 +764,7 @@ export async function buildPrompt(): Promise<PromptResult> {
     "top_level_response_owner: opencode_github_run",
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
+  if (reviewContext?.baseSha) contextLines.push(`base_sha: ${escapePromptValue(reviewContext.baseSha)}`);
   contextLines.push("</bonk_execution_context>");
 
   return {
@@ -743,8 +773,19 @@ export async function buildPrompt(): Promise<PromptResult> {
     mode,
     value: [
       contextLines.join("\n"),
+      ...(reviewContext?.block ? [reviewContext.block] : []),
       `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
     ].join("\n\n"),
+    detection,
+    ...(reviewContext
+      ? {
+          reviewState: {
+            head: reviewContext.headSha,
+            base: reviewContext.baseSha,
+            lastReviewId: reviewContext.lastReviewId,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1055,7 +1096,7 @@ async function main() {
   // so fork runs can request a comment-only installation token.
   resolveVersion();
 
-  const promptResult = await buildPrompt();
+  let promptResult = await buildPrompt();
 
   if (promptResult.detectionFailed) {
     core.setOutput("is_fork", String(promptResult.isFork));
@@ -1069,11 +1110,25 @@ async function main() {
     codeownersTeamGroups: codeownersCheck?.teamGroups,
   });
 
+  // Re-review context is loaded with the App token, which exists only after
+  // the exchange above; fork detection from the first pass is reused.
+  if (rereviewEnabled() && oidcResult.token && process.env.PR_NUMBER) {
+    promptResult = await buildPrompt({
+      detection: promptResult.detection,
+      reviewToken: oidcResult.token,
+    });
+  }
+
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("mode", promptResult.mode);
   core.setOutput("value", promptResult.value);
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
+  if (promptResult.reviewState) {
+    core.setOutput("reviewed_head_sha", promptResult.reviewState.head);
+    core.setOutput("reviewed_base_sha", promptResult.reviewState.base);
+    core.setOutput("last_review_id", String(promptResult.reviewState.lastReviewId));
+  }
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);
   }

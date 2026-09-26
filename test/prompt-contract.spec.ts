@@ -19,6 +19,13 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("If the review found no actionable issues at all");
   });
 
+  it("holds re-reviews to the previous review instead of starting over", () => {
+    expect(guidance).toContain("Apply these rules when `<bonk_previous_review>` is present.");
+    expect(guidance).toContain("Report new findings only in code changed since `last_reviewed_head`.");
+    expect(guidance).toContain("Since last review: <resolved> resolved, <open> still open, <new> new.");
+    expect(guidance).toContain("A first review with findings starts with `Review: <count> findings.`");
+  });
+
   it("gives explicit change requests precedence in mixed review-and-fix tasks", () => {
     expect(guidance).toContain("Determine authorization from the entire request.");
     expect(guidance).toContain(

@@ -72,6 +72,7 @@ Apply these rules when `<bonk_specialist_findings>` is present. Specialist revie
 - Review the pull request yourself as well and add anything the specialists missed.
 - Write the result as the single findings file. The specialists' own files are not published.
 - A specialist marked "not reviewed" did not finish; Bonk lists it in the summary, so do not repeat that.
+- `disabled_areas` names specialists the repository turned off. Raise no findings in those areas yourself.
 
 ## Re-reviews
 

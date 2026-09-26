@@ -174,12 +174,26 @@ export function parseDuration(value: string | undefined): number | null {
   return amount * (unit === "s" ? 1000 : unit === "h" ? 60 * MINUTE : MINUTE);
 }
 
+// A file with `enabled: false` turns a specialist off, typically a built-in.
+export interface DisabledSpecialist {
+  name: string;
+  disabled: true;
+}
+
 // Parses one `.github/bonk/specialists/*.md` file. The body is the
-// specialist's instructions; `paths` scopes it to matching files.
-export function parseSpecialistFile(text: string, fileName: string): SpecialistDef | string {
+// specialist's instructions; `paths` scopes it to matching files. With
+// `enabled: false` the file only turns the named specialist off; any body
+// (often why it is off) is ignored.
+export function parseSpecialistFile(
+  text: string,
+  fileName: string,
+): SpecialistDef | DisabledSpecialist | string {
   const { data, body } = parseFrontmatter(text);
   const name = typeof data.name === "string" ? data.name : fileName.replace(/\.md$/, "");
   if (!NAME_PATTERN.test(name)) return `${fileName}: name must match ${NAME_PATTERN}`;
+  const enabled = typeof data.enabled === "string" ? data.enabled.toLowerCase() : "true";
+  if (enabled === "false") return { name, disabled: true };
+  if (enabled !== "true") return `${fileName}: enabled must be true or false`;
   const description = typeof data.description === "string" ? data.description : "";
   if (!description) return `${fileName}: description is required`;
   if (!body) return `${fileName}: the file needs instructions after the frontmatter`;
@@ -235,18 +249,54 @@ export async function fetchRepoSpecialists(
   }
 }
 
-export function loadRepoSpecialists(dir: string): { defs: SpecialistDef[]; warnings: string[] } {
+export function loadRepoSpecialists(dir: string): {
+  defs: SpecialistDef[];
+  disabled: string[];
+  warnings: string[];
+} {
   const defs: SpecialistDef[] = [];
+  const disabled: string[] = [];
   const warnings: string[] = [];
-  if (!dir || !existsSync(dir)) return { defs, warnings };
+  if (!dir || !existsSync(dir)) return { defs, disabled, warnings };
   for (const name of readdirSync(dir)
     .filter((file) => isSpecialistFile(file))
     .sort()) {
     const parsed = parseSpecialistFile(readFileSync(join(dir, name), "utf8"), name);
     if (typeof parsed === "string") warnings.push(`Skipping specialist ${parsed}`);
+    else if ("disabled" in parsed) disabled.push(parsed.name);
     else defs.push(parsed);
   }
-  return { defs, warnings };
+  return { defs, disabled, warnings };
+}
+
+// The specialists a review can use: the built-ins, replaced by repository
+// specialists of the same name, minus the ones the repository turned off. A
+// replacement without `paths` keeps the built-in's scope, so a repository
+// `docs` specialist still reviews documentation files.
+export function mergeSpecialists(
+  builtins: SpecialistDef[],
+  repo: { defs: SpecialistDef[]; disabled: string[] },
+): { defs: SpecialistDef[]; disabled: SpecialistDef[]; warnings: string[] } {
+  const defs = new Map(builtins.map((def) => [def.name, def]));
+  for (const def of repo.defs) {
+    const builtin = defs.get(def.name);
+    defs.set(
+      def.name,
+      !def.paths && builtin?.categories ? { ...def, categories: builtin.categories } : def,
+    );
+  }
+  const disabled: SpecialistDef[] = [];
+  const warnings: string[] = [];
+  for (const name of new Set(repo.disabled)) {
+    const def = defs.get(name);
+    if (!def) {
+      warnings.push(`Specialist ${name} is disabled but no such specialist exists`);
+      continue;
+    }
+    disabled.push(def);
+    defs.delete(name);
+  }
+  return { defs: [...defs.values()], disabled, warnings };
 }
 
 export type Tier = "trivial" | "small" | "full";
@@ -289,6 +339,8 @@ export interface Selection {
   tier: Tier;
   selected: SpecialistDef[];
   skipped: SkippedSpecialist[];
+  // Requested by name but turned off by the repository.
+  disabled: string[];
 }
 
 export interface SelectionOptions {
@@ -299,6 +351,8 @@ export interface SelectionOptions {
   changedFiles?: string[] | null;
   // Specialist statuses recorded with the last review.
   previous?: Record<string, string> | null;
+  // Specialists the repository turned off; they never run.
+  disabled?: string[];
 }
 
 export function selectSpecialists(
@@ -308,16 +362,19 @@ export function selectSpecialists(
 ): Selection {
   const tier = sizeTier(manifest);
   const request = options.request.trim().toLowerCase() || "auto";
-  const empty = { tier, selected: [], skipped: [] };
+  const empty = { tier, selected: [], skipped: [], disabled: [] };
   if (request === "off") return empty;
 
-  const byName = new Map(defs.map((def) => [def.name, def]));
+  const off = new Set(options.disabled ?? []);
+  const byName = new Map(defs.filter((def) => !off.has(def.name)).map((def) => [def.name, def]));
   const inScope = (def: SpecialistDef) => scopedFiles(def, manifest).length > 0;
   let wanted: SpecialistDef[];
+  const disabled: string[] = [];
   if (request !== "auto") {
-    wanted = request
-      .split(",")
-      .map((name) => byName.get(name.trim()))
+    const requested = request.split(",").map((name) => name.trim());
+    disabled.push(...requested.filter((name) => off.has(name)));
+    wanted = requested
+      .map((name) => byName.get(name))
       .filter((def): def is SpecialistDef => Boolean(def));
   } else {
     const files = reviewedFiles(manifest);
@@ -357,7 +414,7 @@ export function selectSpecialists(
       selected.push(def);
     }
   }
-  return { tier, selected, skipped };
+  return { tier, selected, skipped, disabled };
 }
 
 export interface ReviewScope {
@@ -627,6 +684,7 @@ export function formatSpecialistFindings(
   results: SpecialistResult[],
   skipped: SkippedSpecialist[] = [],
   scope: ReviewScope | null = null,
+  disabled: Array<Pick<SpecialistDef, "name" | "description">> = [],
 ): string {
   const lines = [
     "<bonk_specialist_findings>",
@@ -636,6 +694,11 @@ export function formatSpecialistFindings(
     lines.push(`review_scope: full (${escapePromptValue(scope.reason ?? "")})`);
   } else if (scope) {
     lines.push("review_scope: changes_since_last_review");
+  }
+  if (disabled.length > 0) {
+    lines.push(
+      `disabled_areas: ${disabled.map((def) => `${def.name} (${escapePromptValue(def.description)})`).join("; ")}. The repository turned these specialists off: raise no findings in these areas.`,
+    );
   }
   for (const result of results) {
     lines.push(`specialist: ${result.name} (${escapePromptValue(describeStatus(result))})`);
@@ -965,18 +1028,20 @@ export async function runSpecialists(): Promise<void> {
     return;
   }
 
-  const { defs: repoDefs, warnings } = loadRepoSpecialists(state.specialistsDir);
-  for (const warning of warnings) core.warning(warning);
-  const defs = new Map(BUILTIN_SPECIALISTS.map((def) => [def.name, def]));
-  // A repository specialist with a built-in's name replaces it.
-  for (const def of repoDefs) defs.set(def.name, def);
+  const repo = loadRepoSpecialists(state.specialistsDir);
+  const { defs, disabled, warnings } = mergeSpecialists(BUILTIN_SPECIALISTS, repo);
+  for (const warning of [...repo.warnings, ...warnings]) core.warning(warning);
 
   const selectionOptions = {
     request: process.env.SPECIALISTS || "auto",
     changedFiles: state.rereview ? state.changedFiles : null,
     previous: state.previousSpecialists,
+    disabled: disabled.map((def) => def.name),
   };
-  const selection = selectSpecialists([...defs.values()], manifest, selectionOptions);
+  const selection = selectSpecialists(defs, manifest, selectionOptions);
+  for (const name of selection.disabled) {
+    core.warning(`Not running specialist ${name}: the repository turned it off`);
+  }
   const scope = reviewScope(selection, { ...selectionOptions, rereview: state.rereview });
   const sinceLastReview =
     scope?.kind === "incremental" && state.changedFiles
@@ -988,7 +1053,17 @@ export async function runSpecialists(): Promise<void> {
   core.info(
     `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}${selection.skipped.length > 0 ? `; carried forward: ${selection.skipped.map((skip) => skip.name).join(", ")}` : ""}${scope ? `; scope: ${scope.kind === "full" ? `whole pull request (${scope.reason})` : "changes since the last review"}` : ""}`,
   );
-  if (selection.selected.length === 0 && selection.skipped.length === 0) return;
+  if (selection.selected.length === 0 && selection.skipped.length === 0) {
+    // The judge still needs to know which areas are off.
+    if (disabled.length > 0 && process.env.GITHUB_OUTPUT) {
+      appendGitHubValue(
+        process.env.GITHUB_OUTPUT,
+        "prompt",
+        `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings([], [], scope, disabled)}`,
+      );
+    }
+    return;
+  }
 
   const dir = join(runnerTemp, `bonk-specialists-${process.env.GITHUB_RUN_ID || "local"}`);
   mkdirSync(dir, { recursive: true });
@@ -1043,7 +1118,7 @@ export async function runSpecialists(): Promise<void> {
   appendGitHubValue(
     outputFile,
     "prompt",
-    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope)}`,
+    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope, disabled)}`,
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
 }

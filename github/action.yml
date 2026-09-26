@@ -199,6 +199,7 @@ runs:
         # re-review
         REREVIEW_CONTEXT: ${{ inputs.rereview_context }}
         IGNORE_PATHS: ${{ inputs.ignore_paths }}
+        SPECIALISTS: ${{ inputs.specialists }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
 
     - name: Install opencode

@@ -282,7 +282,19 @@ On re-reviews, the review-state marker records each specialist's result, and a s
 
 Specialists and the judge share one scope. When every specialist that runs finished a review of this pull request before, the re-review covers the author's changes since the last review: a re-run specialist sees only its files the author changed, with each file's patch at the last review and now (correctness and security see all of their files but report only what those changes introduced), and the judge keeps to the same changes. When any of them never did, because the last review ran without specialists, the change grew into a larger tier, or a specialist did not finish last time, the re-review covers the whole pull request, for the specialists and the judge alike. The judge still follows up on every earlier thread either way.
 
-A `README.md` in that directory is ignored, so it can document the specialists. A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
+A `README.md` in that directory is ignored, so it can document the specialists. A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it; without `paths` it keeps the built-in's scope (a `docs` replacement still reviews documentation files).
+
+To turn a built-in off, add a file that names it with `enabled: false`:
+
+```markdown
+---
+name: performance
+enabled: false
+---
+Optional prose, for example why it is off. It is ignored.
+```
+
+A disabled specialist never runs, not under `auto` and not when an explicit `specialists` list names it (Bonk logs a warning). The judge is told which areas are off and raises no findings in them.
 
 | Input                    | Default | Description                                                     |
 | ------------------------ | ------- | --------------------------------------------------------------- |

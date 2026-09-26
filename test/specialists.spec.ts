@@ -9,6 +9,7 @@ import {
   formatSpecialistFindings,
   launchOrder,
   loadRepoSpecialists,
+  mergeSpecialists,
   prepareDataHome,
   parseSpecialistFile,
   reviewScope,
@@ -77,7 +78,12 @@ describe("Bonk specialists", () => {
       selectSpecialists(defs, manifest(files), { request });
 
     // Trivial: the main run reviews alone.
-    expect(select([file("src/a.ts", 5)])).toEqual({ tier: "trivial", selected: [], skipped: [] });
+    expect(select([file("src/a.ts", 5)])).toEqual({
+      tier: "trivial",
+      selected: [],
+      skipped: [],
+      disabled: [],
+    });
     // ... unless it touches sensitive paths.
     expect(names(select([file("src/auth/session.ts", 3)]).selected)).toEqual(["security"]);
 
@@ -373,5 +379,56 @@ describe("Bonk specialists", () => {
     prepareDataHome(home, source);
     expect(readFileSync(`${home}/opencode/auth.json`, "utf8")).toBe('{"anthropic":{}}');
     expect(existsSync(`${home}/opencode/opencode.db`)).toBe(false);
+  });
+
+  it("lets a repository turn a built-in specialist off", () => {
+    const disabling = "---\nname: performance\nenabled: false\n---\n";
+    const explained =
+      "---\nname: docs\nenabled: false\n---\nOur docs are generated, so a docs reviewer only adds noise.\n";
+    expect(parseSpecialistFile(disabling, "performance.md")).toEqual({
+      name: "performance",
+      disabled: true,
+    });
+    // The body is prose about why; it is neither required nor a prompt.
+    expect(parseSpecialistFile(explained, "docs.md")).toEqual({ name: "docs", disabled: true });
+    expect(parseSpecialistFile("---\nname: x\nenabled: maybe\n---\nbody", "x.md")).toMatch(
+      /enabled must be/,
+    );
+
+    const dir = `/tmp/bonk-test/specialists-${crypto.randomUUID()}`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${dir}/performance.md`, disabling);
+    writeFileSync(`${dir}/docs.md`, explained);
+    writeFileSync(`${dir}/ghost.md`, "---\nname: ghost\nenabled: false\n---\n");
+    writeFileSync(`${dir}/tests.md`, "---\nname: tests\ndescription: Our tests\n---\nCheck tests.");
+    const repo = loadRepoSpecialists(dir);
+    expect(repo.warnings).toEqual([]);
+    expect(repo.disabled).toEqual(["docs", "ghost", "performance"]);
+
+    const merged = mergeSpecialists(BUILTIN_SPECIALISTS, repo);
+    expect(names(merged.disabled)).toEqual(["docs", "performance"]);
+    expect(merged.warnings).toEqual(["Specialist ghost is disabled but no such specialist exists"]);
+    // A replacement without paths keeps the built-in's scope.
+    expect(merged.defs.find((def) => def.name === "tests")).toMatchObject({
+      source: "repo",
+      categories: ["code", "tests"],
+    });
+
+    const diff = manifest([file("src/a.ts", 400), file("docs/guide.md", 20)]);
+    const disabled = merged.disabled.map((def) => def.name);
+    const auto = selectSpecialists(merged.defs, diff, { request: "auto", disabled });
+    expect(names(auto.selected)).toEqual(["correctness", "security", "api-compat", "tests"]);
+    // Named explicitly, a disabled specialist is still left out, and reported.
+    const listed = selectSpecialists(BUILTIN_SPECIALISTS, diff, {
+      request: "performance,correctness",
+      disabled,
+    });
+    expect(names(listed.selected)).toEqual(["correctness"]);
+    expect(listed.disabled).toEqual(["performance"]);
+
+    // The judge is told not to raise findings in areas that are off.
+    expect(formatSpecialistFindings([], [], null, merged.disabled)).toContain(
+      "disabled_areas: docs (Documentation accuracy); performance (Performance regressions). The repository turned these specialists off: raise no findings in these areas.",
+    );
   });
 });

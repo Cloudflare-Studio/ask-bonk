@@ -244,6 +244,8 @@ Every finding in the file has a severity: `blocking`, `warning`, `info`, `sugges
 
 Bonk computes the summary's verdict line from the findings instead of trusting the model's: `LGTM!` when there are none, `Review: 3 findings (1 blocking, 2 warnings).` on a first review, and on a re-review `Since last review: N resolved, M still open, K new.`, counting threads resolved during the run, earlier findings re-reported, and new findings.
 
+A review run must actually produce a review. When the run was a review request (a `pull_request` event, or a request that mentions "review") and OpenCode exits without writing the findings file and without a verdict line, Bonk deletes that attempt's comment and retries within the `timeout`/`retries` budget. If no attempt produces a review, the run fails and the previous summary is left untouched. Failed runs log a best-effort cause (`timeout`, `content_filter`, `provider_errors`, `permission_blocked`, or `incomplete_review`), which the finalize step repeats.
+
 On re-reviews Bonk also follows up on its own inline threads. Each thread in `<bonk_previous_review>` carries its id, and the model adds `thread_actions` to the findings file:
 
 - a fixed finding gets a short reply (`Fixed in <sha>: ...`) and its thread is resolved;

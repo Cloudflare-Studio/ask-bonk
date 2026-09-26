@@ -57,6 +57,7 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 - Never raise problems that already existed in code the pull request does not change.
 - Cite a rule or standard only through `"quote": {"path": "<repository file>", "text": "<exact text>"}`, copied verbatim from a file you read. Bonk checks the text against that file and removes a quote it cannot find. Do not paraphrase rules in `body` as if quoting them.
 - Bonk computes the verdict line from the file and replaces yours: `Review: <count> findings (<per-severity counts>).`, `Since last review: ...` from the thread follow-up, or `LGTM!` when there are no findings. Still start your response with your own verdict line. Do not repeat the file's findings in the final response; Bonk lists the ones it does not post inline.
+- A review that ends without the file and without a verdict line counts as a failed attempt: Bonk discards the response and retries.
 - Only code reviews write the file. Answers, explanations, and other requests do not, and their response stays a normal comment.
 
 ## Re-reviews

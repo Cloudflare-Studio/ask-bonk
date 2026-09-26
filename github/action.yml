@@ -241,6 +241,8 @@ runs:
         # does not clobber values callers already set in the step env.
         BONK_TIMEOUT: ${{ inputs.timeout }}
         BONK_RETRIES: ${{ inputs.retries }}
+        # Lets a review run that ends without a review be retried or failed.
+        REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
@@ -288,6 +290,7 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         OPENCODE_EXIT_CODE: ${{ steps.opencode.outputs.exit_code }}
+        OPENCODE_FAILURE_CAUSE: ${{ steps.opencode.outputs.failure_cause }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
         # Composite steps see the job's cancellation (the runner updates
         # job.status before re-evaluating their conditions); other failures

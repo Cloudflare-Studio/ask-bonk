@@ -110,6 +110,9 @@ export interface PublishState {
   changedFiles: string[] | null;
   // Bonk reviewed this pull request before.
   rereview: boolean;
+  // The request is a review (a pull_request event, or a request that asks for
+  // one), so a run that ends without one has failed.
+  expectReview: boolean;
   reviewFile: string;
 }
 
@@ -186,6 +189,7 @@ export function parsePublishState(text: string | undefined): PublishState | null
           ? raw.changedFiles
           : null,
       rereview: raw.rereview === true,
+      expectReview: raw.expectReview === true,
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
     };
   } catch {
@@ -698,7 +702,58 @@ export function bonkThreads(nodes: ReviewThreadNode[], login: string): BonkThrea
   return threads;
 }
 
-function readReviewFile(path: string): ReviewFile | null {
+// A review is complete when the model wrote a valid findings file, or at
+// least answered with a verdict line (repository prompts written before the
+// file existed may skip it). Anything else is a failed attempt.
+export function reviewCompleted(
+  reviewFile: ReviewFile | null,
+  responseBody: string | undefined,
+): boolean {
+  return reviewFile !== null || REVIEW_VERDICT_PATTERN.test(responseBody ?? "");
+}
+
+const RUN_RESPONSE_QUERY = `
+query($owner: String!, $repo: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      comments(last: 50) { nodes { databaseId author { __typename login } body } }
+    }
+  }
+}`;
+
+// opencode links every response it posts to the run that produced it, so the
+// run URL identifies this run's newest comment among Bonk's comments.
+export async function findRunResponse(
+  token: string,
+  repository: string,
+  prNumber: string,
+  runId: string,
+): Promise<{ login: string; response: GraphQLComment | null }> {
+  const { owner, repo } = splitRepository(repository);
+  const data = await githubGraphQL<{
+    viewer?: GraphQLAuthor | null;
+    repository?: { pullRequest?: { comments?: { nodes?: GraphQLComment[] } } | null };
+  }>(token, RUN_RESPONSE_QUERY, { owner, repo, number: Number.parseInt(prNumber, 10) });
+  const login = botLogin(data.viewer);
+  const runLink = `/${repository}/actions/runs/${runId})`;
+  const response =
+    (data.repository?.pullRequest?.comments?.nodes ?? [])
+      .toReversed()
+      .find((comment) => isBonk(comment.author, login) && comment.body?.includes(runLink)) ?? null;
+  return { login, response };
+}
+
+export async function deleteComment(
+  token: string,
+  repository: string,
+  id: number,
+): Promise<boolean> {
+  const resp = await githubRest(token, "DELETE", `/repos/${repository}/issues/comments/${id}`);
+  return resp.ok;
+}
+
+export function readReviewFile(path: string): ReviewFile | null {
   if (!path || !existsSync(path)) return null;
   const parsed = parseReviewFile(readFileSync(path, "utf8"));
   if (!parsed) core.warning(`Ignoring malformed review file ${path}`);
@@ -711,7 +766,6 @@ query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       headRefOid
-      comments(last: 100) { nodes { databaseId author { __typename login } body } }
       reviews(last: 20) { nodes { databaseId author { __typename login } } }
     }
   }
@@ -719,7 +773,6 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 interface PublishPullRequest {
   headRefOid?: string;
-  comments?: { nodes?: GraphQLComment[] };
   reviews?: { nodes?: GraphQLReview[] };
 }
 
@@ -742,15 +795,7 @@ export async function publishReview(): Promise<void> {
     repository?: { pullRequest?: PublishPullRequest | null };
   }>(token, PUBLISH_QUERY, { owner, repo, number: Number.parseInt(prNumber, 10) });
   const pr = data.repository?.pullRequest;
-  const login = botLogin(data.viewer);
-  const comments = pr?.comments?.nodes ?? [];
-
-  // opencode links every response it posts to the run that produced it, so
-  // the run URL identifies this run's comment among Bonk's comments.
-  const runLink = `/${repository}/actions/runs/${runId})`;
-  const response = comments
-    .toReversed()
-    .find((comment) => isBonk(comment.author, login) && comment.body?.includes(runLink));
+  const { login, response } = await findRunResponse(token, repository, prNumber, runId);
   if (!response?.databaseId || !response.body) {
     core.info("No Bonk response for this run found; skipping review publishing.");
     return;
@@ -770,6 +815,12 @@ export async function publishReview(): Promise<void> {
     )
   ) {
     core.info("This run did not review the pull request; leaving its response as is.");
+    return;
+  }
+  // run-opencode.ts already fails such runs; never publish their text as the
+  // review summary if one slips through.
+  if (state.expectReview && !reviewCompleted(reviewFile, response.body)) {
+    core.warning("The run ended without a review; leaving the previous summary untouched.");
     return;
   }
 
@@ -876,13 +927,8 @@ export async function publishReview(): Promise<void> {
   core.info(`Updated review summary ${target} for ${state.head}`);
   if (target === response.databaseId) return;
 
-  const deleted = await githubRest(
-    token,
-    "DELETE",
-    `/repos/${repository}/issues/comments/${response.databaseId}`,
-  );
-  if (!deleted.ok) {
-    core.warning(`Failed to remove the duplicate response (${deleted.status})`);
+  if (!(await deleteComment(token, repository, response.databaseId))) {
+    core.warning("Failed to remove the duplicate response");
   }
 }
 

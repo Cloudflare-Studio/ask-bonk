@@ -30,6 +30,9 @@ async function main() {
   const { owner, repo } = context.repo;
   const rawStatus = process.env.OPENCODE_STATUS || "unknown";
   const status = resolveFinalizeStatus(process.env);
+  if (process.env.OPENCODE_FAILURE_CAUSE) {
+    core.info(`OpenCode failure cause: ${process.env.OPENCODE_FAILURE_CAUSE}`);
+  }
 
   let oidcToken: string;
   try {

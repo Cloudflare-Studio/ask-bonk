@@ -806,6 +806,8 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             lastReviewId: reviewContext.lastReviewId,
             changedFiles: reviewContext.changedFiles,
             rereview: reviewContext.rereview,
+            expectReview:
+              process.env.EVENT_NAME === "pull_request" || /\breview\b/i.test(userRequest),
             reviewFile,
           },
         }

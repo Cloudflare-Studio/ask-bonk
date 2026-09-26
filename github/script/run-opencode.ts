@@ -3,6 +3,13 @@
 import { existsSync } from "fs";
 import { pathToFileURL } from "url";
 import { appendGitHubValue } from "./context";
+import {
+  deleteComment,
+  findRunResponse,
+  parsePublishState,
+  readReviewFile,
+  reviewCompleted,
+} from "./review-publish";
 
 const DEFAULT_TIMEOUT = "45m";
 const DEFAULT_RETRIES = 2;
@@ -37,9 +44,37 @@ const RETRYABLE_FAILURE_PATTERNS = [
   /\bstream\b.*\b(?:error|closed|reset|terminated)\b/i,
 ];
 
+// Exit code for a review run that finished without producing a review.
+export const INCOMPLETE_REVIEW_EXIT_CODE = 3;
+
 export interface OpenCodeFailure {
   exitCode: number;
   output: string;
+}
+
+export type FailureCause =
+  | "timeout"
+  | "content_filter"
+  | "provider_errors"
+  | "permission_blocked"
+  | "incomplete_review";
+
+const CONTENT_FILTER_PATTERN =
+  /content[_ -]?(?:filter|policy|management)|ResponsibleAIPolicyViolation|blocked by (?:content|safety)|safety (?:system|filter)/i;
+const PROVIDER_ERROR_PATTERN =
+  /\b(?:500|502|503|504|529)\b|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout|\boverloaded\b/gi;
+const PERMISSION_BLOCKED_PATTERN =
+  /\bpermission\b[^\n]*\b(?:ask|asked|requested|rejected|denied|required)\b|doom[_ ]loop/i;
+
+// Best-effort label for logs and the finalize step; null when nothing matches.
+export function classifyOpenCodeFailure({ exitCode, output }: OpenCodeFailure): FailureCause | null {
+  if (exitCode === 0) return null;
+  if (exitCode === INCOMPLETE_REVIEW_EXIT_CODE) return "incomplete_review";
+  if (exitCode === 124) return "timeout";
+  if (CONTENT_FILTER_PATTERN.test(output)) return "content_filter";
+  if ((output.match(PROVIDER_ERROR_PATTERN) ?? []).length >= 2) return "provider_errors";
+  if (PERMISSION_BLOCKED_PATTERN.test(output)) return "permission_blocked";
+  return null;
 }
 
 export function isRetryableOpenCodeFailure({ exitCode, output }: OpenCodeFailure): boolean {
@@ -226,9 +261,36 @@ async function runOpenCodeAttempt(
   }
 }
 
-function writeExitCode(exitCode: number): void {
+function writeExitCode(exitCode: number, output = ""): void {
   const outputFile = process.env.GITHUB_OUTPUT;
   if (outputFile) appendGitHubValue(outputFile, "exit_code", String(exitCode));
+  const cause = classifyOpenCodeFailure({ exitCode, output });
+  if (!cause) return;
+  console.log(`OpenCode failure cause: ${cause}`);
+  if (outputFile) appendGitHubValue(outputFile, "failure_cause", cause);
+}
+
+// A review run must end with a review. OpenCode exits 0 as long as it posted
+// something, so check for the findings file or a verdict line. An attempt
+// without either is removed so its text never stands in for a review.
+// GitHub API failures count as complete: this check must not fail good runs.
+export async function checkReviewCompletion(): Promise<boolean> {
+  const state = parsePublishState(process.env.REVIEW_STATE);
+  if (!state?.expectReview || readReviewFile(state.reviewFile)) return true;
+  const token = process.env.GH_TOKEN;
+  const repository = process.env.GITHUB_REPOSITORY || "";
+  const prNumber = process.env.PR_NUMBER || "";
+  const runId = process.env.GITHUB_RUN_ID || "";
+  if (!token || !repository || !prNumber || !runId) return true;
+  try {
+    const { response } = await findRunResponse(token, repository, prNumber, runId);
+    if (response && reviewCompleted(null, response.body)) return true;
+    if (response?.databaseId) await deleteComment(token, repository, response.databaseId);
+    return false;
+  } catch (error) {
+    console.log(`Could not check the review: ${error}`);
+    return true;
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -280,8 +342,17 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     const result = await runOpenCodeAttempt(remainingMs, configContent);
 
     if (result.exitCode === 0) {
-      writeExitCode(result.exitCode);
-      return result.exitCode;
+      if (await checkReviewCompletion()) {
+        writeExitCode(result.exitCode);
+        return result.exitCode;
+      }
+      console.log("::warning::OpenCode finished without a review (no findings file and no verdict line)");
+      if (attempt < maxAttempts && timeoutMs - (Date.now() - startedAt) > 0) {
+        console.log("Retrying the review");
+        continue;
+      }
+      writeExitCode(INCOMPLETE_REVIEW_EXIT_CODE);
+      return INCOMPLETE_REVIEW_EXIT_CODE;
     }
 
     const canRetry = attempt < maxAttempts && isRetryableOpenCodeFailure(result);
@@ -289,7 +360,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
       if (attempt > 1) {
         console.log(`opencode github run failed after ${attempt} attempts with exit code ${result.exitCode}`);
       }
-      writeExitCode(result.exitCode);
+      writeExitCode(result.exitCode, result.output);
       return result.exitCode;
     }
 
@@ -297,7 +368,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     const delayMs = retryDelayMs(attempt);
     if (delayMs >= remainingAfterAttemptMs) {
       console.log("Transient opencode failure detected, but no retry budget remains");
-      writeExitCode(result.exitCode);
+      writeExitCode(result.exitCode, result.output);
       return result.exitCode;
     }
 

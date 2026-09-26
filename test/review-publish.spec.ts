@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   anchorFinding,
@@ -15,6 +15,7 @@ import {
   type BonkThread,
   type Finding,
 } from "../github/script/review-publish";
+import { checkReviewCompletion } from "../github/script/run-opencode";
 import {
   findStickyComment,
   formatReviewStateMarker,
@@ -624,6 +625,53 @@ describe("Bonk review publishing", () => {
     const sticky = await findStickyComment("token", "owner/repo", "5", "ask-bonk");
     expect(sticky?.databaseId).toBe(10);
     expect(befores).toEqual([null, "cursor-1"]);
+  });
+
+  it.each([
+    { label: "a findings file", file: true, text: "Here you go.", complete: true },
+    { label: "a verdict line", file: false, text: "LGTM", complete: true },
+    { label: "neither", file: false, text: "I looked at the diff and", complete: false },
+  ])("treats a review run with $label as complete: $complete", async ({ file, text, complete }) => {
+    const path = "/tmp/bonk-test/completion.json";
+    rmSync(path, { force: true });
+    if (file) writeReviewFile("completion", { findings: [] });
+    const requests = mockGitHub({ comments: { nodes: [response(text)] } });
+    const env = publishEnv(path);
+    const state = { ...JSON.parse(env.REVIEW_STATE), expectReview: true };
+
+    const result = await withEnv({ ...env, REVIEW_STATE: JSON.stringify(state) }, () =>
+      checkReviewCompletion(),
+    );
+
+    expect(result).toBe(complete);
+    // A failed attempt's text is removed so it never stands in for a review.
+    const deleted = requests.filter((request) => request.method === "DELETE");
+    expect(deleted.map((request) => request.url)).toEqual(
+      complete ? [] : ["https://api.github.com/repos/owner/repo/issues/comments/11"],
+    );
+  });
+
+  it("does not check answers to requests that were not reviews", async () => {
+    const requests = mockGitHub({ comments: { nodes: [response("It retries three times.")] } });
+    await expect(
+      withEnv(publishEnv("/tmp/bonk-test/absent.json"), () => checkReviewCompletion()),
+    ).resolves.toBe(true);
+    expect(requests).toEqual([]);
+  });
+
+  it("never publishes a review run that produced no review", async () => {
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: { nodes: [stickyComment, response("I looked at the diff and")] },
+      reviews: { nodes: [] },
+    });
+    const env = publishEnv("/tmp/bonk-test/absent.json", { EVENT_NAME: "pull_request" });
+    const state = { ...JSON.parse(env.REVIEW_STATE), expectReview: true };
+
+    await withEnv({ ...env, REVIEW_STATE: JSON.stringify(state) }, () => publishReview());
+
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
+    expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   });
 
   it("leaves non-review answers as normal comments", async () => {

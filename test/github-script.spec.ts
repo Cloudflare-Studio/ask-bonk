@@ -16,6 +16,8 @@ import {
 } from "../github/script/orchestrate";
 import {
   buildOpenCodeConfigContent,
+  classifyOpenCodeFailure,
+  INCOMPLETE_REVIEW_EXIT_CODE,
   isRetryableOpenCodeFailure,
   resolveRunLimits,
 } from "../github/script/run-opencode";
@@ -545,6 +547,7 @@ describe("GitHub Action re-review context", () => {
       lastReviewId: 0,
       changedFiles: ["src/a.ts"],
       rereview: true,
+      expectReview: true,
       reviewFile,
     });
     expect(result.value).toContain(`review_output_file: ${reviewFile}`);
@@ -1169,6 +1172,33 @@ describe("GitHub Action script HTTP retry", () => {
 
     expect(response.status).toBe(400);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitHub Action OpenCode failure causes", () => {
+  it.each([
+    { exitCode: 124, output: "", cause: "timeout" },
+    { exitCode: INCOMPLETE_REVIEW_EXIT_CODE, output: "", cause: "incomplete_review" },
+    {
+      exitCode: 1,
+      output: 'Error: {"finish_reason":"content_filter"}',
+      cause: "content_filter",
+    },
+    {
+      exitCode: 1,
+      output: "provider returned 502 Bad Gateway\nretry: 503 Service Unavailable",
+      cause: "provider_errors",
+    },
+    { exitCode: 1, output: "one 500 error", cause: null },
+    {
+      exitCode: 1,
+      output: "permission requested for external_directory, waiting for ask",
+      cause: "permission_blocked",
+    },
+    { exitCode: 1, output: "something else", cause: null },
+    { exitCode: 0, output: "content_filter", cause: null },
+  ])("classifies $cause", ({ exitCode, output, cause }) => {
+    expect(classifyOpenCodeFailure({ exitCode, output })).toBe(cause);
   });
 });
 

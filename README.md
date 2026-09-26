@@ -230,6 +230,31 @@ Accepts a semver string (e.g., `"1.2.16"`, `"1.2.16-beta.1"`), `"latest"`, or `"
 
 The `opencode_dev` input takes precedence over `opencode_version` -- setting `opencode_dev: "true"` always installs from the dev channel regardless of the pinned version.
 
+#### Timeouts and Retries
+
+Bonk retries OpenCode after transient provider or network failures (dropped streams, connection resets) and stops it once the total time budget is spent. Both limits are configurable:
+
+```yaml
+jobs:
+  bonk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # ...
+      - name: Run Bonk
+        uses: ask-bonk/ask-bonk/github@main
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: "opencode/claude-opus-4-5"
+          timeout: "25m" # total budget across all attempts: ms, s, m, or h
+          retries: "1"
+```
+
+When the budget runs out, Bonk stops OpenCode and reports the run as timed out. Keep `timeout` a few minutes below the job's `timeout-minutes` (GitHub's default is 360). When the job limit is hit first, GitHub cancels the job mid-run: Bonk's reporting and credential cleanup steps may not run, and any failure comment says the run was cancelled rather than that OpenCode ran out of time. Timeouts, hangs, and cancellations are not retried: the budget covers all attempts, so a run that times out has no time left for another.
+
+`OPENCODE_TIMEOUT` and `OPENCODE_RETRIES` environment variables are still honoured when the inputs are not set.
+
 #### Scheduled Tasks
 
 ```yaml
@@ -297,6 +322,8 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `token_permissions`  | Scope the installation token: `NO_PUSH`, `WRITE`, or JSON                        | No       |
 | `opencode_version`   | Pin to a specific OpenCode version (e.g., `"1.2.16"`). Defaults to `"latest"`.   | No       |
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
+| `timeout`            | Total OpenCode time budget including retries (e.g., `"30m"`). Defaults to `45m`. | No       |
+| `retries`            | Retries after transient provider/network failures. Defaults to `2`.              | No       |
 | `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
 | `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
 | `variant`            | Model variant for provider-specific reasoning effort (e.g., `high`, `max`)       | No       |

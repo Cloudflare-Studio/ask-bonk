@@ -105,6 +105,24 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+// The action's `timeout`/`retries` inputs arrive as BONK_*; the OPENCODE_*
+// variables predate those inputs and remain supported for existing workflows.
+export function resolveRunLimits(env: Record<string, string | undefined>): {
+  timeoutMs: number;
+  retries: number;
+} {
+  const rawTimeout = env.BONK_TIMEOUT?.trim() || env.OPENCODE_TIMEOUT?.trim() || DEFAULT_TIMEOUT;
+  let timeoutMs = parseDurationMs(rawTimeout);
+  if (timeoutMs === null || timeoutMs <= 0) {
+    console.warn(`Invalid OpenCode timeout "${rawTimeout}"; using ${DEFAULT_TIMEOUT}`);
+    timeoutMs = parseDurationMs(DEFAULT_TIMEOUT)!;
+  }
+
+  const rawRetries = env.BONK_RETRIES?.trim() || env.OPENCODE_RETRIES?.trim();
+  const retries = parsePositiveInteger(rawRetries, DEFAULT_RETRIES);
+  return { timeoutMs, retries };
+}
+
 function retryDelayMs(attempt: number): number {
   const baseDelayMs = parsePositiveInteger(process.env.OPENCODE_RETRY_BASE_DELAY_MS, DEFAULT_BASE_DELAY_MS);
   return Math.min(baseDelayMs * 2 ** (attempt - 1), 60_000);
@@ -244,9 +262,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     return 2;
   }
 
-  const timeoutMs = parseDurationMs(process.env.OPENCODE_TIMEOUT || DEFAULT_TIMEOUT) ??
-    parseDurationMs(DEFAULT_TIMEOUT)!;
-  const retries = parsePositiveInteger(process.env.OPENCODE_RETRIES, DEFAULT_RETRIES);
+  const { timeoutMs, retries } = resolveRunLimits(process.env);
   const maxAttempts = retries + 1;
   const startedAt = Date.now();
 

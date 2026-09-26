@@ -16,7 +16,7 @@ export default defineWorkflow({
     owner: v.string(),
     repo: v.string(),
     run_id: v.number(),
-    status: v.picklist(["success", "failure", "cancelled", "skipped"]),
+    status: v.picklist(["success", "failure", "cancelled", "skipped", "timeout"]),
     issue_number: v.optional(v.number()),
     run_url: v.optional(v.string()),
     actor: v.optional(v.string()),

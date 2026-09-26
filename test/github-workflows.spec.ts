@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { internalWorkflowHeaders, internalWorkflowRoute } from "../src/internal-workflows";
 import { runFinalizeWorkflowJob, runTrackWorkflowJob } from "../src/github-workflow-jobs";
 import type { Env } from "../src/types";
+import finalizeWorkflow from "../src/workflows/github-finalize";
 
 const mocks = vi.hoisted(() => ({
   getAgentByName: vi.fn(),
@@ -85,6 +87,22 @@ describe("GitHub Flue workflow jobs", () => {
       "octocat",
       false,
     );
+  });
+
+  it("accepts timeout as a finalize status", () => {
+    const input = {
+      owner: "test-org",
+      repo: "test-repo",
+      run_id: 42,
+      status: "timeout",
+      issue_number: 7,
+      run_url: "https://github.com/test-org/test-repo/actions/runs/42",
+    };
+
+    expect(v.safeParse(finalizeWorkflow.action.input!, input).success).toBe(true);
+    expect(
+      v.safeParse(finalizeWorkflow.action.input!, { ...input, status: "timed_out" }).success,
+    ).toBe(false);
   });
 
   it("keeps finalize best-effort when RepoAgent finalization fails", async () => {

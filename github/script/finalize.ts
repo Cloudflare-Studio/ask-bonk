@@ -9,6 +9,9 @@ export function resolveFinalizeStatus(env: Record<string, string | undefined>): 
   const rawStatus = env.OPENCODE_STATUS || "unknown";
   if (rawStatus === "success") return rawStatus;
 
+  // run-opencode.ts exits 124 when its own time budget runs out.
+  if (env.OPENCODE_EXIT_CODE === "124") return "timeout";
+
   // JOB_STATUS is `job.status`. On job cancellation the runner marks the job
   // cancelled before re-evaluating composite steps, so a run cancelled before
   // or during OpenCode reports "cancelled" even though GitHub marks the

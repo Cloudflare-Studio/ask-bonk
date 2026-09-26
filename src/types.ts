@@ -199,7 +199,7 @@ export interface FinalizeWorkflowRequest {
   owner: string;
   repo: string;
   run_id: number;
-  status: "success" | "failure" | "cancelled" | "skipped";
+  status: "success" | "failure" | "cancelled" | "skipped" | "timeout";
   // Optional context for posting failure comments when the run was never
   // tracked or was already removed from activeRuns (e.g., polling timeout
   // removed it before the action's finalize step ran).

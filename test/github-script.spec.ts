@@ -17,6 +17,7 @@ import {
 import {
   buildOpenCodeConfigContent,
   isRetryableOpenCodeFailure,
+  resolveRunLimits,
 } from "../github/script/run-opencode";
 import { resolvePermissions } from "../src/oidc";
 
@@ -925,5 +926,65 @@ describe("GitHub Action OpenCode retry classification", () => {
         output: "TypeScript compilation failed",
       }),
     ).toBe(false);
+  });
+});
+
+describe("GitHub Action OpenCode run limits", () => {
+  it("defaults to a 45 minute budget with two retries", () => {
+    expect(resolveRunLimits({})).toEqual({ timeoutMs: 45 * 60 * 1000, retries: 2 });
+  });
+
+  it("prefers action inputs over legacy environment variables", () => {
+    expect(
+      resolveRunLimits({
+        BONK_TIMEOUT: "20m",
+        BONK_RETRIES: "0",
+        OPENCODE_TIMEOUT: "1h",
+        OPENCODE_RETRIES: "5",
+      }),
+    ).toEqual({ timeoutMs: 20 * 60 * 1000, retries: 0 });
+  });
+
+  it("keeps legacy environment variables when inputs are empty", () => {
+    expect(
+      resolveRunLimits({
+        BONK_TIMEOUT: "",
+        BONK_RETRIES: "",
+        OPENCODE_TIMEOUT: "1h",
+        OPENCODE_RETRIES: "5",
+      }),
+    ).toEqual({ timeoutMs: 60 * 60 * 1000, retries: 5 });
+  });
+
+  it("falls back to defaults for invalid values", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(resolveRunLimits({ BONK_TIMEOUT: "forever", BONK_RETRIES: "-1" })).toEqual({
+        timeoutMs: 45 * 60 * 1000,
+        retries: 2,
+      });
+      expect(resolveRunLimits({ BONK_TIMEOUT: "0" }).timeoutMs).toBe(45 * 60 * 1000);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("GitHub Action finalize timeout status", () => {
+  it("reports Bonk's own OpenCode timeout as timeout", () => {
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "failure", OPENCODE_EXIT_CODE: "124" })).toBe(
+      "timeout",
+    );
+  });
+
+  it("keeps other OpenCode failures as failure", () => {
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "failure", OPENCODE_EXIT_CODE: "1" })).toBe(
+      "failure",
+    );
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "skipped" })).toBe("failure");
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "success", OPENCODE_EXIT_CODE: "0" })).toBe(
+      "success",
+    );
   });
 });

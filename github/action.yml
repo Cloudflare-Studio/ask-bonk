@@ -42,6 +42,14 @@ inputs:
     required: false
     default: "true"
 
+  timeout:
+    description: "Total time budget for OpenCode, including retries (e.g., '30m', '1h'). Keep it below the job's timeout-minutes so Bonk can report the result. Defaults to 45m."
+    required: false
+
+  retries:
+    description: "How many times to retry OpenCode after a transient provider or network failure. Defaults to 2."
+    required: false
+
   variant:
     description: "Model variant for provider-specific reasoning effort (e.g., high, max, minimal)"
     required: false
@@ -222,6 +230,10 @@ runs:
         VARIANT: ${{ inputs.variant }}
         PROMPT: ${{ steps.preflight.outputs.value }}
         BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
+        # Kept separate from OPENCODE_TIMEOUT/OPENCODE_RETRIES so an empty input
+        # does not clobber values callers already set in the step env.
+        BONK_TIMEOUT: ${{ inputs.timeout }}
+        BONK_RETRIES: ${{ inputs.retries }}
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
@@ -247,6 +259,7 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
+        OPENCODE_EXIT_CODE: ${{ steps.opencode.outputs.exit_code }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
         # Composite steps see the job's cancellation (the runner updates
         # job.status before re-evaluating their conditions); other failures

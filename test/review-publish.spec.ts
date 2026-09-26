@@ -725,6 +725,57 @@ describe("Bonk review publishing", () => {
     );
   });
 
+  it("takes over an earlier review summary that has no review-state marker", async () => {
+    const earlier = (databaseId: number, text: string, author = bonk) => ({
+      databaseId,
+      author,
+      body: `${text}\n\n[github run](/owner/repo/actions/runs/${databaseId})`,
+    });
+    const summary = earlier(
+      20,
+      "I'm Bonk, and I've done a quick review of your PR.\n\n1. High: Startup failures lose details.",
+    );
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: {
+        nodes: [
+          summary,
+          // Newer, but an answer to another request, not a review.
+          earlier(21, "It retries three times."),
+          earlier(22, "I'm Bonk, and I've done a quick review of your PR.", human),
+          { databaseId: 23, author: bonk, body: "@alice Bonk workflow was cancelled." },
+          response("LGTM!"),
+        ],
+      },
+      reviews: { nodes: [] },
+    });
+
+    await withEnv(publishEnv(writeReviewFile("adopt", { findings: [] })), () =>
+      publishReview(),
+    );
+
+    const patch = requests.find((request) => request.method === "PATCH");
+    expect(patch?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/20");
+    expect(patchedBody(patch)).not.toContain("Startup failures");
+    expect(parseReviewStateMarker(patchedBody(patch))?.head).toBe(HEAD);
+    const deleted = requests.find((request) => request.method === "DELETE");
+    expect(deleted?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");
+
+    // Answers alone are never taken over.
+    vi.restoreAllMocks();
+    const answersOnly = mockGitHub({
+      headRefOid: HEAD,
+      comments: { nodes: [earlier(21, "It retries three times."), response("LGTM!")] },
+      reviews: { nodes: [] },
+    });
+    await withEnv(publishEnv(writeReviewFile("adopt-none", { findings: [] })), () =>
+      publishReview(),
+    );
+    expect(answersOnly.find((request) => request.method === "PATCH")?.url).toBe(
+      "https://api.github.com/repos/owner/repo/issues/comments/11",
+    );
+  });
+
   it("pages back through comments to find the sticky summary", async () => {
     const befores: unknown[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {

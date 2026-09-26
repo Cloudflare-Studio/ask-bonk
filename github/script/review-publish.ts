@@ -27,6 +27,7 @@ import {
   formatReviewStateMarker,
   githubGraphQL,
   isBonk,
+  parseReviewStateMarker,
   splitRepository,
   stripOpencodeFooter,
   stripReviewState,
@@ -444,6 +445,15 @@ export function stripVerdict(text: string): string {
     lines.shift();
   }
   return lines.join("\n").trim();
+}
+
+// A review summary Bonk posted before it kept a review-state marker: posted
+// by opencode (it ends with the run link) and opening like a review, with a
+// verdict line or Bonk's review greeting. Answers to other requests do not.
+export function isEarlierSummary(body: string): boolean {
+  const text = stripOpencodeFooter(body);
+  if (text === body) return false;
+  return REVIEW_VERDICT_PATTERN.test(text) || /^\s*I'm Bonk\b[^\n]*\breview/i.test(text);
 }
 
 export function parseSpecialistStatuses(
@@ -1019,7 +1029,19 @@ export async function publishReview(): Promise<void> {
 
   // One review summary per pull request: the newest Bonk comment carrying a
   // review-state marker is edited in place, and this run's response goes.
-  const sticky = await findStickyComment(token, repository, prNumber, login, response.databaseId);
+  // Before the first marker, an earlier review summary is taken over so the
+  // pull request does not keep an outdated one next to the new one.
+  const sticky = await findStickyComment(
+    token,
+    repository,
+    prNumber,
+    login,
+    response.databaseId,
+    (comment) => isEarlierSummary(comment.body || ""),
+  );
+  if (sticky?.databaseId && !parseReviewStateMarker(sticky.body || "")) {
+    core.info(`Taking over earlier review summary ${sticky.databaseId}`);
+  }
   const target = sticky?.databaseId ?? response.databaseId;
   const patched = await githubRest(
     token,

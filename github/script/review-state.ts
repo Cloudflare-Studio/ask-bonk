@@ -532,16 +532,19 @@ query($owner: String!, $repo: String!, $number: Int!, $before: String) {
 }`;
 
 // Pages backwards from the newest comment and returns the first Bonk comment
-// carrying a review-state marker, i.e. the sticky review summary.
+// carrying a review-state marker, i.e. the sticky review summary. Without
+// one, it returns the newest Bonk comment `adopt` accepts, if any.
 export async function findStickyComment(
   token: string,
   repository: string,
   prNumber: string,
   login: string,
   exclude?: number,
+  adopt?: (comment: GraphQLComment) => boolean,
 ): Promise<GraphQLComment | null> {
   const { owner, repo } = splitRepository(repository);
   let before: string | undefined;
+  let adopted: GraphQLComment | null = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const data = await githubGraphQL<{
       repository?: { pullRequest?: { comments?: Page<GraphQLComment> } | null };
@@ -552,19 +555,22 @@ export async function findStickyComment(
       before: before ?? null,
     });
     const comments = data.repository?.pullRequest?.comments;
-    const sticky = (comments?.nodes ?? [])
+    const candidates = (comments?.nodes ?? [])
       .toReversed()
-      .find(
+      .filter(
         (comment) =>
           (exclude === undefined || comment.databaseId !== exclude) &&
-          isBonk(comment.author, login) &&
-          parseReviewStateMarker(comment.body || "") !== null,
+          isBonk(comment.author, login),
       );
+    const sticky = candidates.find(
+      (comment) => parseReviewStateMarker(comment.body || "") !== null,
+    );
     if (sticky) return sticky;
-    if (!comments?.pageInfo?.hasPreviousPage || !comments.pageInfo.startCursor) return null;
+    adopted ??= (adopt && candidates.find(adopt)) || null;
+    if (!comments?.pageInfo?.hasPreviousPage || !comments.pageInfo.startCursor) return adopted;
     before = comments.pageInfo.startCursor;
   }
-  return null;
+  return adopted;
 }
 
 const REVIEWS_PAGE_QUERY = `

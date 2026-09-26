@@ -361,27 +361,32 @@ export function verifyQuote(quote: RuleQuote, workspace: string): boolean {
 }
 
 // Severity rules the model is told about, applied in code so they hold
-// regardless: a finding in a test file drops one level, and one more when the
-// code carries an explicit justification, never below suggestion. A review
-// asks at most one question; further questions become info. A quoted rule
-// that does not appear verbatim in the file it names is removed.
+// regardless: a finding drops one level when the code carries an explicit
+// justification, never below suggestion, and a finding in a test file is
+// dropped unless it is still blocking or a warning, so reviews do not ask for
+// churn in test code nobody would change. A review asks at most one question;
+// further questions become info. A quoted rule that does not appear verbatim
+// in the file it names is removed.
 export function applySeverityRules(findings: Finding[], workspace: string): Finding[] {
   let asked = false;
-  return findings.map((finding) => {
+  return findings.flatMap((finding) => {
     let severity = finding.severity;
     if (severity === "question") {
       if (asked) severity = "info";
       asked = true;
     }
-    if (finding.path && isTestPath(finding.path)) severity = DEMOTION[severity];
     if (finding.justified) severity = DEMOTION[severity];
+    if (finding.path && isTestPath(finding.path) && !INLINE_SEVERITIES.has(severity)) {
+      core.info(`Dropping a ${severity} finding in test file ${finding.path}`);
+      return [];
+    }
     let quote = finding.quote;
     if (quote && !verifyQuote(quote, workspace)) {
       core.warning(`Dropping a quote not found verbatim in ${quote.path}`);
       quote = undefined;
     }
     const { quote: _original, ...rest } = finding;
-    return { ...rest, severity, ...(quote ? { quote } : {}) };
+    return [{ ...rest, severity, ...(quote ? { quote } : {}) }];
   });
 }
 
@@ -403,9 +408,14 @@ export interface VerdictCounts {
 }
 
 // The verdict line comes from the findings, not from the model's text, so the
-// counts always match what was posted.
+// counts always match what was posted. Only blocking findings and warnings
+// count as findings; info, suggestions and questions are notes, which do not
+// stand between a pull request and LGTM.
 export function computeVerdict(counts: VerdictCounts, rereview: boolean): string {
-  const total = counts.findings.length;
+  const serious = counts.findings.filter(isInline);
+  const total = serious.length;
+  const notes = counts.findings.length - total;
+  const noteText = `${notes} note${notes === 1 ? "" : "s"}`;
   if (rereview) {
     const line = `Since last review: ${counts.resolved ?? 0} resolved, ${counts.stillOpen ?? 0} still open, ${counts.added ?? 0} new.`;
     return total === 0 ? `${line}\nLGTM!` : line;
@@ -415,12 +425,13 @@ export function computeVerdict(counts: VerdictCounts, rereview: boolean): string
     (severity) =>
       [
         severity,
-        counts.findings.filter((finding) => finding.severity === severity).length,
+        serious.filter((finding) => finding.severity === severity).length,
       ] as const,
   )
     .filter(([, count]) => count > 0)
     .map(([severity, count]) => plural(count, severity));
-  return `Review: ${total} finding${total === 1 ? "" : "s"} (${breakdown.join(", ")}).`;
+  const extra = notes > 0 ? `; ${noteText}` : "";
+  return `Review: ${total} finding${total === 1 ? "" : "s"} (${breakdown.join(", ")}${extra}).`;
 }
 
 // Drops the model's own verdict lines from the top of its response.

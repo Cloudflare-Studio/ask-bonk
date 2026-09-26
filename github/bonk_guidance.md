@@ -54,7 +54,9 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
   - `suggestion`: an optional improvement;
   - `question`: you need an answer before you can judge the code. Ask at most one question per review.
 - Blocking and warning findings are posted inline; info, suggestion, and question findings are listed in the summary.
-- Set `"justified": true` when the code carries an explicit comment justifying what you flag. Bonk lowers the severity of findings in test files by one level and of justified findings by one more, never below `suggestion`.
+- Set `"justified": true` when the code carries an explicit comment justifying what you flag. Bonk lowers the severity of justified findings by one level, never below `suggestion`.
+- Report a finding only if a maintainer reading it would agree it is right and worth changing. When in doubt, leave it out.
+- In test files, report only a test that can pass while the code under test is broken, a test that is flaky or can hang or crash CI, or a missing test for behavior the pull request changes. Bonk drops test-file findings below `warning`.
 - Never raise problems that already existed in code the pull request does not change.
 - Cite a rule or standard only through `"quote": {"path": "<repository file>", "text": "<exact text>"}`, copied verbatim from a file you read. Bonk checks the text against that file and removes a quote it cannot find. Do not paraphrase rules in `body` as if quoting them.
 - Bonk computes the verdict line from the file and replaces yours: `Review: <count> findings (<per-severity counts>).`, `Since last review: ...` from the thread follow-up, or `LGTM!` when there are no findings. Still start your response with your own verdict line. Do not repeat the file's findings in the final response; Bonk lists the ones it does not post inline.

@@ -321,7 +321,9 @@ describe("Bonk review publishing", () => {
         finding({}),
         finding({ path: "src/a-test.c++" }),
         finding({ path: "src/tests/a.js", justified: true }),
-        finding({ path: "test/b.spec.ts", severity: "info", justified: true }),
+        finding({ path: "src/tests/c.js", severity: "warning", justified: true }),
+        finding({ path: "test/b.spec.ts", severity: "info" }),
+        finding({ path: "src/b.c++", severity: "info", justified: true }),
         finding({ severity: "question" }),
         finding({ severity: "question" }),
         finding({
@@ -334,9 +336,11 @@ describe("Bonk review publishing", () => {
     );
     expect(result.map((entry) => entry.severity)).toEqual([
       "blocking",
-      // One level down in a test file, one more when justified, never below suggestion.
+      // Test files keep blocking and warning findings as they are, and drop the
+      // rest, including a warning that its justification demotes to info.
+      "blocking",
       "warning",
-      "info",
+      // One level down when justified, never below suggestion.
       "suggestion",
       // At most one question per review.
       "question",
@@ -376,9 +380,16 @@ describe("Bonk review publishing", () => {
         false,
       ),
     ).toBe("Review: 3 findings (1 blocking, 2 warnings).");
-    expect(computeVerdict({ findings: [finding("info")] }, false)).toBe(
-      "Review: 1 finding (1 info).",
+    // Info, suggestions and questions are notes: they do not block LGTM.
+    expect(computeVerdict({ findings: [finding("info"), finding("suggestion")] }, false)).toBe(
+      "LGTM!",
     );
+    expect(computeVerdict({ findings: [finding("warning"), finding("info")] }, false)).toBe(
+      "Review: 1 finding (1 warning; 1 note).",
+    );
+    expect(
+      computeVerdict({ findings: [finding("info")], resolved: 1, stillOpen: 0, added: 0 }, true),
+    ).toBe("Since last review: 1 resolved, 0 still open, 0 new.\nLGTM!");
     expect(computeVerdict({ findings: [], resolved: 2, stillOpen: 0, added: 0 }, true)).toBe(
       "Since last review: 2 resolved, 0 still open, 0 new.\nLGTM!",
     );
@@ -464,7 +475,7 @@ describe("Bonk review publishing", () => {
     expect(patch?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/10");
     const body = patchedBody(patch);
     // The verdict is computed from the findings; the model's line is replaced.
-    expect(body.startsWith("Review: 3 findings (1 blocking, 1 warning, 1 suggestion).\n\n")).toBe(
+    expect(body.startsWith("Review: 2 findings (1 blocking, 1 warning; 1 note).\n\n")).toBe(
       true,
     );
     expect(body).not.toContain("Review: 2 findings.");

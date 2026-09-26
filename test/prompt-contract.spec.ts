@@ -54,6 +54,8 @@ describe("Bonk prompt contract", () => {
   it("makes the main run the judge of specialist findings", () => {
     expect(guidance).toContain("Verify every specialist finding against the code before keeping it.");
     expect(guidance).toContain("Write the result as the single findings file.");
+    expect(guidance).toContain("Account for every one in the findings file");
+    expect(guidance).toContain('"specialist_dispositions"');
   });
 
   it("has re-reviews follow up on Bonk's threads through structured actions", () => {

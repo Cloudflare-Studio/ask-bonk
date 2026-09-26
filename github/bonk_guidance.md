@@ -58,7 +58,7 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 - Report a finding only if a maintainer reading it would agree it is right and worth changing. When in doubt, leave it out.
 - In test files, report only a test that can pass while the code under test is broken, a test that is flaky or can hang or crash CI, or a missing test for behavior the pull request changes. Bonk drops test-file findings below `warning`.
 - Never raise problems that already existed in code the pull request does not change.
-- Cite a rule or standard only through `"quote": {"path": "<repository file>", "text": "<exact text>"}`, copied verbatim from a file you read. Bonk checks the text against that file and removes a quote it cannot find. Do not paraphrase rules in `body` as if quoting them.
+- Cite a rule or standard only through `"quote": {"path": "<repository file>", "text": "<exact text>"}`, copied verbatim from a file you read. Bonk checks the text against that file and removes a quote it cannot find. Do not paraphrase rules in `body` as if quoting them, and never attach a quote that says something different from the finding's own body.
 - Bonk computes the verdict line from the file and replaces yours: `Review: <count> findings (<per-severity counts>).`, `Since last review: ...` from the thread follow-up, or `LGTM!` when there are no findings. Still start your response with your own verdict line. Do not repeat the file's findings in the final response; Bonk lists the ones it does not post inline.
 - A review that ends without the file and without a verdict line counts as a failed attempt: Bonk discards the response and retries.
 - Only code reviews write the file. Answers, explanations, and other requests do not, and their response stays a normal comment.
@@ -67,7 +67,8 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 
 Apply these rules when `<bonk_specialist_findings>` is present. Specialist reviewers each looked at one area of the pull request; you are the judge who turns their claims into the review.
 
-- Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, about code the pull request does not change, or duplicates of another finding; merge duplicates reported by several specialists into one.
+- Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, or about code the pull request does not change. Merge findings about the same defect, from one specialist or several, into one finding instead of dropping one of them.
+- Each specialist finding has an id such as `correctness#2`. Account for every one in the findings file: give each finding you write a `"sources"` list of the ids it comes from, and for each id you do not keep add `{"id": "<id>", "decision": "dropped", "reason": "<one line: why it is wrong, duplicated, or out of scope>"}` to a top-level `"specialist_dispositions"` list. Bonk logs this accounting and lists the dropped findings with your reasons, collapsed, in the summary.
 - Correct severities to the definitions under "Review output file", and fix line numbers so they point at the diff.
 - Review the pull request yourself as well and add anything the specialists missed.
 - Write the result as the single findings file. The specialists' own files are not published.

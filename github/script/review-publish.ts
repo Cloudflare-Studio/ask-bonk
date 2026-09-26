@@ -77,6 +77,8 @@ export interface Finding {
   quote?: RuleQuote;
   // Set when the finding re-reports one of Bonk's earlier threads.
   threadId?: string;
+  // The specialist findings (e.g. "correctness#2") the judge built this from.
+  sources?: string[];
 }
 
 export interface ThreadAction {
@@ -85,9 +87,38 @@ export interface ThreadAction {
   body?: string;
 }
 
+// The judge's decision on one specialist finding.
+export interface SpecialistDisposition {
+  id: string;
+  decision: "kept" | "dropped";
+  reason?: string;
+}
+
 export interface ReviewFile {
   findings: Finding[];
   threadActions: ThreadAction[];
+  dispositions: SpecialistDisposition[];
+}
+
+// A specialist finding as the specialist step hands it to the publisher.
+export interface SpecialistFindingRecord {
+  id: string;
+  specialist: string;
+  severity: Severity;
+  path: string;
+  line?: number;
+  body: string;
+}
+
+const SPECIALIST_FINDING_ID = /^[a-z0-9][a-z0-9-]*#[1-9]\d*$/;
+
+function findingId(value: unknown, specialist?: unknown, index?: unknown): string | undefined {
+  if (typeof value === "string" && SPECIALIST_FINDING_ID.test(value.trim())) return value.trim();
+  if (typeof specialist === "string" && positiveInteger(index)) {
+    const id = `${specialist.trim()}#${index}`;
+    if (SPECIALIST_FINDING_ID.test(id)) return id;
+  }
+  return undefined;
 }
 
 // A review thread Bonk started, as publishing sees it.
@@ -168,6 +199,7 @@ export function parseReviewFile(text: string): ReviewFile | null {
       ...(typeof entry.thread_id === "string" && entry.thread_id
         ? { threadId: entry.thread_id }
         : {}),
+      ...sourcesOf(entry.sources),
     });
   }
   const threadActions: ThreadAction[] = [];
@@ -182,7 +214,123 @@ export function parseReviewFile(text: string): ReviewFile | null {
     if (action === "reply" && !body) continue;
     threadActions.push({ threadId: entry.thread_id, action, ...(body ? { body } : {}) });
   }
-  return { findings, threadActions };
+  const dispositions: SpecialistDisposition[] = [];
+  const rawDispositions = (raw as { specialist_dispositions?: unknown }).specialist_dispositions;
+  for (const item of Array.isArray(rawDispositions) ? rawDispositions : []) {
+    if (typeof item !== "object" || item === null) continue;
+    const entry = item as Record<string, unknown>;
+    const id = findingId(entry.id, entry.specialist, entry.index);
+    const decision = String(entry.decision ?? "").toLowerCase();
+    if (!id || !["kept", "merged", "dropped"].includes(decision)) continue;
+    const reason = typeof entry.reason === "string" && entry.reason.trim() ? entry.reason.trim() : "";
+    dispositions.push({
+      id,
+      decision: decision === "dropped" ? "dropped" : "kept",
+      ...(reason ? { reason } : {}),
+    });
+  }
+  return { findings, threadActions, dispositions };
+}
+
+function sourcesOf(value: unknown): { sources?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const sources = [
+    ...new Set(value.map((item) => findingId(item)).filter((id): id is string => Boolean(id))),
+  ];
+  return sources.length > 0 ? { sources } : {};
+}
+
+export function readSpecialistFindings(path: string | undefined): SpecialistFindingRecord[] {
+  if (!path || !existsSync(path)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { findings?: unknown };
+    return (Array.isArray(raw.findings) ? raw.findings : []).filter(
+      (item): item is SpecialistFindingRecord =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as SpecialistFindingRecord).id === "string" &&
+        typeof (item as SpecialistFindingRecord).specialist === "string" &&
+        typeof (item as SpecialistFindingRecord).body === "string" &&
+        SEVERITIES.includes((item as SpecialistFindingRecord).severity),
+    );
+  } catch {
+    return [];
+  }
+}
+
+export interface SpecialistAccount {
+  record: SpecialistFindingRecord;
+  decision: "kept" | "dropped" | "unaccounted";
+  reason?: string;
+}
+
+// What the judge did with each specialist finding. A finding the judge's
+// findings cite in `sources` was kept; otherwise its disposition decides, and
+// a finding with neither was not accounted for.
+export function accountSpecialistFindings(
+  records: SpecialistFindingRecord[],
+  reviewFile: ReviewFile,
+): SpecialistAccount[] {
+  const cited = new Set(reviewFile.findings.flatMap((finding) => finding.sources ?? []));
+  const dispositions = new Map(reviewFile.dispositions.map((entry) => [entry.id, entry]));
+  return records.map((record) => {
+    if (cited.has(record.id)) return { record, decision: "kept" };
+    const disposition = dispositions.get(record.id);
+    if (!disposition) return { record, decision: "unaccounted" };
+    return {
+      record,
+      decision: disposition.decision,
+      ...(disposition.reason ? { reason: disposition.reason } : {}),
+    };
+  });
+}
+
+export function logSpecialistAccounts(accounts: SpecialistAccount[]): void {
+  if (accounts.length === 0) return;
+  for (const { record, decision, reason } of accounts) {
+    const location = findingLocation(record);
+    core.info(
+      `Specialist finding ${record.id} [${record.severity}]${location ? ` ${location}` : ""}: ${decision === "unaccounted" ? "not accounted for by the judge" : decision}${reason ? ` (${reason})` : ""}`,
+    );
+  }
+  const count = (decision: SpecialistAccount["decision"]) =>
+    accounts.filter((account) => account.decision === decision).length;
+  core.info(
+    `Specialist findings: ${count("kept")} kept, ${count("dropped")} dropped, ${count("unaccounted")} not accounted for`,
+  );
+  if (count("unaccounted") > 0) {
+    core.warning(`The judge did not account for ${count("unaccounted")} specialist finding(s)`);
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function firstLine(text: string, max = 200): string {
+  const line = text.trim().split("\n")[0].trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+// Specialist findings the judge did not keep, with its reasons, collapsed so
+// they stay out of the way but can be checked.
+export function formatNotPosted(accounts: SpecialistAccount[]): string {
+  const notPosted = accounts.filter((account) => account.decision !== "kept");
+  if (notPosted.length === 0) return "";
+  const items = notPosted.map(({ record, decision, reason }) => {
+    const location = findingLocation(record);
+    const why =
+      decision === "unaccounted" ? "not accounted for by the judge" : (reason ?? "no reason given");
+    return `- \`${record.id}\` ${severityTag(record.severity)}${location ? ` \`${location}\`` : ""}: ${escapeHtml(firstLine(record.body))} — ${escapeHtml(firstLine(why))}`;
+  });
+  return [
+    "<details>",
+    `<summary>Specialist findings not posted (${notPosted.length})</summary>`,
+    "",
+    ...items,
+    "",
+    "</details>",
+  ].join("\n");
 }
 
 export function parsePublishState(text: string | undefined): PublishState | null {
@@ -301,7 +449,7 @@ export function anchorFinding(finding: Finding, commentable: CommentableLines): 
   return { ...single, line };
 }
 
-function findingLocation(finding: Finding): string {
+function findingLocation(finding: Pick<Finding, "path" | "line" | "startLine">): string {
   if (!finding.path) return "";
   if (!finding.line) return finding.path;
   return finding.startLine
@@ -1012,6 +1160,14 @@ export async function publishReview(): Promise<void> {
 
   const specialistStatuses = parseSpecialistStatuses(process.env.SPECIALIST_STATUS);
   sections.push(formatNotReviewed(specialistStatuses));
+  if (reviewFile) {
+    const accounts = accountSpecialistFindings(
+      readSpecialistFindings(process.env.SPECIALIST_FINDINGS),
+      reviewFile,
+    );
+    logSpecialistAccounts(accounts);
+    sections.push(formatNotPosted(accounts));
+  }
 
   const body = buildStickyBody({
     specialists: Object.fromEntries(

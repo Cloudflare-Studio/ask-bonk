@@ -320,6 +320,7 @@ runs:
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
         SPECIALIST_STATUS: ${{ steps.specialists.outputs.statuses }}
+        SPECIALIST_FINDINGS: ${{ steps.specialists.outputs.findings_file }}
         EVENT_NAME: ${{ github.event_name }}
       run: |
         # OpenCode checks out the PR branch itself (not the merge commit that

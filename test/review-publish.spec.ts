@@ -172,7 +172,13 @@ describe("Bonk review publishing", () => {
       parseReviewFile(
         JSON.stringify({
           findings: [
-            { path: "src/a.ts", line: 11, body: "Bug", severity: "BLOCKING" },
+            {
+              path: "src/a.ts",
+              line: 11,
+              body: "Bug",
+              severity: "BLOCKING",
+              sources: ["correctness#1", "memory-safety#2", "correctness#1", "bogus", 3],
+            },
             {
               path: "src/a.ts",
               line: 12,
@@ -195,11 +201,24 @@ describe("Bonk review publishing", () => {
             { thread_id: "PRRT_4", action: "delete", body: "x" },
             { action: "resolve" },
           ],
+          specialist_dispositions: [
+            { id: "tests#1", decision: "dropped", reason: "The test already covers it." },
+            { specialist: "docs", index: 2, decision: "merged" },
+            { id: "tests#2", decision: "maybe" },
+            { id: "not an id", decision: "dropped" },
+          ],
         }),
       ),
     ).toEqual({
       findings: [
-        { path: "src/a.ts", line: 11, side: "RIGHT", body: "Bug", severity: "blocking" },
+        {
+          path: "src/a.ts",
+          line: 11,
+          side: "RIGHT",
+          body: "Bug",
+          severity: "blocking",
+          sources: ["correctness#1", "memory-safety#2"],
+        },
         {
           path: "src/a.ts",
           line: 12,
@@ -222,6 +241,10 @@ describe("Bonk review publishing", () => {
       threadActions: [
         { threadId: "PRRT_1", action: "resolve", body: "Fixed in bbbbbbbb: added the check." },
         { threadId: "PRRT_2", action: "unresolve" },
+      ],
+      dispositions: [
+        { id: "tests#1", decision: "dropped", reason: "The test already covers it." },
+        { id: "docs#2", decision: "kept" },
       ],
     });
   });
@@ -504,6 +527,52 @@ describe("Bonk review publishing", () => {
 
     const deleted = requests.find((request) => request.method === "DELETE");
     expect(deleted?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/11");
+  });
+
+  it("accounts for every specialist finding and lists the ones not posted", async () => {
+    const requests = mockGitHub({
+      headRefOid: HEAD,
+      comments: { nodes: [stickyComment, response("Review: 1 findings.")] },
+      reviews: { nodes: [{ databaseId: 3, author: bonk }] },
+    });
+    const specialistFindings = writeReviewFile("specialist-findings", {
+      findings: [
+        { id: "correctness#1", specialist: "correctness", severity: "warning", path: "src/a.ts", line: 11, body: "Null deref" },
+        { id: "tests#1", specialist: "tests", severity: "warning", path: "src/a.ts", body: "No test for the <new> branch\nMore." },
+        { id: "docs#1", specialist: "docs", severity: "info", path: "README.md", body: "Stale example" },
+      ],
+    });
+    const reviewFile = writeReviewFile("accounted", {
+      findings: [
+        { path: "src/a.ts", line: 11, body: "Null deref", severity: "warning", sources: ["correctness#1"] },
+      ],
+      specialist_dispositions: [
+        { id: "tests#1", decision: "dropped", reason: "test/a.spec.ts:40 covers it" },
+      ],
+    });
+    const info = vi.spyOn(console, "log");
+
+    await withEnv(publishEnv(reviewFile, { SPECIALIST_FINDINGS: specialistFindings }), () =>
+      publishReview(),
+    );
+
+    const body = patchedBody(requests.find((request) => request.method === "PATCH"));
+    expect(body).toContain(
+      [
+        "<details>",
+        "<summary>Specialist findings not posted (2)</summary>",
+        "",
+        "- `tests#1` **[WARNING]** `src/a.ts`: No test for the &lt;new&gt; branch — test/a.spec.ts:40 covers it",
+        "- `docs#1` **[INFO]** `README.md`: Stale example — not accounted for by the judge",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    const logged = info.mock.calls.map((call) => String(call[0]));
+    expect(logged).toContain("Specialist finding correctness#1 [warning] src/a.ts:11: kept");
+    expect(logged).toContain(
+      "Specialist findings: 1 kept, 1 dropped, 1 not accounted for",
+    );
   });
 
   it("places comments on the same hunks the prompt showed", async () => {

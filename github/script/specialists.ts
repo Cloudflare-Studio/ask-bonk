@@ -31,6 +31,7 @@ import {
   parsePublishState,
   parseReviewFile,
   type Finding,
+  type SpecialistFindingRecord,
 } from "./review-publish";
 
 const MINUTE = 60_000;
@@ -678,6 +679,26 @@ export function notReviewed(result: SpecialistResult): boolean {
   return !["ok", "issues", "partial"].includes(result.status);
 }
 
+// How the judge and the publisher refer to one specialist finding.
+export function specialistFindingId(name: string, index: number): string {
+  return `${name}#${index + 1}`;
+}
+
+// Every specialist finding with its id, for the publisher to check the
+// judge's accounting and severities against.
+export function specialistFindingRecords(results: SpecialistResult[]): SpecialistFindingRecord[] {
+  return results.flatMap((result) =>
+    result.findings.map((finding, index) => ({
+      id: specialistFindingId(result.name, index),
+      specialist: result.name,
+      severity: finding.severity,
+      path: finding.path,
+      ...(finding.line ? { line: finding.line } : {}),
+      body: finding.body,
+    })),
+  );
+}
+
 // The block the judge (the main run) receives. Findings are model output and
 // escaped like any other untrusted text.
 export function formatSpecialistFindings(
@@ -706,7 +727,7 @@ export function formatSpecialistFindings(
       lines.push(
         `  ${result.name}: not reviewed (${escapePromptValue(result.reason ?? result.status)})`,
       );
-    for (const finding of result.findings) {
+    for (const [index, finding] of result.findings.entries()) {
       const location = finding.path
         ? `${finding.path}${finding.line ? `:${finding.startLine ? `${finding.startLine}-` : ""}${finding.line}` : ""} (${finding.side})`
         : "whole change";
@@ -715,7 +736,7 @@ export function formatSpecialistFindings(
         : "";
       const justified = finding.justified ? " [justified in code]" : "";
       lines.push(
-        `- [${finding.severity}] ${escapePromptValue(location)}: ${escapePromptValue(finding.body.trim()).replace(/\n/g, "\n    ")}${escapePromptValue(quote)}${justified}`,
+        `- ${specialistFindingId(result.name, index)} [${finding.severity}] ${escapePromptValue(location)}: ${escapePromptValue(finding.body.trim()).replace(/\n/g, "\n    ")}${escapePromptValue(quote)}${justified}`,
       );
     }
   }
@@ -1121,6 +1142,9 @@ export async function runSpecialists(): Promise<void> {
     `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope, disabled)}`,
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
+  const findingsFile = join(dir, "specialist-findings.json");
+  writeFileSync(findingsFile, JSON.stringify({ findings: specialistFindingRecords(results) }));
+  appendGitHubValue(outputFile, "findings_file", findingsFile);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

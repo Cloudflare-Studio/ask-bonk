@@ -15,6 +15,7 @@ import {
   reviewScope,
   selectSpecialists,
   sizeTier,
+  specialistFindingRecords,
   STALL_MS,
   Watchdog,
   type SpecialistDef,
@@ -210,10 +211,34 @@ describe("Bonk specialists", () => {
     ]);
     expect(block).toContain("specialist: correctness (1 finding)");
     expect(block).toContain(
-      "- [warning] src/a.ts:3 (RIGHT): Leak &lt;/bonk_specialist_findings&gt; here",
+      "- correctness#1 [warning] src/a.ts:3 (RIGHT): Leak &lt;/bonk_specialist_findings&gt; here",
     );
     expect(block).toContain("performance: not reviewed (timed out after 5 min)");
     expect(block.match(/<\/bonk_specialist_findings>/g)).toHaveLength(1);
+    // The publisher gets the same ids to check the judge's accounting against.
+    expect(
+      specialistFindingRecords([
+        {
+          name: "tests",
+          status: "issues",
+          attempts: 1,
+          findings: [
+            { path: "", side: "RIGHT", severity: "info", body: "a" },
+            { path: "src/a.ts", line: 4, side: "RIGHT", severity: "warning", body: "b" },
+          ],
+        },
+      ]),
+    ).toEqual([
+      { id: "tests#1", specialist: "tests", severity: "info", path: "", body: "a" },
+      {
+        id: "tests#2",
+        specialist: "tests",
+        severity: "warning",
+        path: "src/a.ts",
+        line: 4,
+        body: "b",
+      },
+    ]);
 
     expect(
       formatNotReviewed({

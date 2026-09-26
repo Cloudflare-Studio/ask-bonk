@@ -131,6 +131,8 @@ export interface ReviewContext {
   // Files the author changed since the last review, or null when this review
   // covers the whole pull request.
   changedFiles: string[] | null;
+  // Bonk reviewed this pull request before.
+  rereview: boolean;
   block: string | null;
 }
 
@@ -643,6 +645,7 @@ export async function loadReviewContext(
     baseSha: history.baseSha,
     lastReviewId: history.lastReviewId,
     changedFiles: reviewScope(delta),
+    rereview: history.previous !== null,
     block: formatPreviousReviewBlock(history, delta),
   };
 }

@@ -544,6 +544,7 @@ describe("GitHub Action re-review context", () => {
       base: BASE,
       lastReviewId: 0,
       changedFiles: ["src/a.ts"],
+      rereview: true,
       reviewFile,
     });
     expect(result.value).toContain(`review_output_file: ${reviewFile}`);

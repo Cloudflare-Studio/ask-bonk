@@ -13,6 +13,7 @@
 // finding the model no longer reports, when nobody replied to them.
 
 import { existsSync, readFileSync } from "fs";
+import { relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { core } from "./context";
 import { fetchWithRetry } from "./http";
@@ -37,7 +38,9 @@ import {
 // verdict lines. `LGTM` without the bang is accepted because repository prompts
 // sometimes ask for it.
 const REVIEW_VERDICT_PATTERN =
-  /^\s*(?:LGTM!?(?=\s|$)|Review: \d+ findings?\.|Since last review: \d+ resolved, \d+ still open, \d+ new\.)/;
+  /^\s*(?:LGTM!?(?=\s|$)|Review: \d+ findings?(?: \([^)\n]*\))?\.|Since last review: \d+ resolved, \d+ still open, \d+ new\.)/;
+const VERDICT_LINE_PATTERN =
+  /^(?:LGTM!?|Review: \d+ findings?(?: \([^)\n]*\))?\.|Since last review: \d+ resolved, \d+ still open, \d+ new\.)\s*$/;
 // A finding whose line is not in the diff moves to the nearest commentable
 // line within this distance; farther away it could land on unrelated code.
 const MAX_SNAP_DISTANCE = 5;
@@ -45,12 +48,31 @@ const SUGGESTION_PATTERN = /```suggestion\b/;
 
 export type Side = "LEFT" | "RIGHT";
 
-export interface Finding {
+// Most severe first. Blocking and warning findings are defects the author
+// should act on and go inline; info, suggestion, and question findings are
+// listed in the summary so the diff only carries what needs a change.
+export const SEVERITIES = ["blocking", "warning", "info", "suggestion", "question"] as const;
+export type Severity = (typeof SEVERITIES)[number];
+const INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(["blocking", "warning"]);
+
+export interface RuleQuote {
   path: string;
-  line: number;
+  text: string;
+}
+
+export interface Finding {
+  // Empty for a finding about the change as a whole.
+  path: string;
+  // Absent for a finding that is not about a specific line.
+  line?: number;
   startLine?: number;
   side: Side;
   body: string;
+  severity: Severity;
+  // The code carries an explicit comment justifying what the finding flags.
+  justified?: boolean;
+  // A rule or standard the finding cites, quoted from a repository file.
+  quote?: RuleQuote;
   // Set when the finding re-reports one of Bonk's earlier threads.
   threadId?: string;
 }
@@ -86,6 +108,8 @@ export interface PublishState {
   // Files the author changed since the last review, or null when the review
   // covered the whole pull request.
   changedFiles: string[] | null;
+  // Bonk reviewed this pull request before.
+  rereview: boolean;
   reviewFile: string;
 }
 
@@ -107,16 +131,26 @@ export function parseReviewFile(text: string): ReviewFile | null {
   for (const item of Array.isArray(rawFindings) ? rawFindings : []) {
     if (typeof item !== "object" || item === null) continue;
     const entry = item as Record<string, unknown>;
-    const line = positiveInteger(entry.line);
-    const startLine = positiveInteger(entry.start_line);
-    if (typeof entry.path !== "string" || !entry.path || !line) continue;
+    const path = typeof entry.path === "string" ? entry.path : "";
+    const line = path ? positiveInteger(entry.line) : undefined;
+    const startLine = line ? positiveInteger(entry.start_line) : undefined;
     if (typeof entry.body !== "string" || !entry.body.trim()) continue;
+    const severity = String(entry.severity ?? "").toLowerCase() as Severity;
+    const quote = entry.quote as Partial<RuleQuote> | undefined;
     findings.push({
-      path: entry.path,
-      line,
-      ...(startLine && startLine < line ? { startLine } : {}),
+      path,
+      ...(line ? { line } : {}),
+      ...(startLine && line && startLine < line ? { startLine } : {}),
       side: entry.side === "LEFT" ? "LEFT" : "RIGHT",
       body: entry.body,
+      severity: SEVERITIES.includes(severity) ? severity : "warning",
+      ...(entry.justified === true ? { justified: true } : {}),
+      ...(quote &&
+      typeof quote.path === "string" &&
+      typeof quote.text === "string" &&
+      quote.text.trim()
+        ? { quote: { path: quote.path, text: quote.text } }
+        : {}),
       ...(typeof entry.thread_id === "string" && entry.thread_id
         ? { threadId: entry.thread_id }
         : {}),
@@ -151,6 +185,7 @@ export function parsePublishState(text: string | undefined): PublishState | null
         raw.changedFiles.every((file) => typeof file === "string")
           ? raw.changedFiles
           : null,
+      rereview: raw.rereview === true,
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
     };
   } catch {
@@ -228,7 +263,7 @@ function nearestLine(target: number, lines: Map<number, number>): number | null 
 // lines it targets.
 export function anchorFinding(finding: Finding, commentable: CommentableLines): Finding | null {
   const lines = commentable.get(finding.path)?.[finding.side];
-  if (!lines) return null;
+  if (!lines || !finding.line) return null;
   const exact = lines.has(finding.line) && (!finding.startLine || lines.has(finding.startLine));
   if (exact) {
     if (finding.startLine && lines.get(finding.startLine) !== lines.get(finding.line)) {
@@ -239,19 +274,150 @@ export function anchorFinding(finding: Finding, commentable: CommentableLines): 
   if (SUGGESTION_PATTERN.test(finding.body)) return null;
   const line = nearestLine(finding.line, lines);
   if (line === null) return null;
-  return { path: finding.path, line, side: finding.side, body: finding.body };
+  const { startLine: _dropped, ...single } = finding;
+  return { ...single, line };
 }
 
-export function formatUnanchoredFindings(findings: Finding[], reason: string): string {
+function findingLocation(finding: Finding): string {
+  if (!finding.path) return "";
+  if (!finding.line) return finding.path;
+  return finding.startLine
+    ? `${finding.path}:${finding.startLine}-${finding.line}`
+    : `${finding.path}:${finding.line}`;
+}
+
+function severityTag(severity: Severity): string {
+  return `**[${severity.toUpperCase()}]**`;
+}
+
+function renderQuote(quote: RuleQuote | undefined): string {
+  if (!quote) return "";
+  const lines = quote.text
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`);
+  return `\n\n${lines.join("\n")}\n>\n> — \`${quote.path}\``;
+}
+
+// The body of an inline review comment.
+export function renderFinding(finding: Finding): string {
+  return `${severityTag(finding.severity)} ${finding.body.trim()}${renderQuote(finding.quote)}`;
+}
+
+export function formatFindingList(
+  findings: Finding[],
+  title: string,
+  link?: (finding: Finding) => string | undefined,
+): string {
   if (findings.length === 0) return "";
   const items = findings.map((finding) => {
-    const location = finding.startLine
-      ? `${finding.path}:${finding.startLine}-${finding.line}`
-      : `${finding.path}:${finding.line}`;
-    const body = finding.body.trim().replace(/\n/g, "\n  ");
-    return `- \`${location}\`: ${body}`;
+    const location = findingLocation(finding);
+    const url = link?.(finding);
+    const where = location ? (url ? ` [\`${location}\`](${url}):` : ` \`${location}\`:`) : "";
+    const text = `${finding.body.trim()}${renderQuote(finding.quote)}`.replace(/\n/g, "\n  ");
+    return `- ${severityTag(finding.severity)}${where} ${text}`;
   });
-  return [`**${reason}**`, "", ...items].join("\n");
+  return [`**${title}**`, "", ...items].join("\n");
+}
+
+const DEMOTION: Record<Severity, Severity> = {
+  blocking: "warning",
+  warning: "info",
+  info: "suggestion",
+  suggestion: "suggestion",
+  question: "question",
+};
+
+const TEST_PATH_PATTERN =
+  /(?:^|\/)(?:tests?|__tests__|spec|testdata|fixtures?)\/|[._-](?:test|spec)s?\.[^/]+$|\.wd-test$/i;
+
+export function isTestPath(path: string): boolean {
+  return TEST_PATH_PATTERN.test(path);
+}
+
+// Checks that a quoted rule appears verbatim in the repository file it names.
+export function verifyQuote(quote: RuleQuote, workspace: string): boolean {
+  const file = resolve(workspace, quote.path);
+  const inside = relative(workspace, file);
+  if (!inside || inside.startsWith("..") || resolve(workspace, inside) !== file) return false;
+  try {
+    const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+    return normalize(readFileSync(file, "utf8")).includes(normalize(quote.text));
+  } catch {
+    return false;
+  }
+}
+
+// Severity rules the model is told about, applied in code so they hold
+// regardless: a finding in a test file drops one level, and one more when the
+// code carries an explicit justification, never below suggestion. A review
+// asks at most one question; further questions become info. A quoted rule
+// that does not appear verbatim in the file it names is removed.
+export function applySeverityRules(findings: Finding[], workspace: string): Finding[] {
+  let asked = false;
+  return findings.map((finding) => {
+    let severity = finding.severity;
+    if (severity === "question") {
+      if (asked) severity = "info";
+      asked = true;
+    }
+    if (finding.path && isTestPath(finding.path)) severity = DEMOTION[severity];
+    if (finding.justified) severity = DEMOTION[severity];
+    let quote = finding.quote;
+    if (quote && !verifyQuote(quote, workspace)) {
+      core.warning(`Dropping a quote not found verbatim in ${quote.path}`);
+      quote = undefined;
+    }
+    const { quote: _original, ...rest } = finding;
+    return { ...rest, severity, ...(quote ? { quote } : {}) };
+  });
+}
+
+export function isInline(finding: Finding): boolean {
+  return INLINE_SEVERITIES.has(finding.severity);
+}
+
+function plural(count: number, severity: Severity): string {
+  if (severity === "blocking" || severity === "info") return `${count} ${severity}`;
+  return `${count} ${severity}${count === 1 ? "" : "s"}`;
+}
+
+export interface VerdictCounts {
+  findings: Finding[];
+  // Re-reviews only.
+  resolved?: number;
+  stillOpen?: number;
+  added?: number;
+}
+
+// The verdict line comes from the findings, not from the model's text, so the
+// counts always match what was posted.
+export function computeVerdict(counts: VerdictCounts, rereview: boolean): string {
+  const total = counts.findings.length;
+  if (rereview) {
+    const line = `Since last review: ${counts.resolved ?? 0} resolved, ${counts.stillOpen ?? 0} still open, ${counts.added ?? 0} new.`;
+    return total === 0 ? `${line}\nLGTM!` : line;
+  }
+  if (total === 0) return "LGTM!";
+  const breakdown = SEVERITIES.map(
+    (severity) =>
+      [
+        severity,
+        counts.findings.filter((finding) => finding.severity === severity).length,
+      ] as const,
+  )
+    .filter(([, count]) => count > 0)
+    .map(([severity, count]) => plural(count, severity));
+  return `Review: ${total} finding${total === 1 ? "" : "s"} (${breakdown.join(", ")}).`;
+}
+
+// Drops the model's own verdict lines from the top of its response.
+export function stripVerdict(text: string): string {
+  const lines = text.trim().split("\n");
+  while (lines.length > 0 && (VERDICT_LINE_PATTERN.test(lines[0].trim()) || !lines[0].trim())) {
+    lines.shift();
+  }
+  return lines.join("\n").trim();
 }
 
 export interface StickyBodyParts {
@@ -335,7 +501,7 @@ async function postFindings(
       line: finding.line,
       side: finding.side,
       ...(finding.startLine ? { start_line: finding.startLine, start_side: finding.side } : {}),
-      body: finding.body,
+      body: renderFinding(finding),
     })),
   });
   if (resp.ok) {
@@ -363,11 +529,12 @@ function matchThread(finding: Finding, threads: Map<string, BonkThread>): BonkTh
     return thread;
   }
   const text = normalizeFindingText(finding.body);
+  if (!finding.line) return undefined;
   for (const thread of threads.values()) {
     if (
       thread.path === finding.path &&
       thread.line === finding.line &&
-      normalizeFindingText(thread.body) === text
+      normalizeFindingText(thread.body).replace(/^\*\*\[[a-z]+\]\*\* /, "") === text
     ) {
       return thread;
     }
@@ -425,13 +592,12 @@ export function partitionFindings(
 }
 
 export function formatStillPresent(entries: Partition["stillPresent"]): string {
-  if (entries.length === 0) return "";
-  const items = entries.map(({ finding, thread }) => {
-    const location = `${finding.path}:${finding.line}`;
-    const link = thread.url ? `[\`${location}\`](${thread.url})` : `\`${location}\``;
-    return `- ${link}: ${finding.body.trim().replace(/\n/g, "\n  ")}`;
-  });
-  return ["**Earlier findings still present (thread resolved)**", "", ...items].join("\n");
+  const urls = new Map(entries.map(({ finding, thread }) => [finding, thread.url]));
+  return formatFindingList(
+    entries.map((entry) => entry.finding),
+    "Earlier findings still present (thread resolved)",
+    (finding) => urls.get(finding),
+  );
 }
 
 const REPLY_MUTATION = `
@@ -613,39 +779,76 @@ export async function publishReview(): Promise<void> {
   const stale =
     Boolean(liveHead) && liveHead !== state.head && liveHead !== process.env.WORKSPACE_HEAD_SHA;
 
-  const findings = reviewFile?.findings ?? [];
-  let stillPresent = "";
-  let unanchored: Finding[] = [];
-  let unanchoredReason = "Findings outside the diff";
+  const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+  const findings = applySeverityRules(reviewFile?.findings ?? [], workspace);
+  const sections: string[] = [];
+  let summary = stripOpencodeFooter(stripReviewState(response.body));
   if (stale) {
     // Line numbers refer to a head that is no longer current.
-    unanchored = findings;
-    unanchoredReason = "Findings not posted inline because the pull request changed";
+    sections.push(
+      formatFindingList(findings, "Findings not posted inline because the pull request changed"),
+    );
+    if (reviewFile) {
+      const reReported = findings.filter((finding) => finding.threadId).length;
+      const verdict = computeVerdict(
+        { findings, resolved: 0, stillOpen: reReported, added: findings.length - reReported },
+        state.rereview,
+      );
+      summary = [verdict, stripVerdict(summary)].filter(Boolean).join("\n\n");
+    }
   } else if (reviewFile) {
     const threads = bonkThreads(await fetchReviewThreads(token, repository, prNumber), login);
+    const openBefore = new Set(
+      threads.filter((thread) => !thread.resolved).map((thread) => thread.id),
+    );
     const actedOn = await executeThreadActions(token, reviewFile.threadActions, threads);
     const partition = partitionFindings(findings, threads, actedOn, state.changedFiles);
-    const { toPost, toResolve } = partition;
-    stillPresent = formatStillPresent(partition.stillPresent);
-    for (const thread of toResolve) {
-      await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a stale thread");
+    for (const thread of partition.toResolve) {
+      if (await runMutation(token, RESOLVE_MUTATION, { id: thread.id }, "resolve a stale thread")) {
+        thread.resolved = true;
+      }
     }
+
+    const inline = partition.toPost.filter(isInline);
     const commentable =
-      toPost.length > 0 ? await fetchCommentableLines(token, repository, prNumber) : new Map();
+      inline.length > 0 ? await fetchCommentableLines(token, repository, prNumber) : new Map();
     const anchored: Finding[] = [];
-    for (const finding of toPost) {
+    const unanchored: Finding[] = [];
+    for (const finding of inline) {
       const position = anchorFinding(finding, commentable);
       if (position) anchored.push(position);
       else unanchored.push(finding);
     }
     unanchored.push(...(await postFindings(token, repository, prNumber, state.head, anchored)));
+
+    sections.push(
+      formatFindingList(unanchored, "Findings outside the diff"),
+      formatFindingList(
+        partition.toPost.filter((finding) => !isInline(finding)),
+        "Other findings",
+      ),
+      formatStillPresent(partition.stillPresent),
+    );
+    const resolved = threads.filter((thread) => openBefore.has(thread.id) && thread.resolved);
+    summary = [
+      computeVerdict(
+        {
+          findings,
+          resolved: resolved.length,
+          stillOpen: partition.kept.length + partition.stillPresent.length,
+          added: partition.toPost.length,
+        },
+        state.rereview,
+      ),
+      stripVerdict(summary),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   const body = buildStickyBody({
-    summary: stripOpencodeFooter(stripReviewState(response.body)),
-    unanchored: [stillPresent, formatUnanchoredFindings(unanchored, unanchoredReason)]
-      .filter(Boolean)
-      .join("\n\n"),
+    summary,
+    unanchored: sections.filter(Boolean).join("\n\n"),
     head: state.head,
     base: state.base,
     liveHead,

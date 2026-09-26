@@ -2,7 +2,11 @@ import { mkdirSync, writeFileSync } from "fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   anchorFinding,
+  applySeverityRules,
   buildStickyBody,
+  computeVerdict,
+  isTestPath,
+  stripVerdict,
   isReviewRun,
   parseCommentableLines,
   partitionFindings,
@@ -159,10 +163,19 @@ describe("Bonk review publishing", () => {
       parseReviewFile(
         JSON.stringify({
           findings: [
-            { path: "src/a.ts", line: 11, body: "Bug" },
-            { path: "src/a.ts", line: 12, start_line: 10, side: "LEFT", body: "Range" },
-            { path: "src/a.ts", line: 0, body: "Bad line" },
-            { path: "", line: 3, body: "No path" },
+            { path: "src/a.ts", line: 11, body: "Bug", severity: "BLOCKING" },
+            {
+              path: "src/a.ts",
+              line: 12,
+              start_line: 10,
+              side: "LEFT",
+              body: "Range",
+              severity: "info",
+              justified: true,
+              quote: { path: "AGENTS.md", text: "Use KJ types" },
+            },
+            { path: "src/a.ts", line: 0, body: "Line zero is about the file", severity: "nit" },
+            { body: "About the whole change", severity: "question" },
             { path: "src/a.ts", line: 3, body: "  " },
             "garbage",
           ],
@@ -177,8 +190,25 @@ describe("Bonk review publishing", () => {
       ),
     ).toEqual({
       findings: [
-        { path: "src/a.ts", line: 11, side: "RIGHT", body: "Bug" },
-        { path: "src/a.ts", line: 12, startLine: 10, side: "LEFT", body: "Range" },
+        { path: "src/a.ts", line: 11, side: "RIGHT", body: "Bug", severity: "blocking" },
+        {
+          path: "src/a.ts",
+          line: 12,
+          startLine: 10,
+          side: "LEFT",
+          body: "Range",
+          severity: "info",
+          justified: true,
+          quote: { path: "AGENTS.md", text: "Use KJ types" },
+        },
+        // Unknown severities count as warnings.
+        {
+          path: "src/a.ts",
+          side: "RIGHT",
+          body: "Line zero is about the file",
+          severity: "warning",
+        },
+        { path: "", side: "RIGHT", body: "About the whole change", severity: "question" },
       ],
       threadActions: [
         { threadId: "PRRT_1", action: "resolve", body: "Fixed in bbbbbbbb: added the check." },
@@ -194,6 +224,7 @@ describe("Bonk review publishing", () => {
       line: 11,
       side: "RIGHT",
       body: "Bug",
+      severity: "warning",
       ...overrides,
     });
 
@@ -234,6 +265,7 @@ describe("Bonk review publishing", () => {
       line,
       side: "RIGHT",
       body: "New defect",
+      severity: "warning",
       ...overrides,
     });
 
@@ -268,6 +300,96 @@ describe("Bonk review publishing", () => {
     ).toEqual(["open", "stale", "acted", "untouched-file"]);
   });
 
+  it("applies the severity rules in code", () => {
+    mkdirSync("/tmp/bonk-test/repo/docs", { recursive: true });
+    writeFileSync(
+      "/tmp/bonk-test/repo/docs/style.md",
+      "Rules:\nPrefer kj::Maybe over\n  nullable pointers.\n",
+    );
+    const finding = (overrides: Partial<Finding>): Finding => ({
+      path: "src/a.c++",
+      line: 3,
+      side: "RIGHT",
+      body: "x",
+      severity: "blocking",
+      ...overrides,
+    });
+
+    const result = applySeverityRules(
+      [
+        finding({}),
+        finding({ path: "src/a-test.c++" }),
+        finding({ path: "src/tests/a.js", justified: true }),
+        finding({ path: "test/b.spec.ts", severity: "info", justified: true }),
+        finding({ severity: "question" }),
+        finding({ severity: "question" }),
+        finding({
+          quote: { path: "docs/style.md", text: "Prefer kj::Maybe over nullable pointers." },
+        }),
+        finding({ quote: { path: "docs/style.md", text: "Always use kj::Maybe." } }),
+        finding({ quote: { path: "../outside.md", text: "Rules:" } }),
+      ],
+      "/tmp/bonk-test/repo",
+    );
+    expect(result.map((entry) => entry.severity)).toEqual([
+      "blocking",
+      // One level down in a test file, one more when justified, never below suggestion.
+      "warning",
+      "info",
+      "suggestion",
+      // At most one question per review.
+      "question",
+      "info",
+      "blocking",
+      "blocking",
+      "blocking",
+    ]);
+    // Quotes must appear verbatim (modulo whitespace) in a repository file.
+    expect(result.map((entry) => Boolean(entry.quote))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect(isTestPath("src/workerd/api/tests/url-test.wd-test")).toBe(true);
+    expect(isTestPath("src/workerd/api/url.c++")).toBe(false);
+  });
+
+  it("computes the verdict from the findings", () => {
+    const finding = (severity: Finding["severity"]): Finding => ({
+      path: "src/a.ts",
+      line: 1,
+      side: "RIGHT",
+      body: "x",
+      severity,
+    });
+    expect(computeVerdict({ findings: [] }, false)).toBe("LGTM!");
+    expect(
+      computeVerdict(
+        { findings: [finding("blocking"), finding("warning"), finding("warning")] },
+        false,
+      ),
+    ).toBe("Review: 3 findings (1 blocking, 2 warnings).");
+    expect(computeVerdict({ findings: [finding("info")] }, false)).toBe(
+      "Review: 1 finding (1 info).",
+    );
+    expect(computeVerdict({ findings: [], resolved: 2, stillOpen: 0, added: 0 }, true)).toBe(
+      "Since last review: 2 resolved, 0 still open, 0 new.\nLGTM!",
+    );
+    expect(
+      computeVerdict({ findings: [finding("warning")], resolved: 1, stillOpen: 1, added: 0 }, true),
+    ).toBe("Since last review: 1 resolved, 1 still open, 0 new.");
+    expect(
+      stripVerdict("Since last review: 0 resolved, 0 still open, 0 new.\nLGTM!\n\nNotes."),
+    ).toBe("Notes.");
+    expect(stripVerdict("Review: 2 findings.\nI'm Bonk.")).toBe("I'm Bonk.");
+  });
+
   it("recognizes review runs", () => {
     expect(isReviewRun("issue_comment", 5, [5], "Here is an answer.", true)).toBe(true);
     expect(isReviewRun("pull_request", 5, [], "Found two issues.")).toBe(true);
@@ -277,6 +399,7 @@ describe("Bonk review publishing", () => {
     expect(isReviewRun("issue_comment", 5, [5], "Review: 2 findings.\n\n1. **P1:** ...")).toBe(
       true,
     );
+    expect(isReviewRun("issue_comment", 5, [5], "Review: 2 findings (2 warnings).")).toBe(true);
     expect(
       isReviewRun("issue_comment", 5, [5], "Since last review: 1 resolved, 0 still open, 0 new."),
     ).toBe(true);
@@ -312,8 +435,9 @@ describe("Bonk review publishing", () => {
     });
     const reviewFile = writeReviewFile("sticky", {
       findings: [
-        { path: "src/a.ts", line: 11, body: "Null deref" },
-        { path: "docs/missing.md", line: 1, body: "Document the flag" },
+        { path: "src/a.ts", line: 11, body: "Null deref", severity: "blocking" },
+        { path: "docs/missing.md", line: 1, body: "Document the flag", severity: "warning" },
+        { path: "src/a.ts", line: 12, body: "Consider a clearer name", severity: "suggestion" },
       ],
     });
 
@@ -324,15 +448,23 @@ describe("Bonk review publishing", () => {
       commit_id: HEAD,
       event: "COMMENT",
       body: "",
-      comments: [{ path: "src/a.ts", line: 11, side: "RIGHT", body: "Null deref" }],
+      comments: [{ path: "src/a.ts", line: 11, side: "RIGHT", body: "**[BLOCKING]** Null deref" }],
     });
 
     const patch = requests.find((request) => request.method === "PATCH");
     expect(patch?.url).toBe("https://api.github.com/repos/owner/repo/issues/comments/10");
     const body = patchedBody(patch);
-    expect(body).toContain("Review: 2 findings.");
+    // The verdict is computed from the findings; the model's line is replaced.
+    expect(body.startsWith("Review: 3 findings (1 blocking, 1 warning, 1 suggestion).\n\n")).toBe(
+      true,
+    );
+    expect(body).not.toContain("Review: 2 findings.");
     expect(body).toContain(
-      "**Findings outside the diff**\n\n- `docs/missing.md:1`: Document the flag",
+      "**Findings outside the diff**\n\n- **[WARNING]** `docs/missing.md:1`: Document the flag",
+    );
+    // Suggestions are summary-only.
+    expect(body).toContain(
+      "**Other findings**\n\n- **[SUGGESTION]** `src/a.ts:12`: Consider a clearer name",
     );
     expect(body).not.toContain("[github run](/owner/repo/actions/runs/100)\n");
     expect(parseReviewStateMarker(body)).toEqual({ head: HEAD, base: BASE });
@@ -371,7 +503,7 @@ describe("Bonk review publishing", () => {
     await withEnv(publishEnv(writeReviewFile("rejected", findings)), () => publishReview());
     patch = requests.find((request) => request.method === "PATCH");
     body = patchedBody(patch);
-    expect(body).toContain("- `src/a.ts:11`: Null deref");
+    expect(body).toContain("- **[WARNING]** `src/a.ts:11`: Null deref");
   });
 
   it("follows up on Bonk's own threads and never on anyone else's", async () => {
@@ -451,8 +583,8 @@ describe("Bonk review publishing", () => {
     const review = requests.find((request) => request.url.endsWith("/pulls/5/reviews"));
     const posted = review?.body as { comments?: Array<{ line: number; body: string }> } | undefined;
     expect(posted?.comments).toEqual([
-      expect.objectContaining({ line: 41, body: "Off-by-one in the new loop bound" }),
-      expect.objectContaining({ line: 11, body: "Unchecked null in the new branch" }),
+      expect.objectContaining({ line: 41, body: "**[WARNING]** Off-by-one in the new loop bound" }),
+      expect.objectContaining({ line: 11, body: "**[WARNING]** Unchecked null in the new branch" }),
     ]);
     // The re-reported finding keeps its thread, so nothing resolves it.
     const mutations = requests.filter(
@@ -465,7 +597,7 @@ describe("Bonk review publishing", () => {
     expect(mutations).toEqual([]);
     // A re-reported finding on a resolved thread stays visible in the summary.
     expect(patchedBody(requests.find((request) => request.method === "PATCH"))).toContain(
-      "**Earlier findings still present (thread resolved)**\n\n- `src/a.ts:12`: Still unchecked",
+      "**Earlier findings still present (thread resolved)**\n\n- **[WARNING]** `src/a.ts:12`: Still unchecked",
     );
   });
 

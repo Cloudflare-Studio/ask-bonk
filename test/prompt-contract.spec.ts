@@ -34,6 +34,19 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain('{"findings": [{"path": "src/file.ts", "line": 42');
   });
 
+  it("defines severities and leaves the verdict to Bonk", () => {
+    expect(guidance).toContain(
+      "`question`: you need an answer before you can judge the code. Ask at most one question per review.",
+    );
+    expect(guidance).toContain(
+      "Blocking and warning findings are posted inline; info, suggestion, and question findings are listed in the summary.",
+    );
+    expect(guidance).toContain(
+      "Never raise problems that already existed in code the pull request does not change.",
+    );
+    expect(guidance).toContain("Bonk computes the verdict line from the file and replaces yours");
+  });
+
   it("has re-reviews follow up on Bonk's threads through structured actions", () => {
     expect(guidance).toContain(
       'fixed: `{"thread_id": "<thread>", "action": "resolve", "body": "Fixed in <short sha>: <one line on how>."}`',

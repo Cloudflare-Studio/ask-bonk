@@ -805,6 +805,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
             base: reviewContext.baseSha,
             lastReviewId: reviewContext.lastReviewId,
             changedFiles: reviewContext.changedFiles,
+            rereview: reviewContext.rereview,
             reviewFile,
           },
         }

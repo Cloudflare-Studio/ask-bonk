@@ -78,9 +78,9 @@ inputs:
     default: "auto"
 
   specialist_parallelism:
-    description: "How many specialists run at once (each is an OpenCode process)"
+    description: "How many specialists run at once. Each is an OpenCode process using a few hundred MB of memory; lower it on small runners."
     required: false
-    default: "4"
+    default: "10"
 
   specialist_timeout:
     description: "Total time for the specialist step (e.g. '15m'); each specialist also has its own budget"

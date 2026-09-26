@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { describe, expect, it } from "vitest";
 import { writeDiff, type DiffManifest, type PullRequestFile } from "../github/script/review-diff";
 import { formatNotReviewed } from "../github/script/review-publish";
@@ -7,7 +7,9 @@ import {
   buildSpecialistConfig,
   buildSpecialistPrompt,
   formatSpecialistFindings,
+  launchOrder,
   loadRepoSpecialists,
+  prepareDataHome,
   parseSpecialistFile,
   reviewScope,
   selectSpecialists,
@@ -351,5 +353,25 @@ describe("Bonk specialists", () => {
     expect(buildSpecialistPrompt(byName.get("performance")!, diff, fullContext)).not.toContain(
       "This is a re-review.",
     );
+  });
+
+  it("starts the longest specialists first, each with its own data directory", () => {
+    const repo = parseSpecialistFile(REPO_SPECIALIST, "jsg.md") as SpecialistDef;
+    const diff = manifest([file("src/workerd/jsg/jsg.h", 400), file("docs/guide.md", 10)]);
+    const byName = new Map([...BUILTIN_SPECIALISTS, repo].map((def) => [def.name, def]));
+    const pick = (...list: string[]) => list.map((name) => byName.get(name)!);
+    // Budget first (10m, 8m, 5m), then the amount of code in scope.
+    expect(
+      names(launchOrder(pick("docs", "tests", "jsg-safety", "security", "correctness"), diff)),
+    ).toEqual(["security", "correctness", "jsg-safety", "docs", "tests"]);
+
+    const source = `/tmp/bonk-test/xdg-${crypto.randomUUID()}`;
+    mkdirSync(`${source}/opencode`, { recursive: true });
+    writeFileSync(`${source}/opencode/auth.json`, '{"anthropic":{}}');
+    writeFileSync(`${source}/opencode/opencode.db`, "shared database");
+    const home = `/tmp/bonk-test/xdg-${crypto.randomUUID()}`;
+    prepareDataHome(home, source);
+    expect(readFileSync(`${home}/opencode/auth.json`, "utf8")).toBe('{"anthropic":{}}');
+    expect(existsSync(`${home}/opencode/opencode.db`)).toBe(false);
   });
 });

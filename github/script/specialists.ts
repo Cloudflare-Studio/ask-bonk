@@ -10,7 +10,8 @@
 // Selection is decided here from the diff manifest and a size tier, not by a
 // model, so which areas get reviewed is predictable.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { appendGitHubValue, core, escapePromptValue } from "./context";
@@ -36,7 +37,14 @@ const MINUTE = 60_000;
 const DEFAULT_BUDGET_MS = 5 * MINUTE;
 const DEEP_BUDGET_MS = 10 * MINUTE;
 const DEFAULT_STEP_TIMEOUT_MS = 15 * MINUTE;
-const DEFAULT_PARALLELISM = 4;
+const DEFAULT_PARALLELISM = 10;
+// Gap between launching the first specialists, so their OpenCode processes do
+// not all initialize at the same instant.
+const LAUNCH_GAP_MS = 1000;
+// Lines of a failed attempt's stderr kept for the log.
+const STDERR_TAIL_LINES = 20;
+// Credential files a specialist's own OpenCode data directory starts with.
+const OPENCODE_AUTH_FILES = ["auth.json", "account.json", "mcp-auth.json"];
 // A specialist that emits nothing for this long between model steps has
 // stalled. Inside a step, silence can be a thinking model before its first
 // token or a long tool call, so it gets twice as long.
@@ -592,6 +600,8 @@ export interface SpecialistResult {
   reason?: string;
   findings: Finding[];
   attempts: number;
+  // The end of a failed or stalled attempt's stderr, for the log.
+  stderrTail?: string;
 }
 
 function describeStatus(result: SpecialistResult): string {
@@ -695,8 +705,42 @@ interface AttemptOptions {
   outFile: string;
   config: string;
   deadlineMs: number;
+  // The specialist's own XDG_DATA_HOME.
+  dataHome: string;
   model?: string;
   variant?: string;
+}
+
+// OpenCode keeps its database in its data directory, and several processes
+// creating or migrating one database at once can fail at startup. Each
+// specialist gets its own data directory, seeded with the provider
+// credentials `opencode auth login` stores there.
+export function prepareDataHome(dataHome: string, source = defaultDataHome()): void {
+  const target = join(dataHome, "opencode");
+  mkdirSync(target, { recursive: true });
+  for (const name of OPENCODE_AUTH_FILES) {
+    const file = join(source, "opencode", name);
+    if (existsSync(file)) copyFileSync(file, join(target, name));
+  }
+}
+
+function defaultDataHome(): string {
+  return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+}
+
+// Most of the step's time goes to the specialists with the largest budgets
+// and the most code, so they start first.
+export function launchOrder(
+  defs: SpecialistDef[],
+  manifest: DiffManifest,
+  changedFiles?: string[],
+): SpecialistDef[] {
+  const size = (def: SpecialistDef) =>
+    specialistFiles(def, manifest, changedFiles).reduce(
+      (sum, file) => sum + file.additions + file.deletions,
+      0,
+    );
+  return defs.toSorted((a, b) => b.budgetMs - a.budgetMs || size(b) - size(a));
 }
 
 async function runAttempt(
@@ -718,7 +762,11 @@ async function runAttempt(
   args.push("--file", options.promptFile);
 
   // No GitHub or OIDC credentials: specialists only read.
-  const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_CONFIG_CONTENT: options.config };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCODE_CONFIG_CONTENT: options.config,
+    XDG_DATA_HOME: options.dataHome,
+  };
   for (const key of [
     "GH_TOKEN",
     "GITHUB_TOKEN",
@@ -745,7 +793,14 @@ async function runAttempt(
   const watchdog = new Watchdog(started);
   let ended: "deadline" | "stall" | null = null;
   const onLine = (line: string) => watchdog.observe(line, Date.now());
-  const streams = Promise.all([readLines(proc.stdout, onLine), readLines(proc.stderr, onLine)]);
+  const stderr: string[] = [];
+  const onStderr = (line: string) => {
+    onLine(line);
+    if (!line.trim()) return;
+    stderr.push(line.length > 500 ? `${line.slice(0, 500)}…` : line);
+    if (stderr.length > STDERR_TAIL_LINES) stderr.shift();
+  };
+  const streams = Promise.all([readLines(proc.stdout, onLine), readLines(proc.stderr, onStderr)]);
   const timer = setInterval(() => {
     const now = Date.now();
     if (now - started >= options.deadlineMs) ended = "deadline";
@@ -768,13 +823,15 @@ async function runAttempt(
       ? { status: "partial", findings: file.findings }
       : { status: "timed_out", reason: `timed out after ${limit}`, findings: [] };
   }
+  const stderrTail = stderr.length > 0 ? { stderrTail: stderr.join("\n") } : {};
   if (ended === "stall")
-    return { status: "stalled", reason: "stopped producing output", findings: [] };
+    return { status: "stalled", reason: "stopped producing output", findings: [], ...stderrTail };
   if (!file) {
     return {
       status: "failed",
       reason: exitCode === 0 ? "finished without writing findings" : `exited with code ${exitCode}`,
       findings: [],
+      ...stderrTail,
     };
   }
   return { status: file.findings.length > 0 ? "issues" : "ok", findings: file.findings };
@@ -798,7 +855,13 @@ async function runSpecialist(
 ): Promise<SpecialistResult> {
   const outFile = join(shared.dir, `${def.name}.findings.json`);
   const promptFile = join(shared.dir, `${def.name}.prompt.md`);
+  const dataHome = join(shared.dir, `${def.name}.data`);
   const config = buildSpecialistConfig(shared.consumerConfig, def, shared.runnerTemp);
+  try {
+    prepareDataHome(dataHome);
+  } catch (error) {
+    core.warning(`Specialist ${def.name}: could not prepare its data directory: ${error}`);
+  }
   let last: Omit<SpecialistResult, "name" | "attempts"> = {
     status: "not_run",
     reason: "out of time before it could start",
@@ -828,10 +891,16 @@ async function runSpecialist(
       outFile,
       config,
       deadlineMs,
+      dataHome,
       model: shared.model,
       variant: shared.variant,
     });
     core.info(`Specialist ${def.name}: ${last.status}${last.reason ? ` (${last.reason})` : ""}`);
+    if (last.stderrTail && (last.status === "failed" || last.status === "stalled")) {
+      core.info(
+        `Specialist ${def.name}: stderr of attempt ${attempt}:\n${last.stderrTail.replace(/^/gm, "  ")}`,
+      );
+    }
     // Only crashes and stalls are worth a second launch; a timeout would
     // just time out again.
     if (last.status !== "failed" && last.status !== "stalled") {
@@ -845,10 +914,14 @@ async function runPool<T, R>(
   items: T[],
   limit: number,
   work: (item: T) => Promise<R>,
+  launchGapMs = 0,
 ): Promise<R[]> {
   const results: R[] = [];
   let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async (_, worker) => {
+    if (worker > 0 && launchGapMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, worker * launchGapMs));
+    }
     while (next < items.length) {
       const index = next++;
       results[index] = await work(items[index]);
@@ -929,20 +1002,29 @@ export async function runSpecialists(): Promise<void> {
     Number.parseInt(process.env.SPECIALIST_PARALLELISM || "", 10) || DEFAULT_PARALLELISM,
   );
   const stepDeadline = Date.now() + stepTimeout;
-  const results = await runPool(selection.selected, parallelism, (def) =>
-    runSpecialist(def, {
-      manifest,
-      dir,
-      cwd,
-      consumerConfig: process.env.OPENCODE_CONFIG_CONTENT,
-      runnerTemp,
-      stepDeadline,
-      repository: process.env.GITHUB_REPOSITORY || "",
-      prNumber: process.env.PR_NUMBER || "",
-      model: process.env.SPECIALIST_MODEL || process.env.MODEL || undefined,
-      variant: process.env.SPECIALIST_VARIANT || process.env.VARIANT || undefined,
-      sinceLastReview,
-    }),
+  const order = launchOrder(selection.selected, manifest, sinceLastReview?.changedFiles);
+  const launched = await runPool(
+    order,
+    parallelism,
+    (def) =>
+      runSpecialist(def, {
+        manifest,
+        dir,
+        cwd,
+        consumerConfig: process.env.OPENCODE_CONFIG_CONTENT,
+        runnerTemp,
+        stepDeadline,
+        repository: process.env.GITHUB_REPOSITORY || "",
+        prNumber: process.env.PR_NUMBER || "",
+        model: process.env.SPECIALIST_MODEL || process.env.MODEL || undefined,
+        variant: process.env.SPECIALIST_VARIANT || process.env.VARIANT || undefined,
+        sinceLastReview,
+      }),
+    LAUNCH_GAP_MS,
+  );
+  // Report in selection order, whatever order they ran in.
+  const results = selection.selected.map(
+    (def) => launched.find((result) => result.name === def.name)!,
   );
 
   const statuses: Record<string, SpecialistStatusRecord> = {};

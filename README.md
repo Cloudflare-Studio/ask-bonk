@@ -248,12 +248,15 @@ Patterns are relative to the repository root and match whole paths: `*` stays wi
 
 #### Specialists
 
-With `rereview_context` enabled, reviews also use specialist reviewers. Before the main OpenCode run, Bonk starts one `opencode run --agent <specialist>` process per selected specialist, in parallel (`specialist_parallelism`, default 4). Each one:
+With `rereview_context` enabled, reviews also use specialist reviewers. Before the main OpenCode run, Bonk starts one `opencode run --agent <specialist>` process per selected specialist, in parallel (`specialist_parallelism`, default 10), the ones with the largest budgets and the most code first. Each one:
 
 - sees only the patches in its scope and a checkout of the pull request head;
 - runs read-only: editing, web access, spawning other agents, and GitHub commands are denied, and it gets no GitHub token; LSP and snapshots are off to save memory;
 - has its own time budget (5 minutes; 10 for correctness and security) and a stall watchdog. A specialist that produces no output for 3 minutes between model steps (6 minutes inside a step, where a reasoning model may be quiet before its first token) is stopped and retried once. Specialists are asked to write their findings file early and keep it updated, so one that runs out of time still contributes what it found;
-- writes findings in the same format as the main run, severities included.
+- writes findings in the same format as the main run, severities included;
+- gets its own OpenCode data directory (`XDG_DATA_HOME`), seeded with the credentials `opencode auth login` stores there, so processes starting together do not contend for one database. Launches are spaced a second apart, and a failed attempt's stderr is logged.
+
+Each specialist is an OpenCode process that uses a few hundred MB of memory, so ten at once fit a standard GitHub-hosted runner (16 GB); lower `specialist_parallelism` on smaller self-hosted runners.
 
 Bonk picks specialists in code from the diff, not with a model. Changes of at most 10 lines are reviewed by the main run alone. Up to 300 lines get correctness plus the specialists relevant to what changed (tests when tests changed, docs when docs changed). Larger changes get every relevant built-in: correctness, security, performance, api-compat, tests, and docs. Security also runs on any change that touches sensitive paths (auth, crypto, secrets, keys, tokens, `.env`, workflows). Filtered files do not count.
 
@@ -284,7 +287,7 @@ A `README.md` in that directory is ignored, so it can document the specialists. 
 | Input                    | Default | Description                                                     |
 | ------------------------ | ------- | --------------------------------------------------------------- |
 | `specialists`            | `auto`  | `auto`, `off` (single-agent reviews), or a comma-separated list |
-| `specialist_parallelism` | `4`     | Specialists running at once                                     |
+| `specialist_parallelism` | `10`    | Specialists running at once                                     |
 | `specialist_timeout`     | `15m`   | Total time for the specialist step                              |
 | `specialist_model`       | (model) | Model for specialists                                           |
 | `specialist_variant`     | (variant) | Variant for specialists                                       |

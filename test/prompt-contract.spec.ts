@@ -21,7 +21,11 @@ describe("Bonk prompt contract", () => {
 
   it("holds re-reviews to the previous review instead of starting over", () => {
     expect(guidance).toContain("Apply these rules when `<bonk_previous_review>` is present.");
-    expect(guidance).toContain("Report new findings only in code changed since `last_reviewed_head`.");
+    expect(guidance).toContain(
+      "Unless the scope is the whole pull request, report new findings only in code changed since `last_reviewed_head`.",
+    );
+    // A re-review whose specialists reviewed the whole pull request is a full review.
+    expect(guidance).toContain("When `<bonk_specialist_findings>` says `review_scope: full`");
     expect(guidance).toContain("Since last review: <resolved> resolved, <open> still open, <new> new.");
     expect(guidance).toContain("A first review with findings starts with `Review: <count> findings.`");
   });

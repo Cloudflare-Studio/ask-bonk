@@ -277,6 +277,8 @@ What to look for, in plain language. This becomes the specialist's instructions.
 
 On re-reviews, the review-state marker records each specialist's result, and a specialist whose files the author has not changed since its last successful run is not run again: its earlier findings stand (their threads stay as they are) and the summary lists it as carried forward. Correctness and security always run, and any doubt (a first review, an unknown change set, or a specialist that did not finish last time) means the specialist runs.
 
+Specialists and the judge share one scope. When every specialist that runs finished a review of this pull request before, the re-review covers the author's changes since the last review: a re-run specialist sees only its files the author changed, with each file's patch at the last review and now (correctness and security see all of their files but report only what those changes introduced), and the judge keeps to the same changes. When any of them never did, because the last review ran without specialists, the change grew into a larger tier, or a specialist did not finish last time, the re-review covers the whole pull request, for the specialists and the judge alike. The judge still follows up on every earlier thread either way.
+
 A `README.md` in that directory is ignored, so it can document the specialists. A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
 
 | Input                    | Default | Description                                                     |

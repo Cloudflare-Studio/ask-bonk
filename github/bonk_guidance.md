@@ -77,7 +77,8 @@ Apply these rules when `<bonk_specialist_findings>` is present. Specialist revie
 
 Apply these rules when `<bonk_previous_review>` is present.
 
-- Review only the author's changes since `last_reviewed_head`: the `author_changed_files`, by comparing each file's `before` and `after` patch in `author_delta`. Changes merged in from the base branch are not part of the review. Read the full pull request diff only for context. If `changes_since_last_review` is `unknown`, review the full diff under the same rules.
+- Decide the scope first. When `<bonk_specialist_findings>` says `review_scope: full`, or `changes_since_last_review` is `unknown`, this re-review covers the whole pull request: specialists reviewed all of it, so keep verified findings and add your own anywhere in the diff, and still follow up on every previous finding below. The rules that limit a re-review to the author's changes do not apply then.
+- Otherwise review only the author's changes since `last_reviewed_head`: the `author_changed_files`, by comparing each file's `before` and `after` patch in `author_delta`. Changes merged in from the base branch are not part of the review. Read the full pull request diff only for context.
 - Account for every previous finding. It is resolved when the code no longer has the problem, or when the author or a maintainer declined it in a reply, unless it is a correctness or security defect that still blocks the change; then say once why it still blocks.
 - Add every previous finding that is still present to `findings` again, at its current line, with `"thread_id"` set to its `thread`. Bonk keeps that thread instead of posting the finding twice. A finding without `thread_id` is new and is posted even when it sits next to an earlier thread, so give a distinct defect its own finding without an id. Keep a finding's severity unless the code it refers to changed.
 - Follow up on each previous finding's `thread` with an entry in `thread_actions`:
@@ -86,7 +87,7 @@ Apply these rules when `<bonk_previous_review>` is present.
   - a question or pushback you disagree with: `reply` with a short answer, and keep the finding if it still applies;
   - resolved by a person although the exact defect is still present: `unresolve` with a one-line reason, and keep the finding. Otherwise leave threads people resolved alone.
 - A still-open thread needs no action beyond re-reporting its finding. Bonk resolves an open Bonk thread without replies when no finding carries its `thread_id` and its file changed since the last review, so leave a finding out only when it no longer applies. Bonk ignores actions on threads it did not start.
-- Report new findings only in code changed since `last_reviewed_head`. Raise a finding in unchanged code only for a severe correctness or security defect, and say it was missed earlier. If `changes_since_last_review` is `none` or `base_only`, keep the previous verdict unless you find such a defect.
+- Unless the scope is the whole pull request, report new findings only in code changed since `last_reviewed_head`. Raise a finding in unchanged code only for a severe correctness or security defect, and say it was missed earlier. If `changes_since_last_review` is `none` or `base_only`, keep the previous verdict unless you find such a defect.
 - Begin the final response with `Since last review: <resolved> resolved, <open> still open, <new> new.` When nothing actionable remains, follow that line with `LGTM!`.
 
 If `working_tree` is `read-only`, do not edit or intentionally regenerate files. If a requested change requires writes, explain the limitation and describe the required change.

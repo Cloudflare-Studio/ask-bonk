@@ -9,6 +9,7 @@ import {
   formatSpecialistFindings,
   loadRepoSpecialists,
   parseSpecialistFile,
+  reviewScope,
   selectSpecialists,
   sizeTier,
   STALL_MS,
@@ -266,6 +267,89 @@ describe("Bonk specialists", () => {
 
     expect(formatSpecialistFindings([], [{ name: "docs", status: "ok" }])).toContain(
       "specialist: docs (not re-run: the author did not change its files since the last review; its earlier findings stand)",
+    );
+  });
+
+  it("reviews the whole pull request when specialists had not reviewed it before", () => {
+    const diff = manifest([file("src/a.ts", 200), file("src/b.ts", 200), file("docs/x.md", 20)]);
+    const scopeFor = (previous: Record<string, string> | null, changedFiles: string[] | null) => {
+      const options = { request: "auto", changedFiles, previous };
+      return reviewScope(selectSpecialists(BUILTIN_SPECIALISTS, diff, options), {
+        ...options,
+        rereview: true,
+      });
+    };
+    const all = {
+      correctness: "ok",
+      security: "ok",
+      performance: "issues",
+      "api-compat": "ok",
+      tests: "ok",
+      docs: "ok",
+    };
+
+    // The last review was a single-agent one: its marker has no specialists.
+    expect(scopeFor(null, ["src/a.ts"])).toEqual({
+      kind: "full",
+      reason: "the last review ran without specialists",
+    });
+    // The change grew into a tier with specialists that never reviewed it.
+    expect(scopeFor({ correctness: "ok", docs: "ok" }, ["src/a.ts"])).toEqual({
+      kind: "full",
+      reason:
+        "security, performance, api-compat, tests had not finished a review of this pull request before",
+    });
+    expect(scopeFor({ ...all, security: "timed_out" }, ["src/a.ts"])?.kind).toBe("full");
+    expect(scopeFor(all, null)?.kind).toBe("full");
+    expect(scopeFor(all, ["src/a.ts"])).toEqual({ kind: "incremental" });
+    // A first review needs no scope line.
+    expect(
+      reviewScope(selectSpecialists(BUILTIN_SPECIALISTS, diff, { request: "auto" }), {
+        request: "auto",
+        rereview: false,
+      }),
+    ).toBeNull();
+
+    const block = formatSpecialistFindings([], [], scopeFor(null, ["src/a.ts"]));
+    expect(block).toContain("review_scope: full (the last review ran without specialists)");
+    expect(formatSpecialistFindings([], [], { kind: "incremental" })).toContain(
+      "review_scope: changes_since_last_review",
+    );
+  });
+
+  it("limits re-run specialists to the author's changes when the judge is limited to them", () => {
+    const diff = manifest([
+      file("src/a.ts", 200, "@@ -1 +1 @@\n-a\n+changed since"),
+      file("src/b.ts", 200, "@@ -1 +1 @@\n-b\n+unchanged since"),
+    ]);
+    const deltaDir = `/tmp/bonk-test/delta-${crypto.randomUUID()}`;
+    mkdirSync(deltaDir, { recursive: true });
+    writeFileSync(`${deltaDir}/src_a.ts.before.patch`, "@@ -1 +1 @@\n-a\n+old");
+    writeFileSync(`${deltaDir}/src_a.ts.after.patch`, "@@ -1 +1 @@\n-a\n+changed since");
+    const context = {
+      repository: "owner/repo",
+      prNumber: "5",
+      outFile: "/tmp/out.json",
+      budgetMs: 5 * 60_000,
+      sinceLastReview: { changedFiles: ["src/a.ts"], deltaDir },
+    };
+    const byName = new Map(BUILTIN_SPECIALISTS.map((def) => [def.name, def]));
+
+    const performance = buildSpecialistPrompt(byName.get("performance")!, diff, context);
+    expect(performance).toContain("+changed since");
+    expect(performance).not.toContain("src/b.ts");
+    expect(performance).toContain("This is a re-review.");
+    expect(performance).toContain(
+      `- src/a.ts (its patch at the last review: ${deltaDir}/src_a.ts.before.patch; now: ${deltaDir}/src_a.ts.after.patch)`,
+    );
+    // Correctness sees all of its files but reports only what the author's changes introduced.
+    const correctness = buildSpecialistPrompt(byName.get("correctness")!, diff, context);
+    expect(correctness).toContain("+unchanged since");
+    expect(correctness).toContain("report only problems introduced by the author's changes");
+    // A full review has no re-review rules.
+    const { sinceLastReview: _full, ...fullContext } = context;
+    expect(buildSpecialistPrompt(byName.get("performance")!, diff, fullContext)).not.toContain(
+      "This is a re-review.",
     );
   });
 });

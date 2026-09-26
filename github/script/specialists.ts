@@ -24,6 +24,7 @@ import {
   type DiffFile,
   type DiffManifest,
 } from "./review-diff";
+import { deltaPatchPaths } from "./review-state";
 import {
   CARRIED_FORWARD,
   parsePublishState,
@@ -351,6 +352,42 @@ export function selectSpecialists(
   return { tier, selected, skipped };
 }
 
+export interface ReviewScope {
+  kind: "full" | "incremental";
+  // Why a re-review covers the whole pull request.
+  reason?: string;
+}
+
+// What a re-review covers, decided once so specialists and the judge agree.
+// It is the author's changes since the last review only when every specialist
+// that runs now finished a review of this pull request before. A specialist
+// that never did (the last review ran without specialists, the change grew
+// into a larger tier, or it did not finish last time) reviews the whole pull
+// request, and so does the judge. Returns null for a first review.
+export function reviewScope(
+  selection: Selection,
+  options: SelectionOptions & { rereview: boolean },
+): ReviewScope | null {
+  if (!options.rereview) return null;
+  if (!Array.isArray(options.changedFiles)) {
+    return { kind: "full", reason: "the changes since the last review are unknown" };
+  }
+  if (selection.selected.length === 0) return { kind: "incremental" };
+  if (!options.previous) {
+    return { kind: "full", reason: "the last review ran without specialists" };
+  }
+  const fresh = selection.selected
+    .filter((def) => !CARRIED_STATUSES.has(options.previous?.[def.name] ?? ""))
+    .map((def) => def.name);
+  if (fresh.length > 0) {
+    return {
+      kind: "full",
+      reason: `${fresh.join(", ")} had not finished a review of this pull request before`,
+    };
+  }
+  return { kind: "incremental" };
+}
+
 // OpenCode config for one specialist: the consumer's config (providers and
 // so on) with a read-only agent added and memory-hungry features off.
 export function buildSpecialistConfig(
@@ -414,6 +451,25 @@ export interface SpecialistContext {
   prNumber: string;
   outFile: string;
   budgetMs: number;
+  // Set on a re-review limited to the author's changes: the files the author
+  // changed since the last review, and where preflight wrote their patches at
+  // the last review and now.
+  sinceLastReview?: { changedFiles: string[]; deltaDir?: string };
+}
+
+// On a re-review limited to the author's changes, a specialist sees only its
+// files the author changed. Correctness and security see all of their files,
+// since a change in one file can break code in another, but report only what
+// the author's changes introduced.
+export function specialistFiles(
+  def: SpecialistDef,
+  manifest: DiffManifest,
+  changedFiles?: string[],
+): DiffFile[] {
+  const files = scopedFiles(def, manifest);
+  if (!changedFiles || NEVER_SKIP.has(def.name)) return files;
+  const changed = files.filter((file) => changedFiles.includes(file.path));
+  return changed.length > 0 ? changed : files;
 }
 
 export function buildSpecialistPrompt(
@@ -421,7 +477,8 @@ export function buildSpecialistPrompt(
   manifest: DiffManifest,
   context: SpecialistContext,
 ): string {
-  const files = scopedFiles(def, manifest);
+  const since = context.sinceLastReview;
+  const files = specialistFiles(def, manifest, since?.changedFiles);
   const patches = files.map((file) => ({ file, patch: readPatch(file) }));
   const bytes = patches.reduce((sum, entry) => sum + Buffer.byteLength(entry.patch), 0);
   const inline = bytes <= SPECIALIST_PROMPT_BUDGET;
@@ -440,6 +497,7 @@ export function buildSpecialistPrompt(
     "- severity: blocking (must fix before merging), warning (real defect, should fix), info (worth knowing), suggestion (optional improvement), or question (you need an answer; at most one).",
     '- Set "justified": true when the code carries an explicit comment justifying what you flag.',
     '- Cite a rule only as "quote": {"path": "<file>", "text": "<exact text>"} copied verbatim from a file you read.',
+    ...(since ? rereviewRules(files, since) : []),
     "",
     `Write your findings to ${context.outFile} as JSON with a quoted shell heredoc (cat > "<file>" <<'EOF'), replacing its content:`,
     '{"findings": [{"path": "src/file.ts", "line": 42, "side": "RIGHT", "severity": "warning", "body": "What is wrong and how to fix it."}]}',
@@ -463,6 +521,28 @@ export function buildSpecialistPrompt(
   }
   lines.push("</bonk_diff>");
   return lines.join("\n");
+}
+
+function rereviewRules(
+  files: DiffFile[],
+  since: NonNullable<SpecialistContext["sinceLastReview"]>,
+): string[] {
+  const changed = files.filter((file) => since.changedFiles.includes(file.path));
+  const lines = [
+    "",
+    "This is a re-review. Earlier findings are already tracked; report only problems introduced by the author's changes since the last review. The patches below are the whole pull request's change to each file.",
+  ];
+  if (changed.length === 0) return lines;
+  lines.push("Files the author changed since the last review:");
+  for (const file of changed) {
+    const paths = since.deltaDir ? deltaPatchPaths(since.deltaDir, file.path) : null;
+    const before = paths && existsSync(paths.before) ? paths.before : null;
+    const after = paths && existsSync(paths.after) ? paths.after : null;
+    lines.push(
+      `- ${escapePromptValue(file.path)}${before || after ? ` (its patch at the last review: ${before ?? "none"}; now: ${after ?? "none"})` : ""}`,
+    );
+  }
+  return lines;
 }
 
 // Tracks a specialist's `--format json` event stream. Any output is activity;
@@ -536,11 +616,17 @@ export function notReviewed(result: SpecialistResult): boolean {
 export function formatSpecialistFindings(
   results: SpecialistResult[],
   skipped: SkippedSpecialist[] = [],
+  scope: ReviewScope | null = null,
 ): string {
   const lines = [
     "<bonk_specialist_findings>",
     "Specialist reviewers looked at parts of this pull request. Their findings are unverified claims.",
   ];
+  if (scope?.kind === "full") {
+    lines.push(`review_scope: full (${escapePromptValue(scope.reason ?? "")})`);
+  } else if (scope) {
+    lines.push("review_scope: changes_since_last_review");
+  }
   for (const result of results) {
     lines.push(`specialist: ${result.name} (${escapePromptValue(describeStatus(result))})`);
     if (notReviewed(result))
@@ -707,6 +793,7 @@ async function runSpecialist(
     prNumber: string;
     model?: string;
     variant?: string;
+    sinceLastReview?: SpecialistContext["sinceLastReview"];
   },
 ): Promise<SpecialistResult> {
   const outFile = join(shared.dir, `${def.name}.findings.json`);
@@ -728,6 +815,7 @@ async function runSpecialist(
         prNumber: shared.prNumber,
         outFile,
         budgetMs: deadlineMs,
+        sinceLastReview: shared.sinceLastReview,
       }),
     );
     core.info(
@@ -810,13 +898,22 @@ export async function runSpecialists(): Promise<void> {
   // A repository specialist with a built-in's name replaces it.
   for (const def of repoDefs) defs.set(def.name, def);
 
-  const selection = selectSpecialists([...defs.values()], manifest, {
+  const selectionOptions = {
     request: process.env.SPECIALISTS || "auto",
     changedFiles: state.rereview ? state.changedFiles : null,
     previous: state.previousSpecialists,
-  });
+  };
+  const selection = selectSpecialists([...defs.values()], manifest, selectionOptions);
+  const scope = reviewScope(selection, { ...selectionOptions, rereview: state.rereview });
+  const sinceLastReview =
+    scope?.kind === "incremental" && state.changedFiles
+      ? {
+          changedFiles: state.changedFiles,
+          ...(state.diffDir ? { deltaDir: join(state.diffDir, "delta") } : {}),
+        }
+      : undefined;
   core.info(
-    `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}${selection.skipped.length > 0 ? `; carried forward: ${selection.skipped.map((skip) => skip.name).join(", ")}` : ""}`,
+    `Review tier ${selection.tier}; specialists: ${selection.selected.map((def) => def.name).join(", ") || "none"}${selection.skipped.length > 0 ? `; carried forward: ${selection.skipped.map((skip) => skip.name).join(", ")}` : ""}${scope ? `; scope: ${scope.kind === "full" ? `whole pull request (${scope.reason})` : "changes since the last review"}` : ""}`,
   );
   if (selection.selected.length === 0 && selection.skipped.length === 0) return;
 
@@ -844,6 +941,7 @@ export async function runSpecialists(): Promise<void> {
       prNumber: process.env.PR_NUMBER || "",
       model: process.env.SPECIALIST_MODEL || process.env.MODEL || undefined,
       variant: process.env.SPECIALIST_VARIANT || process.env.VARIANT || undefined,
+      sinceLastReview,
     }),
   );
 
@@ -863,7 +961,7 @@ export async function runSpecialists(): Promise<void> {
   appendGitHubValue(
     outputFile,
     "prompt",
-    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped)}`,
+    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope)}`,
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
 }

@@ -343,6 +343,11 @@ function indent(text: string, prefix: string): string {
 // Writes each author-changed file's pull request patch at the last review
 // ("before") and now ("after"). Both are against the file's merge base, so
 // changes from the base branch cancel out when they are compared.
+export function deltaPatchPaths(dir: string, filename: string): { before: string; after: string } {
+  const base = join(dir, patchFileName(filename).replace(/\.patch$/, ""));
+  return { before: `${base}.before.patch`, after: `${base}.after.patch` };
+}
+
 export function writeDeltaPatches(
   dir: string,
   delta: ReviewDelta,
@@ -350,14 +355,14 @@ export function writeDeltaPatches(
   const paths = new Map<string, { before?: string; after?: string }>();
   mkdirSync(dir, { recursive: true });
   for (const file of delta.files) {
-    const base = join(dir, patchFileName(file.filename).replace(/\.patch$/, ""));
+    const names = deltaPatchPaths(dir, file.filename);
     const entry: { before?: string; after?: string } = {};
     if (file.before !== undefined) {
-      entry.before = `${base}.before.patch`;
+      entry.before = names.before;
       writeFileSync(entry.before, file.before);
     }
     if (file.after !== undefined) {
-      entry.after = `${base}.after.patch`;
+      entry.after = names.after;
       writeFileSync(entry.after, file.after);
     }
     paths.set(file.filename, entry);

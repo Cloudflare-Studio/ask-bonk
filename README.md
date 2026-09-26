@@ -246,6 +246,45 @@ A built-in filter leaves out files that rarely need review and lists them at the
 
 Patterns are relative to the repository root and match whole paths: `*` stays within one path segment, `**` (a whole segment) spans any number of segments, and a trailing `/` covers a directory. Leading `/`, `..`, `?`, brackets, and negation are not allowed, and no pattern may cover `.github/workflows/`. Invalid patterns are skipped with a warning.
 
+#### Specialists
+
+With `rereview_context` enabled, reviews also use specialist reviewers. Before the main OpenCode run, Bonk starts one `opencode run --agent <specialist>` process per selected specialist, in parallel (`specialist_parallelism`, default 4). Each one:
+
+- sees only the patches in its scope and a checkout of the pull request head;
+- runs read-only: editing, web access, spawning other agents, and GitHub commands are denied, and it gets no GitHub token; LSP and snapshots are off to save memory;
+- has its own time budget (5 minutes; 10 for correctness and security) and a stall watchdog. A specialist that produces no output for 3 minutes between model steps (6 minutes inside a step, where a reasoning model may be quiet before its first token) is stopped and retried once. Specialists are asked to write their findings file early and keep it updated, so one that runs out of time still contributes what it found;
+- writes findings in the same format as the main run, severities included.
+
+Bonk picks specialists in code from the diff, not with a model. Changes of at most 10 lines are reviewed by the main run alone. Up to 300 lines get correctness plus the specialists relevant to what changed (tests when tests changed, docs when docs changed). Larger changes get every relevant built-in: correctness, security, performance, api-compat, tests, and docs. Security also runs on any change that touches sensitive paths (auth, crypto, secrets, keys, tokens, `.env`, workflows). Filtered files do not count.
+
+The main run then acts as the judge: it receives every specialist finding as an unverified claim, checks each against the code, merges duplicates, drops wrong or speculative ones, fixes severities, adds what the specialists missed, and writes the single findings file Bonk publishes. A specialist that did not finish is listed in the summary as `<area>: not reviewed (<reason>)`. The whole step is limited by `specialist_timeout` (default 15m), so budget it within the job's `timeout-minutes`.
+
+Repositories can add their own specialists as Markdown files in `.github/bonk/specialists/`. Bonk reads them from the pull request's base commit, so a pull request cannot change the instructions its own review uses:
+
+```markdown
+---
+name: jsg-safety          # lowercase letters, digits, and dashes
+description: JSG binding and GC safety
+paths:                    # optional; same pattern language as ignore_paths
+  - src/workerd/jsg/**
+  - src/workerd/api/**/*.h
+budget: 8m                # optional; default 5m
+model: provider/model     # optional
+variant: high             # optional
+---
+What to look for, in plain language. This becomes the specialist's instructions.
+```
+
+A repository specialist runs whenever the change is larger than trivial and touches its `paths` (or any code, without `paths`). One named like a built-in replaces it.
+
+| Input                    | Default | Description                                                     |
+| ------------------------ | ------- | --------------------------------------------------------------- |
+| `specialists`            | `auto`  | `auto`, `off` (single-agent reviews), or a comma-separated list |
+| `specialist_parallelism` | `4`     | Specialists running at once                                     |
+| `specialist_timeout`     | `15m`   | Total time for the specialist step                              |
+| `specialist_model`       | (model) | Model for specialists                                           |
+| `specialist_variant`     | (variant) | Variant for specialists                                       |
+
 Review runs also publish differently. Instead of calling the GitHub API, OpenCode writes its inline findings to a JSON file whose path Bonk puts in the prompt (`review_output_file`). After OpenCode finishes, Bonk:
 
 - posts the findings as one review with an empty body, pinned to the reviewed commit. A finding whose line is not in the diff moves to the nearest commentable line within five lines; suggestions never move. Findings that still cannot be placed are listed in the summary under "Findings outside the diff";

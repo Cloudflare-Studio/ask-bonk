@@ -117,6 +117,8 @@ export interface PublishState {
   reviewFile: string;
   // Where preflight wrote the pull request diff; empty when it did not.
   diffDir: string;
+  // Repository specialist definitions from the base commit; empty if none.
+  specialistsDir: string;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -195,6 +197,7 @@ export function parsePublishState(text: string | undefined): PublishState | null
       expectReview: raw.expectReview === true,
       reviewFile: typeof raw.reviewFile === "string" ? raw.reviewFile : "",
       diffDir: typeof raw.diffDir === "string" ? raw.diffDir : "",
+      specialistsDir: typeof raw.specialistsDir === "string" ? raw.specialistsDir : "",
     };
   } catch {
     return null;
@@ -419,6 +422,44 @@ export function stripVerdict(text: string): string {
     lines.shift();
   }
   return lines.join("\n").trim();
+}
+
+export function parseSpecialistStatuses(
+  text: string | undefined,
+): Record<string, { status: string; reason?: string }> {
+  if (!text) return {};
+  try {
+    const raw = JSON.parse(text) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+    const statuses: Record<string, { status: string; reason?: string }> = {};
+    for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+      const entry = value as { status?: unknown; reason?: unknown };
+      if (typeof entry?.status !== "string") continue;
+      statuses[name] = {
+        status: entry.status,
+        ...(typeof entry.reason === "string" ? { reason: entry.reason } : {}),
+      };
+    }
+    return statuses;
+  } catch {
+    return {};
+  }
+}
+
+const REVIEWED_STATUSES = new Set(["ok", "issues", "partial"]);
+
+// Specialists that did not finish are named in the summary, so a missing
+// area is visible rather than silently absent.
+export function formatNotReviewed(
+  statuses: Record<string, { status: string; reason?: string }>,
+): string {
+  const missing = Object.entries(statuses).filter(([, entry]) => !REVIEWED_STATUSES.has(entry.status));
+  if (missing.length === 0) return "";
+  return [
+    "**Not reviewed**",
+    "",
+    ...missing.map(([name, entry]) => `- ${name}: not reviewed (${entry.reason ?? entry.status.replace(/_/g, " ")})`),
+  ].join("\n");
 }
 
 export interface StickyBodyParts {
@@ -893,6 +934,8 @@ export async function publishReview(): Promise<void> {
       .filter(Boolean)
       .join("\n\n");
   }
+
+  sections.push(formatNotReviewed(parseSpecialistStatuses(process.env.SPECIALIST_STATUS)));
 
   const body = buildStickyBody({
     summary,

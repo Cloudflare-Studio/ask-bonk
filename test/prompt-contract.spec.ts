@@ -47,6 +47,11 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain("Bonk computes the verdict line from the file and replaces yours");
   });
 
+  it("makes the main run the judge of specialist findings", () => {
+    expect(guidance).toContain("Verify every specialist finding against the code before keeping it.");
+    expect(guidance).toContain("Write the result as the single findings file.");
+  });
+
   it("has re-reviews follow up on Bonk's threads through structured actions", () => {
     expect(guidance).toContain(
       'fixed: `{"thread_id": "<thread>", "action": "resolve", "body": "Fixed in <short sha>: <one line on how>."}`',

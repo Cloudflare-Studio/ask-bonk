@@ -26,6 +26,7 @@ import {
 import { fetchWithRetry } from "./http";
 import { formatDiffBlock, prepareDiff, type DiffManifest } from "./review-diff";
 import type { PublishState } from "./review-publish";
+import { fetchRepoSpecialists } from "./specialists";
 import { loadReviewContext, type ReviewContext } from "./review-state";
 
 // ---------------------------------------------------------------------------
@@ -742,6 +743,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
   let reviewContext: ReviewContext | null = null;
   let diff: DiffManifest | null = null;
   const diffDir = options.reviewToken && rereviewEnabled() ? diffDirPath() : "";
+  const specialistsDir = diffDir ? join(diffDir, "specialists") : "";
   if (options.reviewToken && rereviewEnabled() && process.env.PR_NUMBER && userRequest) {
     try {
       reviewContext = await loadReviewContext(
@@ -752,6 +754,13 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
       );
     } catch (error) {
       core.warning(`Could not load previous review context: ${error}`);
+    }
+    if (reviewContext && diffDir && process.env.SPECIALISTS?.trim().toLowerCase() !== "off") {
+      try {
+        await fetchRepoSpecialists(options.reviewToken, repository, reviewContext.baseSha, specialistsDir);
+      } catch (error) {
+        core.warning(`Could not read repository specialists: ${error}`);
+      }
     }
     if (reviewContext && diffDir) {
       try {
@@ -841,6 +850,7 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
               process.env.EVENT_NAME === "pull_request" || /\breview\b/i.test(userRequest),
             reviewFile,
             diffDir: diff ? diffDir : "",
+            specialistsDir,
           },
         }
       : {}),

@@ -518,6 +518,7 @@ describe("GitHub Action re-review context", () => {
           files: [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+c" }],
         });
       }
+      if (url.includes("/contents/.github/bonk/specialists")) return jsonResponse({}, 404);
       if (url.includes("/pulls/5/files")) {
         return jsonResponse([
           { filename: "src/a.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b" },
@@ -562,6 +563,7 @@ describe("GitHub Action re-review context", () => {
       expectReview: true,
       reviewFile,
       diffDir: "/tmp/bonk-runner/bonk-diff-77",
+      specialistsDir: "/tmp/bonk-runner/bonk-diff-77/specialists",
     });
     expect(result.value).toContain(`review_output_file: ${reviewFile}`);
     expect(result.value).toContain(`head_sha: ${NEW_HEAD}`);

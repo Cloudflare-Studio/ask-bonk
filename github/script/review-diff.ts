@@ -125,6 +125,30 @@ function segmentRegex(segment: string): string {
     .join("[^/]*");
 }
 
+function globRegex(segments: string[]): RegExp {
+  const source = segments
+    .map((segment, index) =>
+      segment === "**"
+        ? index === segments.length - 1
+          ? ".*"
+          : "(?:[^/]+/)*"
+        : `${segmentRegex(segment)}${index === segments.length - 1 ? "" : "/"}`,
+    )
+    .join("");
+  return new RegExp(`^${source}$`);
+}
+
+// Same pattern language as `ignore_paths`, without the workflow restriction;
+// used for specialist scopes. Returns null for an invalid pattern.
+export function compileGlob(pattern: string): RegExp | null {
+  const trimmed = pattern.trim();
+  if (!/^[A-Za-z0-9._\-/*]+$/.test(trimmed) || trimmed.startsWith("/")) return null;
+  const segments = (trimmed.endsWith("/") ? `${trimmed}**` : trimmed).split("/");
+  if (segments.some((segment) => !segment || segment === "..")) return null;
+  if (segments.some((segment) => segment.includes("**") && segment !== "**")) return null;
+  return globRegex(segments);
+}
+
 function segmentMatches(segment: string, name: string): boolean {
   return segment === "**" || new RegExp(`^${segmentRegex(segment)}$`).test(name);
 }
@@ -170,16 +194,7 @@ export function parseIgnorePaths(input: string | undefined): {
       reject("it could match .github/workflows/, which is always reviewed");
       continue;
     }
-    const source = segments
-      .map((segment, index) =>
-        segment === "**"
-          ? index === segments.length - 1
-            ? ".*"
-            : "(?:[^/]+/)*"
-          : `${segmentRegex(segment)}${index === segments.length - 1 ? "" : "/"}`,
-      )
-      .join("");
-    rules.push({ pattern, regex: new RegExp(`^${source}$`) });
+    rules.push({ pattern, regex: globRegex(segments) });
   }
   return { rules, warnings };
 }

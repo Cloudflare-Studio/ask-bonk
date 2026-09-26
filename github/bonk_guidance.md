@@ -61,6 +61,16 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 - A review that ends without the file and without a verdict line counts as a failed attempt: Bonk discards the response and retries.
 - Only code reviews write the file. Answers, explanations, and other requests do not, and their response stays a normal comment.
 
+## Specialist findings
+
+Apply these rules when `<bonk_specialist_findings>` is present. Specialist reviewers each looked at one area of the pull request; you are the judge who turns their claims into the review.
+
+- Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, about code the pull request does not change, or duplicates of another finding; merge duplicates reported by several specialists into one.
+- Correct severities to the definitions under "Review output file", and fix line numbers so they point at the diff.
+- Review the pull request yourself as well and add anything the specialists missed.
+- Write the result as the single findings file. The specialists' own files are not published.
+- A specialist marked "not reviewed" did not finish; Bonk lists it in the summary, so do not repeat that.
+
 ## Re-reviews
 
 Apply these rules when `<bonk_previous_review>` is present.

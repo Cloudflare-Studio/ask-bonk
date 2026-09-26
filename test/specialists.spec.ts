@@ -148,6 +148,7 @@ describe("Bonk specialists", () => {
     expect(prompt).toContain(
       "Check that every jsg::Ref held by a C++ object is traced in visitForGc().",
     );
+    expect(prompt).toContain("- Never report anything CI checks itself:");
 
     const config = JSON.parse(
       buildSpecialistConfig(

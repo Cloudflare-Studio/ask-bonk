@@ -59,12 +59,13 @@ describe("Bonk prompt contract", () => {
     expect(guidance).toContain('"specialist_dispositions"');
     expect(guidance).toContain("never raise it; Bonk caps each finding at the most severe of its `sources`");
     expect(guidance).toContain("A `blocking` finding needs `\"evidence\"`");
-    expect(guidance).toContain("unless you checked the dependency's source or the pull request's CI status");
     expect(guidance).not.toMatch(/missed earlier/);
-    expect(guidance).toContain("Base every claim on evidence you read in this run, not on memory");
+    expect(guidance).toContain("Base every other claim on evidence you read in this run, not on memory");
+    // What CI checks is left to CI.
     expect(guidance).toContain(
-      "If CI built the change, assume it compiles unless you can name a configuration CI did not build.",
+      "Never report anything CI already checks: build, compile, or macro-expansion errors, type errors, lint findings, formatting, or failing tests.",
     );
+    expect(guidance).not.toMatch(/fails to compile/);
     expect(guidance).toContain(
       "Before keeping a specialist's `blocking` finding about compatibility or a breaking change, re-check its premise",
     );

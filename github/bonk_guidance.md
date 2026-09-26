@@ -54,12 +54,11 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
   ```
 
 - `line` is a line in the pull request diff: `side` is `RIGHT` for added or unchanged lines and `LEFT` for deleted lines. Add `start_line` for a multi-line range. Use a `suggestion` block in `body` when a concrete fix fits. Omit `line` for a finding about a whole file, and `path` too for one about the change as a whole.
-- Verify before you escalate. A `blocking` finding needs `"evidence"`: one line on how you confirmed it, such as the lines you read, a command you ran, or a failing CI check. Bonk lowers a new blocking finding without evidence to `warning`.
-- Never claim that code fails to compile, expand, link, or type-check at `warning` or above unless you checked the dependency's source or the pull request's CI status (`gh pr checks`). Existing tests that exercise the path are evidence against such a claim.
-- Base every claim on evidence you read in this run, not on memory:
+- Verify before you escalate. A `blocking` finding needs `"evidence"`: one line on how you confirmed it, such as the lines you read or a command you ran. Bonk lowers a new blocking finding without evidence to `warning`.
+- Never report anything CI already checks: build, compile, or macro-expansion errors, type errors, lint findings, formatting, or failing tests. If CI would fail, the author already hears about it.
+- Base every other claim on evidence you read in this run, not on memory:
   - a claim about how CI or a workflow checks out, builds, or runs code cites a log line or the workflow file;
-  - a claim about how a dependency or the language behaves cites the source or documentation you read;
-  - before claiming a call site stops compiling, read the whole call expression and search for every call site. If CI built the change, assume it compiles unless you can name a configuration CI did not build.
+  - a claim about how a dependency or the language behaves cites the source or documentation you read.
 - `severity` is one of:
   - `blocking`: must be fixed before merging, such as a correctness bug, security hole, data loss, or compatibility break;
   - `warning`: a real defect with limited impact that should be fixed;
@@ -81,7 +80,7 @@ Apply these rules to code reviews when `<bonk_execution_context>` has `review_ou
 
 Apply these rules when `<bonk_specialist_findings>` is present. Specialist reviewers each looked at one area of the pull request; you are the judge who turns their claims into the review.
 
-- Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, or about code the pull request does not change. Merge findings about the same defect, from one specialist or several, into one finding instead of dropping one of them.
+- Verify every specialist finding against the code before keeping it. Drop findings that are wrong, speculative, about code the pull request does not change, or about anything CI already checks. Merge findings about the same defect, from one specialist or several, into one finding instead of dropping one of them.
 - Before keeping a specialist's `blocking` finding about compatibility or a breaking change, re-check its premise: which configuration, flag, or gate guards the code, whether shipped configurations reach it, and whether the repository's own rules require the gate the finding asks for.
 - Keep a verified finding that removes dead code (such as new public API with no callers, or functions nothing uses), removes duplicated logic, or replaces new code with an existing helper or trait, even at low severity: keep it as a `suggestion` or `info` note instead of dropping it. Such findings are not style preferences.
 - Each specialist finding has an id such as `correctness#2`. Account for every one in the findings file: give each finding you write a `"sources"` list of the ids it comes from, and for each id you do not keep add `{"id": "<id>", "decision": "dropped", "reason": "<one line: why it is wrong, duplicated, or out of scope>"}` to a top-level `"specialist_dispositions"` list. Bonk logs this accounting and lists the dropped findings with your reasons, collapsed, in the summary.

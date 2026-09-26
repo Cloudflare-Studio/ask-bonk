@@ -33,7 +33,12 @@ inputs:
     default: "https://ask-bonk.cloudflare-exponent.workers.dev/auth"
 
   forks:
-    description: "Post a 'not supported' comment on fork PRs. Set to 'false' to silently skip fork PRs."
+    description: "Run on fork PRs in comment-only mode (or post a 'not supported' comment when GitHub withholds the OIDC token). Set to 'false' to silently skip fork PRs."
+    required: false
+    default: "true"
+
+  failure_comment:
+    description: "Post a comment on the issue/PR when a tracked Bonk run fails, times out, or is cancelled. Set to 'false' to only report failures in the workflow run itself."
     required: false
     default: "true"
 
@@ -148,6 +153,7 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
         ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
+        FAILURE_COMMENT: ${{ inputs.failure_comment }}
         # token scoping
         TOKEN_PERMISSIONS: ${{ inputs.token_permissions }}
       run: bun run ${{ github.action_path }}/script/orchestrate.ts
@@ -242,9 +248,14 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         OPENCODE_STATUS: ${{ steps.opencode.outcome }}
+        # Composite steps see the job's cancellation (the runner updates
+        # job.status before re-evaluating their conditions); other failures
+        # only reach job.status after the whole action finishes.
+        JOB_STATUS: ${{ job.status }}
         # Pass issue/PR context so the server can post failure comments even
         # when the run was never tracked or was already removed from activeRuns.
         ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        FAILURE_COMMENT: ${{ inputs.failure_comment }}
       run: bun run ${{ github.action_path }}/script/finalize.ts
 
     - name: Cleanup Git credentials

@@ -190,6 +190,8 @@ export interface TrackWorkflowRequest {
   comment_id?: number; // For issue_comment events
   review_comment_id?: number; // For pull_request_review_comment events
   issue_id?: number; // For issues events — the issue *number* (not database ID) for reactions
+  // Set to false by the `failure_comment: false` action input. Omitted means true.
+  failure_comment?: boolean;
 }
 
 // Request to finalize a tracked workflow run (PUT /api/github/track)
@@ -203,6 +205,7 @@ export interface FinalizeWorkflowRequest {
   // removed it before the action's finalize step ran).
   issue_number?: number;
   run_url?: string;
+  failure_comment?: boolean;
 }
 
 // Request to check/create workflow file (POST /api/github/setup)

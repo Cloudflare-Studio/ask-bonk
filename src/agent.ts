@@ -28,6 +28,9 @@ export interface CheckStatusPayload {
   // instead of posting a duplicate. Also prevents retry loops on transient failures.
   waitingCommentPosted?: boolean;
   waitingCommentId?: number;
+  // False when the workflow set `failure_comment: false`. Undefined (runs
+  // tracked before this field existed) keeps the default of commenting.
+  failureComment?: boolean;
 }
 
 // TTL for recently finalized runs (1 hour). Entries older than this are pruned
@@ -199,9 +202,10 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     issueNumber: number,
     reactionTarget?: { id: number; type: ReactionTarget },
     actor?: string,
+    failureComment?: boolean,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
-    log.info("run_tracking_started", { run_url: runUrl, actor });
+    log.info("run_tracking_started", { run_url: runUrl, actor, failure_comment: failureComment });
 
     const payload: CheckStatusPayload = {
       runId,
@@ -211,6 +215,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       actor,
       reactionTargetId: reactionTarget?.id,
       reactionTargetType: reactionTarget?.type,
+      failureComment,
     };
 
     // Store in activeRuns state
@@ -239,6 +244,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     fallbackIssueNumber?: number,
     fallbackRunUrl?: string,
     actor?: string,
+    failureComment?: boolean,
   ): Promise<void> {
     const run = this.state.activeRuns[runId];
     const issueNumber = run?.issueNumber ?? fallbackIssueNumber;
@@ -270,6 +276,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
         undefined,
         undefined,
         actor,
+        failureComment,
       );
       return;
     }
@@ -287,7 +294,16 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     // failed and should be treated as a failure. The finalize script remaps
     // "skipped" -> "failure" client-side, but we also handle it here as
     // defense-in-depth.
-    await this.postFailureComment(runId, run.runUrl, run.issueNumber, status, run);
+    await this.postFailureComment(
+      runId,
+      run.runUrl,
+      run.issueNumber,
+      status,
+      run,
+      undefined,
+      undefined,
+      failureComment,
+    );
   }
 
   async checkWorkflowStatus(payload: CheckStatusPayload): Promise<void> {
@@ -517,6 +533,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
     run?: CheckStatusPayload,
     existingOctokit?: Octokit,
     actor?: string,
+    failureComment?: boolean,
   ): Promise<void> {
     const log = this.logger(runId, issueNumber);
     const effectiveActor = run?.actor ?? actor;
@@ -537,6 +554,17 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
       runId,
     });
 
+    // `failure_comment: false` only stops Bonk from creating a new comment.
+    // Editing an earlier Bonk comment (waiting for approval, or a prior
+    // failure on the same context) to the final status adds no new noise.
+    // The tracked run's stored preference covers the polling and
+    // workflow_run paths; the explicit argument covers untracked finalizes.
+    const createEnabled = run?.failureComment !== false && failureComment !== false;
+    if (!createEnabled && !run?.waitingCommentId && !this.state.failureComments?.[key]) {
+      log.info("failure_comment_disabled", { conclusion });
+      return;
+    }
+
     try {
       const octokit = existingOctokit ?? (await this.getOctokit());
 
@@ -551,7 +579,7 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
             comment_id: run.waitingCommentId,
             in_review_thread: !!isReviewThread,
           });
-          if (!isReviewThread) {
+          if (!isReviewThread || !createEnabled) {
             return;
           }
         } catch (error) {
@@ -581,6 +609,11 @@ export class RepoAgent extends Agent<Env, RepoAgentState> {
           // Comment may have been deleted — fall through to create new
           log.errorWithException("failure_comment_edit_failed", error);
         }
+      }
+
+      if (!createEnabled) {
+        log.info("failure_comment_disabled", { conclusion });
+        return;
       }
 
       // 3. Create a new comment in the appropriate context

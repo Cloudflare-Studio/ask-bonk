@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
 import { internalWorkflowHeaders, internalWorkflowRoute } from "../src/internal-workflows";
-import { runFinalizeWorkflowJob } from "../src/github-workflow-jobs";
+import { runFinalizeWorkflowJob, runTrackWorkflowJob } from "../src/github-workflow-jobs";
 import type { Env } from "../src/types";
 
 const mocks = vi.hoisted(() => ({
@@ -42,6 +42,7 @@ describe("GitHub Flue workflow jobs", () => {
       issue_number: 7,
       run_url: "https://github.com/test-org/test-repo/actions/runs/42",
       actor: "octocat",
+      failure_comment: false,
     });
 
     expect(result).toEqual({ status: 200, body: { ok: true } });
@@ -53,6 +54,36 @@ describe("GitHub Flue workflow jobs", () => {
       7,
       "https://github.com/test-org/test-repo/actions/runs/42",
       "octocat",
+      false,
+    );
+  });
+
+  it("stores the failure comment preference with tracked runs", async () => {
+    const agent = {
+      setInstallationId: vi.fn(),
+      trackRun: vi.fn(),
+    };
+    mocks.getAgentByName.mockResolvedValue(agent);
+
+    const result = await runTrackWorkflowJob(createWorkflowEnv(), {
+      owner: "test-org",
+      repo: "test-repo",
+      run_id: 42,
+      run_url: "https://github.com/test-org/test-repo/actions/runs/42",
+      issue_number: 7,
+      created_at: "2026-06-22T00:00:00Z",
+      actor: "octocat",
+      failure_comment: false,
+    });
+
+    expect(result).toEqual({ status: 200, body: { ok: true } });
+    expect(agent.trackRun).toHaveBeenCalledWith(
+      42,
+      "https://github.com/test-org/test-repo/actions/runs/42",
+      7,
+      undefined,
+      "octocat",
+      false,
     );
   });
 

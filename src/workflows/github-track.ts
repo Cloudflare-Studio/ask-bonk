@@ -23,6 +23,7 @@ export default defineWorkflow({
     review_comment_id: v.optional(v.number()),
     issue_id: v.optional(v.number()),
     actor: v.optional(v.string()),
+    failure_comment: v.optional(v.boolean()),
   }),
   output: workflowJobResultSchema,
   async run({ input }) {

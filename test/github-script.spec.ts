@@ -7,6 +7,7 @@ import {
   getApiBaseUrl,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
+import { resolveFinalizeStatus } from "../github/script/finalize";
 import {
   buildPrompt,
   checkCodeowners,
@@ -325,6 +326,29 @@ describe("GitHub Action OpenCode configuration", () => {
     expect(() =>
       buildOpenCodeConfigContent('{"instructions":"docs/review.md"}', "/action/bonk_guidance.md"),
     ).toThrow("instructions must be an array of strings");
+  });
+});
+
+describe("GitHub Action finalize status", () => {
+  it("passes through the OpenCode step outcome", () => {
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "success", JOB_STATUS: "success" })).toBe("success");
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "failure", JOB_STATUS: "success" })).toBe("failure");
+  });
+
+  it("treats a skipped OpenCode step as an infrastructure failure", () => {
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "skipped", JOB_STATUS: "failure" })).toBe(
+      "failure",
+    );
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "skipped" })).toBe("failure");
+  });
+
+  it("reports cancelled jobs as cancelled even before OpenCode starts", () => {
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "skipped", JOB_STATUS: "cancelled" })).toBe(
+      "cancelled",
+    );
+    expect(resolveFinalizeStatus({ OPENCODE_STATUS: "failure", JOB_STATUS: "cancelled" })).toBe(
+      "cancelled",
+    );
   });
 });
 

@@ -20,6 +20,7 @@ export default defineWorkflow({
     issue_number: v.optional(v.number()),
     run_url: v.optional(v.string()),
     actor: v.optional(v.string()),
+    failure_comment: v.optional(v.boolean()),
   }),
   output: workflowJobResultSchema,
   async run({ input }) {

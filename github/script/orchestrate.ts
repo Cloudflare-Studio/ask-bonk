@@ -961,6 +961,7 @@ interface TrackPayload {
   comment_id?: number;
   review_comment_id?: number;
   issue_id?: number;
+  failure_comment: boolean;
 }
 
 interface TrackResponse {
@@ -994,6 +995,9 @@ async function trackRun(): Promise<void> {
     run_url: context.runUrl,
     issue_number: context.issue.number,
     created_at: context.createdAt,
+    // Stored with the tracked run so the polling and workflow_run safety nets
+    // honour it even when the finalize step never reaches the server.
+    failure_comment: process.env.FAILURE_COMMENT !== "false",
   };
 
   if (context.eventName === "issue_comment" && context.comment?.id) {

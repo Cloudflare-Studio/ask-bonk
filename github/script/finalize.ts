@@ -1,20 +1,32 @@
 // Finalize tracking a workflow run
 // Called by the GitHub Action after OpenCode completes (with if: always())
 
+import { pathToFileURL } from "url";
 import { getContext, getOidcToken, getApiBaseUrl, core } from "./context";
 import { fetchWithRetry } from "./http";
+
+export function resolveFinalizeStatus(env: Record<string, string | undefined>): string {
+  const rawStatus = env.OPENCODE_STATUS || "unknown";
+  if (rawStatus === "success") return rawStatus;
+
+  // JOB_STATUS is `job.status`. On job cancellation the runner marks the job
+  // cancelled before re-evaluating composite steps, so a run cancelled before
+  // or during OpenCode reports "cancelled" even though GitHub marks the
+  // not-yet-started OpenCode step "skipped".
+  if (env.JOB_STATUS === "cancelled") return "cancelled";
+
+  // Otherwise "skipped" means an earlier step (install, etc.) failed. The
+  // finalize step only runs when preflight succeeded and the OpenCode step was
+  // *expected* to run, so this is an infrastructure failure rather than an
+  // intentional skip.
+  return rawStatus === "skipped" ? "failure" : rawStatus;
+}
 
 async function main() {
   const context = getContext();
   const { owner, repo } = context.repo;
   const rawStatus = process.env.OPENCODE_STATUS || "unknown";
-
-  // When the OpenCode step is "skipped", it means an earlier step (cache,
-  // install, etc.) failed — GitHub Actions skips subsequent steps on failure.
-  // The finalize step only runs when preflight succeeded and the OpenCode step
-  // was *expected* to run, so "skipped" here always indicates an infrastructure
-  // failure rather than an intentional skip.
-  const status = rawStatus === "skipped" ? "failure" : rawStatus;
+  const status = resolveFinalizeStatus(process.env);
 
   let oidcToken: string;
   try {
@@ -43,6 +55,7 @@ async function main() {
         // run was never tracked or was already removed from activeRuns.
         issue_number: context.issue?.number,
         run_url: context.runUrl,
+        failure_comment: process.env.FAILURE_COMMENT !== "false",
       }),
     });
 
@@ -59,7 +72,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  // Don't fail the workflow on finalize errors
-  core.warning(`Unexpected error in finalize: ${error}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    // Don't fail the workflow on finalize errors
+    core.warning(`Unexpected error in finalize: ${error}`);
+  });
+}

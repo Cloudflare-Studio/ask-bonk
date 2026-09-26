@@ -196,6 +196,22 @@ token_permissions: '{"contents": "read", "pull_requests": "read"}'
 
 Custom objects are merged with the defaults and each permission is clamped to the lower of the two -- callers can reduce permissions but never escalate. Invalid input (unknown presets, bad JSON, unrecognized values) fails closed to `NO_PUSH`.
 
+#### Failure Comments
+
+When a tracked Bonk run fails, times out, or is cancelled, Bonk posts a comment on the triggering issue or PR (and edits that comment in place if later runs also fail). Automated workflows, such as reviews on every push, can turn this off and rely on the workflow run status instead:
+
+```yaml
+- name: Run Bonk
+  uses: ask-bonk/ask-bonk/github@main
+  env:
+    OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+  with:
+    model: "opencode/claude-opus-4-5"
+    failure_comment: "false"
+```
+
+With `failure_comment: "false"`, Bonk never posts a new failure comment, but it still edits a comment it already posted on the same issue or PR (a "waiting for approval" notice, or an earlier failure comment) to show the final status. The setting is stored when the run starts, so it also applies when Bonk detects the failure through its polling or `workflow_run` safety nets.
+
 #### Version Pinning
 
 By default, Bonk installs the latest OpenCode release. If a release is broken, you can pin to a known-good version:
@@ -283,6 +299,10 @@ Bonk is configured via your workflow file and OpenCode's config. Its built-in ha
 | `opencode_dev`       | Install from the dev channel instead of latest release (`"true"` / `"false"`)    | No       |
 | `agent`              | Legacy input; current OpenCode uses consumer `default_agent`, then `build`        | No       |
 | `prompt`             | Task for scheduled/dispatch runs, or override for the triggering request         | No       |
+| `variant`            | Model variant for provider-specific reasoning effort (e.g., `high`, `max`)       | No       |
+| `forks`              | `"true"` (default): comment-only runs on fork PRs; `"false"`: skip them silently | No       |
+| `failure_comment`    | Comment on the issue/PR when a run fails or is cancelled (`"true"` / `"false"`)  | No       |
+| `oidc_base_url`      | OIDC token exchange URL, for self-hosted deployments. Defaults to the hosted app | No       |
 
 ### OpenCode Config
 

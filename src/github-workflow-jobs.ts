@@ -179,6 +179,7 @@ export async function runTrackWorkflowJob(
       body.issue_number,
       reactionTarget ? { id: reactionTarget.targetId, type: reactionTarget.targetType } : undefined,
       actor,
+      body.failure_comment,
     );
 
     trackLog.info("track_completed", {
@@ -247,7 +248,14 @@ export async function runFinalizeWorkflowJob(
   try {
     const agent = await getAgentByName<Env, RepoAgent>(env.REPO_AGENT, `${body.owner}/${body.repo}`);
     await agent.setInstallationId(installationId, installationSource);
-    await agent.finalizeRun(body.run_id, body.status, body.issue_number, body.run_url, actor);
+    await agent.finalizeRun(
+      body.run_id,
+      body.status,
+      body.issue_number,
+      body.run_url,
+      actor,
+      body.failure_comment,
+    );
 
     finalizeLog.info("finalize_completed", {
       installation_id: installationId,

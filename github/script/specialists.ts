@@ -18,6 +18,8 @@ import {
   appendGitHubValue,
   core,
   escapePromptValue,
+  installOpenCodeDependencies,
+  openCodeConfigDirs,
   readPromptFile,
   writePromptFile,
 } from "./context";
@@ -1132,6 +1134,8 @@ export async function runSpecialists(): Promise<void> {
     selection.selected.length > 0
       ? await prepareHeadWorktree(join(dir, "head"), state.head)
       : process.cwd();
+  // The worktree has the head's .opencode/ without its node_modules.
+  await installOpenCodeDependencies(openCodeConfigDirs(cwd));
   const stepTimeout = parseDuration(process.env.SPECIALIST_TIMEOUT) ?? DEFAULT_STEP_TIMEOUT_MS;
   const parallelism = Math.max(
     1,

@@ -133,11 +133,19 @@ runs:
         esac
 
         IFS=',' read -ra MENTION_ARRAY <<< "$MENTIONS"
+        shopt -s nocasematch
 
+        # A mention counts only as a whole token: at the start or after
+        # whitespace, and followed by whitespace or the end (optionally after
+        # punctuation), so paths like .github/workflows/bonk.yml do not match.
+        # Keep in sync with containsMention() in script/context.ts.
         for mention in "${MENTION_ARRAY[@]}"; do
           mention="${mention#"${mention%%[![:space:]]*}"}"
           mention="${mention%"${mention##*[![:space:]]}"}"
-          if [[ "$BODY" == *"$mention"* ]]; then
+          [ -n "$mention" ] || continue
+          escaped="$(printf '%s' "$mention" | sed 's#[][\.*^$+?(){}|]#\\&#g')"
+          pattern="(^|[[:space:]])${escaped}[].,;:!?)}'\"]*([[:space:]]|$)"
+          if [[ "$BODY" =~ $pattern ]]; then
             echo "Found mention: $mention"
             echo "skip=false" >> $GITHUB_OUTPUT
             exit 0

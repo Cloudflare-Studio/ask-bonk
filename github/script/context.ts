@@ -307,10 +307,21 @@ export function extractMentionPrompt(
   if (mentions.some((mention) => lower === mention)) {
     return "Summarize this thread";
   }
-  if (mentions.some((mention) => lower.includes(mention))) {
+  if (mentions.some((mention) => containsMention(lower, mention))) {
     return trimmed;
   }
   return null;
+}
+
+// A mention counts only as a whole token: at the start of the body or after
+// whitespace, and followed by whitespace or the end, optionally after
+// punctuation (`/bonk,` but not `/bonk.yml`). Paths such as
+// `.github/workflows/bonk.yml`, which bots list in CODEOWNERS comments, and
+// words that merely contain the mention do not trigger a run. Keep in sync
+// with the "Check mentions" step in action.yml.
+export function containsMention(body: string, mention: string): boolean {
+  const escaped = mention.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped}(?=[.,;:!?)\\]}'"]*(?:$|\\s))`, "i").test(body);
 }
 
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).

@@ -105,6 +105,35 @@ describe("GitHub Action mention prompt extraction", () => {
   it("ignores comments without a configured mention", () => {
     expect(extractMentionPrompt("please fix this", "/bonk,@ask-bonk")).toBeNull();
   });
+
+  it("matches mentions only as whole tokens", () => {
+    const mentions = "/bonk,@ask-bonk";
+    for (const body of [
+      "please /bonk",
+      "line one\n/bonk fix it",
+      "thanks @ask-bonk, can you review?",
+      "(cc @Ask-Bonk)",
+      "ping /bonk.",
+    ]) {
+      expect(extractMentionPrompt(body, mentions), body).toBe(body);
+    }
+    for (const body of [
+      // A CODEOWNERS bot comment listing workflow files.
+      "Codeowners approval required:\n- .github/workflows/bonk.yml: [@cloudflare/wrangler]",
+      "- .github/workflows/bonk-pr-review.yml",
+      "/bonkers",
+      "/bonk.yml",
+      "mail@ask-bonk.dev",
+      "`/bonk`",
+    ]) {
+      expect(extractMentionPrompt(body, mentions), body).toBeNull();
+    }
+  });
+
+  it("escapes regular expression characters in mentions", () => {
+    expect(extractMentionPrompt("hey c++bot", "c++bot")).toBe("hey c++bot");
+    expect(extractMentionPrompt("hey @aXb", "@a.b")).toBeNull();
+  });
 });
 
 describe("GitHub Action preflight prompt", () => {

@@ -206,6 +206,11 @@ export function getApiBaseUrl(): string {
   return normalized.replace(/\/auth$/, "");
 }
 
+// Neutralizes angle brackets so values cannot open or close Bonk's prompt tags.
+export function escapePromptValue(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // Shared fork detection from env vars and optional API fallback.
 // Returns { isFork, headSha? } or null if detection failed.
 export async function detectForkFromPR(

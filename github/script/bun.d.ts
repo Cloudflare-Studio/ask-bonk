@@ -9,6 +9,7 @@ interface BunSubprocess {
 declare const Bun: {
   spawn(command: string[], options: {
     detached?: boolean;
+    cwd?: string;
     env?: NodeJS.ProcessEnv;
     stdout: "pipe" | "ignore";
     stderr: "pipe" | "ignore";

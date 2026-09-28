@@ -16,7 +16,7 @@ export type EventType =
   | "failure_comment_error";
 
 // Status values for tracking outcomes
-export type EventStatus = "success" | "failure" | "error" | "skipped" | "cancelled";
+export type EventStatus = "success" | "failure" | "error" | "skipped" | "cancelled" | "timeout";
 
 // Metric event structure matching WAE schema
 // index1 (blob): {owner}/{repo} - primary grouping key

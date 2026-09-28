@@ -8,6 +8,8 @@
 // Still executed via `bun run` — no pre-bundled dist/ needed.
 // finalize.ts remains separate because it runs with `if: always()`.
 
+import { rmSync } from "fs";
+import { join } from "path";
 import { pathToFileURL } from "url";
 import {
   getContext,
@@ -18,9 +20,14 @@ import {
   validateOpenCodeVersion,
   checkPermissionLevel,
   extractMentionPrompt,
+  escapePromptValue,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
+import { formatDiffBlock, prepareDiff, type DiffManifest } from "./review-diff";
+import type { PublishState } from "./review-publish";
+import { fetchRepoSpecialists } from "./specialists";
+import { loadReviewContext, type ReviewContext } from "./review-state";
 
 // ---------------------------------------------------------------------------
 // Permissions
@@ -601,17 +608,18 @@ async function detectFork(): Promise<ForkDetectionResult> {
   }
 }
 
+// OpenCode checks out the pull request's current head, so prefer the live SHA
+// over the event payload's, which is stale on re-runs and after later pushes.
 async function resolveHeadSha(
   prNumber: string,
   repository: string,
   cachedSha?: string,
 ): Promise<string> {
-  const envSha = process.env.HEAD_SHA;
-  if (envSha) return envSha;
   if (cachedSha) return cachedSha;
 
+  const envSha = process.env.HEAD_SHA || "";
   const ghToken = process.env.GH_TOKEN;
-  if (!prNumber || !repository || !ghToken) return "";
+  if (!prNumber || !repository || !ghToken) return envSha;
 
   try {
     const resp = await fetchWithRetry(
@@ -623,14 +631,14 @@ async function resolveHeadSha(
         },
       },
     );
-    if (!resp.ok) return "";
+    if (!resp.ok) return envSha;
     const pr = (await resp.json()) as { head?: { sha?: string } };
-    return pr.head?.sha || "";
+    return pr.head?.sha || envSha;
   } catch {
     // Best-effort: HEAD SHA is used for inline review context only.
     // Missing SHA means inline review comments may not anchor correctly,
     // but the workflow can still proceed.
-    return "";
+    return envSha;
   }
 }
 
@@ -639,6 +647,16 @@ interface PromptResult {
   detectionFailed: boolean;
   mode: "review-only" | "write-capable";
   value: string;
+  detection: ForkDetectionResult;
+  reviewState?: PublishState;
+}
+
+interface BuildPromptOptions {
+  // Reuses fork detection from an earlier pass instead of repeating it.
+  detection?: ForkDetectionResult;
+  // The App installation token. Re-review context needs it to learn the App's
+  // own login, which identifies Bonk's earlier comments and reviews.
+  reviewToken?: string;
 }
 
 function requestedTokenPermissions(): unknown {
@@ -661,8 +679,57 @@ function tokenAllowsContentWrites(requested: unknown): boolean {
   return permissions.contents !== "read";
 }
 
-function escapePromptValue(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// RUNNER_TEMP is per job, so the file cannot leak between runs; it is still
+// cleared so an OpenCode retry cannot publish a previous attempt's findings.
+function reviewFilePath(): string {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) return "";
+  const path = join(runnerTemp, `bonk-review-${process.env.GITHUB_RUN_ID || "local"}.json`);
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // Nothing to clear.
+  }
+  return path;
+}
+
+// Fresh per run for the same reason as the review file.
+function diffDirPath(): string {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) return "";
+  const path = join(runnerTemp, `bonk-diff-${process.env.GITHUB_RUN_ID || "local"}`);
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    // Nothing to clear.
+  }
+  return path;
+}
+
+// A pull request whose base branch is not the default branch is part of a
+// stack. Names the open pull request for that base branch, when there is one.
+async function findBasePullRequest(
+  repository: string,
+  baseBranch: string,
+  token: string | undefined,
+): Promise<{ number: number; title: string } | null> {
+  const [owner = ""] = repository.split("/");
+  if (!token || !owner) return null;
+  try {
+    const pulls = await githubApi<Array<{ number?: number; title?: string }>>(
+      `/repos/${repository}/pulls?state=open&per_page=1&head=${encodeURIComponent(`${owner}:${baseBranch}`)}`,
+      token,
+    );
+    const pull = pulls?.[0];
+    return pull?.number ? { number: pull.number, title: pull.title || "" } : null;
+  } catch (error) {
+    core.warning(`Could not look up the pull request for base branch ${baseBranch}: ${error}`);
+    return null;
+  }
+}
+
+function rereviewEnabled(): boolean {
+  return process.env.REREVIEW_CONTEXT === "true";
 }
 
 function resolveUserRequest(): string {
@@ -684,8 +751,8 @@ function resolveUserRequest(): string {
   return "";
 }
 
-export async function buildPrompt(): Promise<PromptResult> {
-  const detection = await detectFork();
+export async function buildPrompt(options: BuildPromptOptions = {}): Promise<PromptResult> {
+  const detection = options.detection ?? (await detectFork());
   const prNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER || "";
   const repository = process.env.REPOSITORY || "";
   const [owner = "", repo = ""] = repository.split("/");
@@ -693,8 +760,47 @@ export async function buildPrompt(): Promise<PromptResult> {
   const mode = detection.isFork || !writeCapable ? "review-only" : "write-capable";
   const userRequest = resolveUserRequest();
 
-  let headSha = "";
-  if (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER)) {
+  // Re-review context is best-effort: a lookup failure degrades to a
+  // first-time review instead of blocking the run.
+  let reviewContext: ReviewContext | null = null;
+  let diff: DiffManifest | null = null;
+  const diffDir = options.reviewToken && rereviewEnabled() ? diffDirPath() : "";
+  const specialistsDir = diffDir ? join(diffDir, "specialists") : "";
+  if (options.reviewToken && rereviewEnabled() && process.env.PR_NUMBER && userRequest) {
+    try {
+      reviewContext = await loadReviewContext(
+        repository,
+        process.env.PR_NUMBER,
+        options.reviewToken,
+        diffDir || undefined,
+      );
+    } catch (error) {
+      core.warning(`Could not load previous review context: ${error}`);
+    }
+    if (reviewContext && diffDir && process.env.SPECIALISTS?.trim().toLowerCase() !== "off") {
+      try {
+        await fetchRepoSpecialists(options.reviewToken, repository, reviewContext.baseSha, specialistsDir);
+      } catch (error) {
+        core.warning(`Could not read repository specialists: ${error}`);
+      }
+    }
+    if (reviewContext && diffDir) {
+      try {
+        diff = await prepareDiff(
+          options.reviewToken,
+          repository,
+          process.env.PR_NUMBER,
+          diffDir,
+          process.env.IGNORE_PATHS,
+        );
+      } catch (error) {
+        core.warning(`Could not precompute the pull request diff: ${error}`);
+      }
+    }
+  }
+
+  let headSha = reviewContext?.headSha || "";
+  if (!headSha && (detection.isFork || (mode === "review-only" && process.env.PR_NUMBER))) {
     headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
     if (!headSha) {
       core.warning("Could not resolve PR HEAD SHA; inline review comments may fail");
@@ -711,6 +817,7 @@ export async function buildPrompt(): Promise<PromptResult> {
       detectionFailed: detection.detectionFailed ?? false,
       mode,
       value: "",
+      detection,
     };
   }
 
@@ -735,6 +842,31 @@ export async function buildPrompt(): Promise<PromptResult> {
     "top_level_response_owner: opencode_github_run",
   ];
   if (headSha) contextLines.push(`head_sha: ${escapePromptValue(headSha)}`);
+  const baseBranch = reviewContext?.baseRef || process.env.PR_BASE_REF || "";
+  const defaultBranch = process.env.DEFAULT_BRANCH || "";
+  if (process.env.PR_NUMBER && baseBranch) {
+    contextLines.push(`base_branch: ${escapePromptValue(baseBranch)}`);
+    if (defaultBranch && baseBranch !== defaultBranch) {
+      contextLines.push(
+        `stacked_pull_request: true (the base branch is not the default branch, ${escapePromptValue(defaultBranch)})`,
+      );
+      const basePull = await findBasePullRequest(
+        repository,
+        baseBranch,
+        options.reviewToken || process.env.GH_TOKEN,
+      );
+      if (basePull) {
+        contextLines.push(
+          `base_pull_request: #${basePull.number} ${escapePromptValue(basePull.title)}`,
+        );
+      }
+    }
+  }
+  if (reviewContext?.baseSha) contextLines.push(`base_sha: ${escapePromptValue(reviewContext.baseSha)}`);
+  // Review runs hand their findings to review-publish.ts through this file
+  // instead of posting to GitHub themselves.
+  const reviewFile = reviewContext ? reviewFilePath() : "";
+  if (reviewFile) contextLines.push(`review_output_file: ${escapePromptValue(reviewFile)}`);
   contextLines.push("</bonk_execution_context>");
 
   return {
@@ -743,8 +875,28 @@ export async function buildPrompt(): Promise<PromptResult> {
     mode,
     value: [
       contextLines.join("\n"),
+      ...(diff ? [formatDiffBlock(diff)] : []),
+      ...(reviewContext?.block ? [reviewContext.block] : []),
       `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
     ].join("\n\n"),
+    detection,
+    ...(reviewContext
+      ? {
+          reviewState: {
+            head: reviewContext.headSha,
+            base: reviewContext.baseSha,
+            lastReviewId: reviewContext.lastReviewId,
+            changedFiles: reviewContext.changedFiles,
+            rereview: reviewContext.rereview,
+            expectReview:
+              process.env.EVENT_NAME === "pull_request" || /\breview\b/i.test(userRequest),
+            reviewFile,
+            diffDir: diff ? diffDir : "",
+            specialistsDir,
+            previousSpecialists: reviewContext.previousSpecialists,
+          },
+        }
+      : {}),
   };
 }
 
@@ -760,7 +912,13 @@ interface OidcResult {
 interface OidcExchangeOptions {
   forceNoPush: boolean;
   codeownersTeamGroups?: string[][];
+  // Overrides TOKEN_PERMISSIONS for tokens that never reach OpenCode.
+  permissions?: Record<string, string>;
 }
+
+// GitHub gates resolveReviewThread/unresolveReviewThread behind contents:
+// write on App installation tokens, even though they change no content.
+const PUBLISH_TOKEN_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "write" };
 
 function maskValue(value: string): void {
   if (value) {
@@ -799,7 +957,9 @@ async function exchangeOidc(options: OidcExchangeOptions): Promise<OidcResult> {
   // Accepts a preset name (e.g., "NO_PUSH") or a JSON permissions object.
   const exchangeBody: Record<string, unknown> = {};
   const rawPermissions = process.env.TOKEN_PERMISSIONS;
-  if (options.forceNoPush) {
+  if (options.permissions) {
+    exchangeBody.permissions = options.permissions;
+  } else if (options.forceNoPush) {
     exchangeBody.permissions = "NO_PUSH";
   } else if (rawPermissions?.trim()) {
     const parsed = parseTokenPermissions(rawPermissions);
@@ -961,6 +1121,7 @@ interface TrackPayload {
   comment_id?: number;
   review_comment_id?: number;
   issue_id?: number;
+  failure_comment: boolean;
 }
 
 interface TrackResponse {
@@ -994,6 +1155,9 @@ async function trackRun(): Promise<void> {
     run_url: context.runUrl,
     issue_number: context.issue.number,
     created_at: context.createdAt,
+    // Stored with the tracked run so the polling and workflow_run safety nets
+    // honour it even when the finalize step never reaches the server.
+    failure_comment: process.env.FAILURE_COMMENT !== "false",
   };
 
   if (context.eventName === "issue_comment" && context.comment?.id) {
@@ -1051,7 +1215,7 @@ async function main() {
   // so fork runs can request a comment-only installation token.
   resolveVersion();
 
-  const promptResult = await buildPrompt();
+  let promptResult = await buildPrompt();
 
   if (promptResult.detectionFailed) {
     core.setOutput("is_fork", String(promptResult.isFork));
@@ -1065,13 +1229,42 @@ async function main() {
     codeownersTeamGroups: codeownersCheck?.teamGroups,
   });
 
+  // Re-review context is loaded with the App token, which exists only after
+  // the exchange above; fork detection from the first pass is reused.
+  if (rereviewEnabled() && oidcResult.token && process.env.PR_NUMBER) {
+    promptResult = await buildPrompt({
+      detection: promptResult.detection,
+      reviewToken: oidcResult.token,
+    });
+  }
+
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("mode", promptResult.mode);
   core.setOutput("value", promptResult.value);
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
+  if (promptResult.reviewState) {
+    core.setOutput("review_state", JSON.stringify(promptResult.reviewState));
+  }
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);
+  }
+
+  // Publishing resolves Bonk's review threads, which a NO_PUSH token cannot.
+  // The publish step is deterministic, so it gets its own token that never
+  // reaches OpenCode. Fork runs stay comment-only.
+  if (
+    promptResult.reviewState &&
+    oidcResult.token &&
+    !promptResult.isFork &&
+    !tokenAllowsContentWrites(requestedTokenPermissions())
+  ) {
+    const publish = await exchangeOidc({
+      forceNoPush: false,
+      codeownersTeamGroups: codeownersCheck?.teamGroups,
+      permissions: PUBLISH_TOKEN_PERMISSIONS,
+    });
+    if (publish.token) core.setOutput("publish_token", publish.token);
   }
 
   // Step 4: Handle fork PRs

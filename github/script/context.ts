@@ -119,25 +119,27 @@ export function appendGitHubValue(filePath: string, name: string, value: string)
   }
 }
 
-// The prompt travels between steps as a file, never as a step output or env
-// var: Linux rejects any single environment string over 128 KiB
-// (MAX_ARG_STRLEN) with E2BIG, and review prompts can be larger than that.
+// The prompt and the review state travel between steps as files, never as
+// step outputs expanded into env vars: Linux rejects any single environment
+// string over 128 KiB (MAX_ARG_STRLEN) with E2BIG, and a review prompt, or
+// the state of a re-review touching thousands of files, can be larger.
 // `opencode github run` still reads its prompt from the PROMPT env var, so
 // run-opencode fits the final prompt under PROMPT_ENV_CAP first.
 export const PROMPT_ENV_CAP = 96 * 1024;
 
-export function promptDir(): string {
+// Writes a file for later steps of this run and returns its path.
+export function writeRunFile(name: string, content: string): string {
   const base = process.env.RUNNER_TEMP || tmpdir();
-  return join(base, `bonk-prompt-${process.env.GITHUB_RUN_ID || "local"}`);
+  const dir = join(base, `bonk-run-${process.env.GITHUB_RUN_ID || "local"}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(path, content);
+  return path;
 }
 
 // Writes a prompt stage (e.g. "preflight", "specialists") and returns its path.
 export function writePromptFile(stage: string, prompt: string): string {
-  const dir = promptDir();
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${stage}.md`);
-  writeFileSync(path, prompt);
-  return path;
+  return writeRunFile(`prompt-${stage}.md`, prompt);
 }
 
 export function readPromptFile(path: string | undefined): string {

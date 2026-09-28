@@ -35,6 +35,7 @@ import {
   parseReviewStateMarker,
   summarizeReviewHistory,
 } from "../github/script/review-state";
+import { readPublishState } from "../github/script/review-publish";
 import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
@@ -1611,6 +1612,41 @@ describe("GitHub Action prompt size", () => {
     expect(bytes(prompt)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
     expect(prompt).toContain(`moved_to_file: ${dir}/spilled/bonk_diff.md`);
     expect(resolvePrompt({ PROMPT: "small" })).toBe("small");
+  });
+
+  it("passes the review state between steps only as a file", () => {
+    expect(actionYaml).not.toMatch(/^\s+REVIEW_STATE:/m);
+    expect(actionYaml).not.toContain("outputs.review_state ");
+    expect(actionYaml).not.toContain("outputs.review_state }}");
+    expect(
+      actionYaml.match(
+        /REVIEW_STATE_FILE: \$\{\{ steps\.preflight\.outputs\.review_state_file \}\}/g,
+      ),
+    ).toHaveLength(3);
+
+    mkdirSync(dir, { recursive: true });
+    const state = {
+      head: "a".repeat(40),
+      base: "b".repeat(40),
+      lastReviewId: 0,
+      // A re-review touching thousands of files: too large for one env var.
+      changedFiles: Array.from(
+        { length: 5000 },
+        (_, index) => `src/some/deep/path/file-${index}.ts`,
+      ),
+      rereview: true,
+      expectReview: true,
+      reviewFile: "/tmp/review.json",
+      diffDir: "",
+      specialistsDir: "",
+      previousSpecialists: null,
+    };
+    const file = `${dir}/review-state.json`;
+    writeFileSync(file, JSON.stringify(state));
+    expect(bytes(JSON.stringify(state))).toBeGreaterThan(128 * 1024);
+    expect(readPublishState({ REVIEW_STATE_FILE: file })?.changedFiles).toHaveLength(5000);
+    expect(readPublishState({ REVIEW_STATE_FILE: `${dir}/missing.json` })).toBeNull();
+    expect(readPublishState({ REVIEW_STATE: JSON.stringify(state) })?.head).toBe(state.head);
   });
 
   it("passes the prompt between steps only as a file", () => {

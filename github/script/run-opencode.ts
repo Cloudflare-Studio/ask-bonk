@@ -8,7 +8,7 @@ import { appendGitHubValue, fitPrompt, PROMPT_ENV_CAP, readPromptFile } from "./
 import {
   deleteComment,
   findRunResponse,
-  parsePublishState,
+  readPublishState,
   readReviewFile,
   reviewCompleted,
 } from "./review-publish";
@@ -396,7 +396,7 @@ function writeExitCode(exitCode: number, output = ""): void {
 // without either is removed so its text never stands in for a review.
 // GitHub API failures count as complete: this check must not fail good runs.
 export async function checkReviewCompletion(): Promise<boolean> {
-  const state = parsePublishState(process.env.REVIEW_STATE);
+  const state = readPublishState();
   if (!state?.expectReview || readReviewFile(state.reviewFile)) return true;
   const token = process.env.GH_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY || "";

@@ -22,6 +22,7 @@ import {
   extractMentionPrompt,
   escapePromptValue,
   writePromptFile,
+  writeRunFile,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
@@ -1256,7 +1257,10 @@ async function main() {
   core.setOutput("prompt_file", writePromptFile("preflight", promptResult.value));
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
   if (promptResult.reviewState) {
-    core.setOutput("review_state", JSON.stringify(promptResult.reviewState));
+    core.setOutput(
+      "review_state_file",
+      writeRunFile("review-state.json", JSON.stringify(promptResult.reviewState)),
+    );
   }
   if (oidcResult.token) {
     core.setOutput("gh_token", oidcResult.token);

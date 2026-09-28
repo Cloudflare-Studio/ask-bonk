@@ -34,7 +34,7 @@ import {
 import { deltaPatchPaths } from "./review-state";
 import {
   CARRIED_FORWARD,
-  parsePublishState,
+  readPublishState,
   parseReviewFile,
   type Finding,
   type SpecialistFindingRecord,
@@ -1081,7 +1081,7 @@ export interface SpecialistStatusRecord {
 }
 
 export async function runSpecialists(): Promise<void> {
-  const state = parsePublishState(process.env.REVIEW_STATE);
+  const state = readPublishState();
   const runnerTemp = process.env.RUNNER_TEMP || "";
   const manifest = readManifest(state?.diffDir);
   if (!state || !manifest || !runnerTemp || !state.expectReview) {

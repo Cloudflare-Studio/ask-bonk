@@ -1,0 +1,31 @@
+.github/workflows/move-major-tag.yml
+  s_d47f00959a824f::t_d25a85f920abdb 1-36
+README.md
+  s_d47f00959a824f::t_8c3288425e69be 68,76-77,92,103,165,184,207,223,360,384,417
+cli/templates/bonk.yml.hbs
+  s_d47f00959a824f::t_2b2c60430f6037 30
+cli/templates/custom.yml.hbs
+  s_d47f00959a824f::t_af6b2a4fcc2487 27
+cli/templates/review.yml.hbs
+  s_d47f00959a824f::t_9f8bb03749cf27 50
+cli/templates/scheduled.yml.hbs
+  s_d47f00959a824f::t_5ed46bb22f20fe 25
+cli/templates/triage.yml.hbs
+  s_d47f00959a824f::t_39fb10ce1b3978 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8e7348dde6092dd213e70ea7f0406e8f93cfe97c",
+  "prompts": {},
+  "sessions": {
+    "s_d47f00959a824f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f0edf6e-9af5-4419-ae90-ea2787327637",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}

@@ -1,12 +1,14 @@
 // Runs OpenCode with a small bounded retry for transient provider/session drops.
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { dirname, join } from "path";
 import { pathToFileURL } from "url";
-import { appendGitHubValue } from "./context";
+import { appendGitHubValue, fitPrompt, PROMPT_ENV_CAP, readPromptFile } from "./context";
 import {
   deleteComment,
   findRunResponse,
-  parsePublishState,
+  readPublishState,
   readReviewFile,
   reviewCompleted,
 } from "./review-publish";
@@ -83,20 +85,131 @@ export function isRetryableOpenCodeFailure({ exitCode, output }: OpenCodeFailure
   return RETRYABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseConfigObject(content: string): Record<string, unknown> | undefined {
+  const bunRuntime = (globalThis as { Bun?: { JSONC?: { parse(value: string): unknown } } }).Bun;
+  const parsed = bunRuntime?.JSONC ? bunRuntime.JSONC.parse(content) : JSON.parse(content);
+  return isRecord(parsed) ? parsed : undefined;
+}
+
+// OpenCode's defaults ask before touching paths outside the workspace and on
+// doom loops, and nobody can answer in CI: the run hangs until the job times
+// out. These rules go under the consumer's config. OpenCode applies the last
+// matching rule, so the leading "*": "deny" only catches paths no consumer or
+// Bonk rule allows, and a consumer "*" rule replaces Bonk's rules entirely.
+//
+// OpenCode deep-merges OPENCODE_CONFIG_CONTENT over its config files, which
+// would let these defaults override a file's scalar choices or reorder its
+// external_directory rules behind the "*" fallback. A permission the config
+// files already set is therefore left to them.
+function withNonInteractivePermissions(
+  permission: unknown,
+  allowedDirs: string[],
+  filePermissions: unknown[],
+): unknown {
+  // A string applies one action to every permission, so nothing asks
+  // unless the consumer chose that.
+  if (typeof permission === "string") return permission;
+  if (filePermissions.some((value) => typeof value === "string")) return permission;
+  const setInFiles = (key: string) =>
+    filePermissions.some((value) => isRecord(value) && value[key] !== undefined);
+
+  const configured = isRecord(permission) ? permission : {};
+  const defaults: Record<string, unknown> = {};
+  for (const key of ["question", "doom_loop"]) {
+    if (!setInFiles(key)) defaults[key] = "deny";
+  }
+  const result: Record<string, unknown> = { ...defaults, ...configured };
+
+  const external = configured.external_directory;
+  if (
+    !setInFiles("external_directory") &&
+    (external === undefined || (isRecord(external) && !("*" in external)))
+  ) {
+    result.external_directory = {
+      "*": "deny",
+      ...Object.fromEntries(allowedDirs.map((dir) => [`${dir}/**`, "allow"])),
+      ...(isRecord(external) ? external : {}),
+    };
+  }
+  return Object.keys(result).length > 0 ? result : permission;
+}
+
+// The permission blocks of the config files OpenCode loads for a run in
+// `workspace`: global config and project config at the repository root.
+export function readConfigFilePermissions(workspace: string | undefined): unknown[] {
+  const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const files = [
+    ...["config.json", "opencode.json", "opencode.jsonc"].map((file) =>
+      join(configHome, "opencode", file),
+    ),
+    ...(workspace
+      ? [
+          "opencode.jsonc",
+          "opencode.json",
+          ".opencode/opencode.json",
+          ".opencode/opencode.jsonc",
+        ].map((file) => join(workspace, file))
+      : []),
+  ];
+  const permissions: unknown[] = [];
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    try {
+      const permission = parseConfigObject(readFileSync(file, "utf8"))?.permission;
+      if (permission !== undefined) permissions.push(permission);
+    } catch {
+      // Unknown contents might set anything, and a string permission leaves
+      // every permission to the files. OpenCode reports the error itself.
+      permissions.push("unreadable");
+    }
+  }
+  return permissions;
+}
+
+// OpenCode leaves the Cloudflare AI Gateway provider out entirely when its
+// account or gateway ID is missing, and then reports only "Model not found",
+// which reads like a wrong model name. Workflows usually hit this when the
+// secrets they map are not available to the repository.
+export function missingProviderEnv(env: Record<string, string | undefined>): string[] {
+  if (!env.MODEL?.startsWith("cloudflare-ai-gateway/")) return [];
+  return [
+    !env.CLOUDFLARE_ACCOUNT_ID ? "CLOUDFLARE_ACCOUNT_ID" : "",
+    !env.CLOUDFLARE_GATEWAY_ID ? "CLOUDFLARE_GATEWAY_ID" : "",
+    !env.CLOUDFLARE_API_TOKEN && !env.CF_AIG_TOKEN ? "CLOUDFLARE_API_TOKEN" : "",
+  ].filter(Boolean);
+}
+
+// `opencode github run` reads its prompt only from the PROMPT env var, which
+// Linux caps per string, so the prompt file is fitted under PROMPT_ENV_CAP.
+export function resolvePrompt(env: Record<string, string | undefined>): string {
+  if (!env.PROMPT_FILE) return env.PROMPT ?? "";
+  const spillDir = join(dirname(env.PROMPT_FILE), "spilled");
+  return fitPrompt(readPromptFile(env.PROMPT_FILE), PROMPT_ENV_CAP, spillDir);
+}
+
+export interface PermissionDefaults {
+  // Directories OpenCode may use outside the workspace.
+  allowedDirs: string[];
+  // Permission blocks from the config files OpenCode also loads.
+  filePermissions: unknown[];
+}
+
 export function buildOpenCodeConfigContent(
   existingContent: string | undefined,
   guidancePath: string,
+  permissionDefaults: PermissionDefaults = { allowedDirs: [], filePermissions: [] },
 ): string {
   let config: Record<string, unknown> = {};
   if (existingContent?.trim()) {
-    const bunRuntime = (globalThis as { Bun?: { JSONC?: { parse(value: string): unknown } } }).Bun;
-    const parsed = bunRuntime?.JSONC
-      ? bunRuntime.JSONC.parse(existingContent)
-      : (JSON.parse(existingContent) as unknown);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    const parsed = parseConfigObject(existingContent);
+    if (!parsed) {
       throw new Error("OPENCODE_CONFIG_CONTENT must contain a JSON object");
     }
-    config = { ...(parsed as Record<string, unknown>) };
+    config = { ...parsed };
   }
 
   const configuredInstructions = config.instructions;
@@ -111,6 +224,12 @@ export function buildOpenCodeConfigContent(
   config.instructions = Array.from(
     new Set([...((configuredInstructions as string[] | undefined) ?? []), guidancePath]),
   );
+  const permission = withNonInteractivePermissions(
+    config.permission,
+    permissionDefaults.allowedDirs,
+    permissionDefaults.filePermissions,
+  );
+  if (permission !== undefined) config.permission = permission;
   return JSON.stringify(config);
 }
 
@@ -211,6 +330,7 @@ async function streamAndCapture(
 async function runOpenCodeAttempt(
   timeoutMs: number,
   configContent: string,
+  prompt: string,
 ): Promise<OpenCodeFailure> {
   let timedOut = false;
   const controller = new AbortController();
@@ -223,6 +343,7 @@ async function runOpenCodeAttempt(
         USE_GITHUB_TOKEN: "true",
         GITHUB_TOKEN: process.env.GH_TOKEN || "",
         OPENCODE_CONFIG_CONTENT: configContent,
+        PROMPT: prompt,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -275,7 +396,7 @@ function writeExitCode(exitCode: number, output = ""): void {
 // without either is removed so its text never stands in for a review.
 // GitHub API failures count as complete: this check must not fail good runs.
 export async function checkReviewCompletion(): Promise<boolean> {
-  const state = parsePublishState(process.env.REVIEW_STATE);
+  const state = readPublishState();
   if (!state?.expectReview || readReviewFile(state.reviewFile)) return true;
   const token = process.env.GH_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY || "";
@@ -311,14 +432,42 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     return 2;
   }
 
+  const missingEnv = missingProviderEnv(process.env);
+  if (missingEnv.length > 0) {
+    // A warning, not a failure: OpenCode can also take these from stored
+    // credentials or a configured baseURL.
+    console.log(
+      `::warning::${missingEnv.join(", ")} ${missingEnv.length === 1 ? "is" : "are"} empty, so OpenCode cannot load the Cloudflare AI Gateway provider for ${process.env.MODEL} and will report the model as not found. Check that the secrets mapped to these variables exist and are available to this repository.`,
+    );
+  }
+
   let configContent: string;
   try {
-    configContent = buildOpenCodeConfigContent(process.env.OPENCODE_CONFIG_CONTENT, guidancePath);
+    // The workspace, the runner's temp directory (Bonk's review and diff
+    // files), and the system temp directory OpenCode offers as scratch space.
+    const allowedDirs = [process.env.GITHUB_WORKSPACE, process.env.RUNNER_TEMP, tmpdir()].filter(
+      (dir): dir is string => Boolean(dir),
+    );
+    configContent = buildOpenCodeConfigContent(process.env.OPENCODE_CONFIG_CONTENT, guidancePath, {
+      allowedDirs,
+      filePermissions: readConfigFilePermissions(process.env.GITHUB_WORKSPACE || process.cwd()),
+    });
   } catch (error) {
     console.error(
       `Could not add Bonk harness guidance to OpenCode config: ${
         error instanceof Error ? error.message : String(error)
       }`,
+    );
+    writeExitCode(2);
+    return 2;
+  }
+
+  let prompt: string;
+  try {
+    prompt = resolvePrompt(process.env);
+  } catch (error) {
+    console.error(
+      `Could not read the prompt: ${error instanceof Error ? error.message : String(error)}`,
     );
     writeExitCode(2);
     return 2;
@@ -339,7 +488,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
       console.log(`Retrying opencode github run (${attempt}/${maxAttempts})`);
     }
 
-    const result = await runOpenCodeAttempt(remainingMs, configContent);
+    const result = await runOpenCodeAttempt(remainingMs, configContent, prompt);
 
     if (result.exitCode === 0) {
       if (await checkReviewCompletion()) {

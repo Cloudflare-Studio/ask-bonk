@@ -1,15 +1,20 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import actionYaml from "../github/action.yml?raw";
 import {
   detectForkFromPR,
   parseTokenPermissions,
   checkPermissionLevel,
   extractMentionPrompt,
   getApiBaseUrl,
+  fitPrompt,
+  PROMPT_ENV_CAP,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 import { resolveFinalizeStatus } from "../github/script/finalize";
 import {
   buildPrompt,
+  PREFLIGHT_PROMPT_BUDGET,
   checkCodeowners,
   findMatchingCodeownersRule,
   parseCodeowners,
@@ -19,6 +24,8 @@ import {
   classifyOpenCodeFailure,
   INCOMPLETE_REVIEW_EXIT_CODE,
   isRetryableOpenCodeFailure,
+  missingProviderEnv,
+  resolvePrompt,
   resolveRunLimits,
 } from "../github/script/run-opencode";
 import {
@@ -28,6 +35,7 @@ import {
   parseReviewStateMarker,
   summarizeReviewHistory,
 } from "../github/script/review-state";
+import { readPublishState } from "../github/script/review-publish";
 import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
@@ -104,6 +112,35 @@ describe("GitHub Action mention prompt extraction", () => {
 
   it("ignores comments without a configured mention", () => {
     expect(extractMentionPrompt("please fix this", "/bonk,@ask-bonk")).toBeNull();
+  });
+
+  it("matches mentions only as whole tokens", () => {
+    const mentions = "/bonk,@ask-bonk";
+    for (const body of [
+      "please /bonk",
+      "line one\n/bonk fix it",
+      "thanks @ask-bonk, can you review?",
+      "(cc @Ask-Bonk)",
+      "ping /bonk.",
+    ]) {
+      expect(extractMentionPrompt(body, mentions), body).toBe(body);
+    }
+    for (const body of [
+      // A CODEOWNERS bot comment listing workflow files.
+      "Codeowners approval required:\n- .github/workflows/bonk.yml: [@cloudflare/wrangler]",
+      "- .github/workflows/bonk-pr-review.yml",
+      "/bonkers",
+      "/bonk.yml",
+      "mail@ask-bonk.dev",
+      "`/bonk`",
+    ]) {
+      expect(extractMentionPrompt(body, mentions), body).toBeNull();
+    }
+  });
+
+  it("escapes regular expression characters in mentions", () => {
+    expect(extractMentionPrompt("hey c++bot", "c++bot")).toBe("hey c++bot");
+    expect(extractMentionPrompt("hey @aXb", "@a.b")).toBeNull();
   });
 });
 
@@ -667,6 +704,31 @@ describe("GitHub Action re-review context", () => {
   });
 });
 
+describe("GitHub Action provider environment check", () => {
+  it("names empty Cloudflare AI Gateway variables", () => {
+    expect(
+      missingProviderEnv({
+        MODEL: "cloudflare-ai-gateway/openai/gpt-5.6-terra",
+        CLOUDFLARE_ACCOUNT_ID: "",
+        CLOUDFLARE_GATEWAY_ID: "",
+        CLOUDFLARE_API_TOKEN: "",
+      }),
+    ).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_API_TOKEN"]);
+    expect(
+      missingProviderEnv({
+        MODEL: "cloudflare-ai-gateway/openai/gpt-5.6-terra",
+        CLOUDFLARE_ACCOUNT_ID: "a",
+        CLOUDFLARE_GATEWAY_ID: "g",
+        CF_AIG_TOKEN: "t",
+      }),
+    ).toEqual([]);
+  });
+
+  it("ignores other providers", () => {
+    expect(missingProviderEnv({ MODEL: "opencode/claude-opus-4-5" })).toEqual([]);
+  });
+});
+
 describe("GitHub Action OpenCode configuration", () => {
   it("adds Bonk guidance without replacing consumer configuration", () => {
     const result = JSON.parse(
@@ -679,7 +741,7 @@ describe("GitHub Action OpenCode configuration", () => {
       ),
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       instructions: ["docs/review.md", "/action/bonk_guidance.md"],
       default_agent: "review",
     });
@@ -701,9 +763,95 @@ describe("GitHub Action OpenCode configuration", () => {
       buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md"),
     );
 
-    expect(result).toEqual({
-      instructions: ["/action/bonk_guidance.md"],
+    expect(result.instructions).toEqual(["/action/bonk_guidance.md"]);
+    expect(result.default_agent).toBeUndefined();
+  });
+
+  it("denies unanswerable permission prompts when the consumer sets none", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/work/repo", "/runner/temp"],
+        filePermissions: [],
+      }),
+    );
+
+    expect(result.permission).toEqual({
+      question: "deny",
+      doom_loop: "deny",
+      external_directory: {
+        "*": "deny",
+        "/work/repo/**": "allow",
+        "/runner/temp/**": "allow",
+      },
     });
+    // OpenCode applies the last matching rule, so the fallback must come first.
+    expect(Object.keys(result.permission.external_directory)[0]).toBe("*");
+  });
+
+  it("puts the deny fallback before consumer rules that lack one", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(
+        '{"permission":{"edit":"deny","doom_loop":"ask","external_directory":{"/home/runner/work/**":"allow","/runner/temp/**":"deny"}}}',
+        "/action/bonk_guidance.md",
+        { allowedDirs: ["/runner/temp"], filePermissions: [] },
+      ),
+    );
+
+    expect(result.permission.edit).toBe("deny");
+    expect(result.permission.question).toBe("deny");
+    // Explicit consumer choices win.
+    expect(result.permission.doom_loop).toBe("ask");
+    expect(result.permission.external_directory).toEqual({
+      "*": "deny",
+      "/runner/temp/**": "deny",
+      "/home/runner/work/**": "allow",
+    });
+    expect(Object.keys(result.permission.external_directory)[0]).toBe("*");
+  });
+
+  it("leaves consumer external_directory rules with their own fallback alone", () => {
+    const rules = { "/home/runner/work/**": "allow", "*": "ask" };
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(
+        JSON.stringify({ permission: { external_directory: rules } }),
+        "/action/bonk_guidance.md",
+        { allowedDirs: ["/runner/temp"], filePermissions: [] },
+      ),
+    );
+
+    expect(result.permission.external_directory).toEqual(rules);
+    expect(Object.keys(result.permission.external_directory)).toEqual(Object.keys(rules));
+  });
+
+  it("leaves a consumer permission that applies to everything alone", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent('{"permission":"allow"}', "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: [],
+      }),
+    );
+
+    expect(result.permission).toBe("allow");
+  });
+
+  it("leaves permissions set in OpenCode config files to those files", () => {
+    // OpenCode merges OPENCODE_CONFIG_CONTENT over its config files, so a
+    // default here would override the file's choice or reorder its rules.
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: [{ doom_loop: "ask", external_directory: { "/data/**": "allow" } }],
+      }),
+    );
+    expect(result.permission).toEqual({ question: "deny" });
+
+    const everything = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: ["allow"],
+      }),
+    );
+    expect(everything.permission).toBeUndefined();
   });
 
   it("rejects invalid instruction configuration", () => {
@@ -1396,5 +1544,178 @@ describe("GitHub Action finalize timeout status", () => {
     expect(resolveFinalizeStatus({ OPENCODE_STATUS: "success", OPENCODE_EXIT_CODE: "0" })).toBe(
       "success",
     );
+  });
+});
+
+describe("GitHub Action prompt size", () => {
+  const dir = "/tmp/bonk-prompt-size-test";
+  const bytes = (text: string) => Buffer.byteLength(text);
+  const context = "<bonk_execution_context>\nrepository: owner/repo\n</bonk_execution_context>";
+  const block = (name: string, size: number) => `<${name}>\n${"x".repeat(size)}\n</${name}>`;
+
+  beforeEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("fits one environment string on Linux", () => {
+    // MAX_ARG_STRLEN is 128 KiB including "PROMPT=" and the terminating NUL.
+    expect(bytes("PROMPT=") + PROMPT_ENV_CAP + 1).toBeLessThanOrEqual(128 * 1024);
+    expect(PREFLIGHT_PROMPT_BUDGET).toBeLessThan(PROMPT_ENV_CAP);
+  });
+
+  it("keeps a prompt at exactly the cap and spills one byte over it", () => {
+    const request = "<bonk_user_request>\nreview\n</bonk_user_request>";
+    const assemble = (size: number) => [context, block("bonk_diff", size), request].join("\n\n");
+    const fill = PROMPT_ENV_CAP - bytes(assemble(0));
+    const atCap = assemble(fill);
+    expect(bytes(atCap)).toBe(PROMPT_ENV_CAP);
+    expect(fitPrompt(atCap, PROMPT_ENV_CAP, dir)).toBe(atCap);
+    expect(existsSync(dir)).toBe(false);
+
+    const overCap = assemble(fill + 1);
+    const fitted = fitPrompt(overCap, PROMPT_ENV_CAP, dir);
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_diff.md`);
+    expect(fitted).toContain(request);
+  });
+
+  it("moves the largest blocks to files and keeps the rest inline", () => {
+    const diff = block("bonk_diff", 150_000);
+    const previous = block("bonk_previous_review", 30_000);
+    const findings = block("bonk_specialist_findings", 70_000);
+    const request = "<bonk_user_request>\nreview\n</bonk_user_request>";
+    const prompt = [context, diff, previous, findings, request].join("\n\n");
+
+    const fitted = fitPrompt(prompt, PROMPT_ENV_CAP, dir);
+
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(context);
+    expect(fitted).toContain(previous);
+    expect(fitted).toContain(request);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_diff.md`);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_specialist_findings.md`);
+    expect(readFileSync(`${dir}/bonk_diff.md`, "utf8")).toBe(`${diff}\n`);
+    expect(readFileSync(`${dir}/bonk_specialist_findings.md`, "utf8")).toBe(`${findings}\n`);
+  });
+
+  it("moves the whole prompt to a file when blocks are not enough", () => {
+    const prompt = `${context}\n\n${"y".repeat(PROMPT_ENV_CAP)}`;
+    const fitted = fitPrompt(prompt, PROMPT_ENV_CAP, dir);
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(`${dir}/prompt.md`);
+    expect(readFileSync(`${dir}/prompt.md`, "utf8")).toBe(prompt);
+  });
+
+  it("reads the final prompt from its file and fits it", () => {
+    mkdirSync(dir, { recursive: true });
+    const file = `${dir}/specialists.md`;
+    writeFileSync(file, [context, block("bonk_diff", 200_000)].join("\n\n"));
+    const prompt = resolvePrompt({ PROMPT_FILE: file });
+    expect(bytes(prompt)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(prompt).toContain(`moved_to_file: ${dir}/spilled/bonk_diff.md`);
+    expect(resolvePrompt({ PROMPT: "small" })).toBe("small");
+  });
+
+  it("passes the review state between steps only as a file", () => {
+    expect(actionYaml).not.toMatch(/^\s+REVIEW_STATE:/m);
+    expect(actionYaml).not.toContain("outputs.review_state ");
+    expect(actionYaml).not.toContain("outputs.review_state }}");
+    expect(
+      actionYaml.match(
+        /REVIEW_STATE_FILE: \$\{\{ steps\.preflight\.outputs\.review_state_file \}\}/g,
+      ),
+    ).toHaveLength(3);
+
+    mkdirSync(dir, { recursive: true });
+    const state = {
+      head: "a".repeat(40),
+      base: "b".repeat(40),
+      lastReviewId: 0,
+      // A re-review touching thousands of files: too large for one env var.
+      changedFiles: Array.from(
+        { length: 5000 },
+        (_, index) => `src/some/deep/path/file-${index}.ts`,
+      ),
+      rereview: true,
+      expectReview: true,
+      reviewFile: "/tmp/review.json",
+      diffDir: "",
+      specialistsDir: "",
+      previousSpecialists: null,
+    };
+    const file = `${dir}/review-state.json`;
+    writeFileSync(file, JSON.stringify(state));
+    expect(bytes(JSON.stringify(state))).toBeGreaterThan(128 * 1024);
+    expect(readPublishState({ REVIEW_STATE_FILE: file })?.changedFiles).toHaveLength(5000);
+    expect(readPublishState({ REVIEW_STATE_FILE: `${dir}/missing.json` })).toBeNull();
+    expect(readPublishState({ REVIEW_STATE: JSON.stringify(state) })?.head).toBe(state.head);
+  });
+
+  it("passes the prompt between steps only as a file", () => {
+    expect(actionYaml).not.toMatch(/^\s+PROMPT:/m);
+    expect(actionYaml).not.toContain("outputs.value");
+    expect(actionYaml).not.toContain("outputs.prompt ");
+    expect(actionYaml).toContain("PROMPT_FILE: ${{ steps.preflight.outputs.prompt_file }}");
+    expect(actionYaml).toContain(
+      "PROMPT_FILE: ${{ steps.specialists.outputs.prompt_file || steps.preflight.outputs.prompt_file }}",
+    );
+  });
+
+  it("lists patches by path when a large pull request would crowd the prompt", async () => {
+    // 30 files of 4 KB: under the diff block's own budget, over preflight's.
+    const files = Array.from({ length: 30 }, (_, index) => ({
+      filename: `src/file${index}.ts`,
+      status: "modified",
+      additions: 100,
+      deletions: 0,
+      patch: `@@ -0,0 +1,100 @@\n${"+line of code in a big change\n".repeat(135)}`,
+    }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://api.github.com/graphql") {
+        return jsonResponse({
+          data: {
+            viewer: { login: "self-hosted-bonk[bot]" },
+            repository: {
+              pullRequest: {
+                headRefOid: NEW_HEAD,
+                baseRefOid: BASE,
+                comments: { nodes: [] },
+                reviews: { nodes: [] },
+                reviewThreads: { nodes: [] },
+              },
+            },
+          },
+        });
+      }
+      if (url.includes("/contents/.github/bonk/specialists")) return jsonResponse({}, 404);
+      if (url.includes("/pulls/5/files")) return jsonResponse(files);
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: undefined,
+        PR_NUMBER: "5",
+        ISSUE_NUMBER: "5",
+        REPOSITORY: "owner/repo",
+        HEAD_SHA: NEW_HEAD,
+        TOKEN_PERMISSIONS: "WRITE",
+        REREVIEW_CONTEXT: "true",
+        RUNNER_TEMP: "/tmp/bonk-runner-large",
+        GITHUB_RUN_ID: "78",
+      },
+      () => buildPrompt({ detection: { isFork: false }, reviewToken: "app-token" }),
+    );
+
+    expect(bytes(files.map((file) => file.patch).join(""))).toBeGreaterThan(
+      PREFLIGHT_PROMPT_BUDGET,
+    );
+    expect(bytes(result.value)).toBeLessThanOrEqual(PREFLIGHT_PROMPT_BUDGET);
+    expect(result.value).toContain("<bonk_diff>");
+    expect(result.value).toContain(
+      "- modified src/file0.ts +100/-0 [code] patch: /tmp/bonk-runner-large/bonk-diff-78/src_file0.ts.patch",
+    );
+    expect(result.value).not.toContain("+line of code in a big change");
   });
 });

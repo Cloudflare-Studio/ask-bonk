@@ -133,11 +133,19 @@ runs:
         esac
 
         IFS=',' read -ra MENTION_ARRAY <<< "$MENTIONS"
+        shopt -s nocasematch
 
+        # A mention counts only as a whole token: at the start or after
+        # whitespace, and followed by whitespace or the end (optionally after
+        # punctuation), so paths like .github/workflows/bonk.yml do not match.
+        # Keep in sync with containsMention() in script/context.ts.
         for mention in "${MENTION_ARRAY[@]}"; do
           mention="${mention#"${mention%%[![:space:]]*}"}"
           mention="${mention%"${mention##*[![:space:]]}"}"
-          if [[ "$BODY" == *"$mention"* ]]; then
+          [ -n "$mention" ] || continue
+          escaped="$(printf '%s' "$mention" | sed 's#[][\.*^$+?(){}|]#\\&#g')"
+          pattern="(^|[[:space:]])${escaped}[].,;:!?)}'\"]*([[:space:]]|$)"
+          if [[ "$BODY" =~ $pattern ]]; then
             echo "Found mention: $mention"
             echo "skip=false" >> $GITHUB_OUTPUT
             exit 0
@@ -240,24 +248,35 @@ runs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
         fi
 
-    - name: Clear Git write credentials for review-only run
+    - name: Configure Git for review-only run
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
         && steps.preflight.outputs.mode == 'review-only'
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
+      env:
+        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
       run: |
         set -euo pipefail
         server_url="${GITHUB_SERVER_URL:-https://github.com}"
         host="${server_url#https://}"
         host="${host#http://}"
+        # Drop the GITHUB_TOKEN that actions/checkout may persist, which can
+        # carry contents: write. OpenCode still fetches the PR branch itself,
+        # which needs credentials on private repositories, so origin gets the
+        # installation token: in review-only mode it has read-only contents
+        # and cannot push.
         git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
-        git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
+        if [ -n "${GH_TOKEN:-}" ]; then
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+        else
+          git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
+        fi
 
     - name: Run specialists
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
-        && steps.preflight.outputs.review_state != '' && inputs.specialists != 'off'
+        && steps.preflight.outputs.review_state_file != '' && inputs.specialists != 'off'
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       id: specialists
       # Specialists only add evidence; the main review runs without them.
@@ -266,8 +285,8 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         VARIANT: ${{ inputs.variant }}
-        PROMPT: ${{ steps.preflight.outputs.value }}
-        REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
+        PROMPT_FILE: ${{ steps.preflight.outputs.prompt_file }}
+        REVIEW_STATE_FILE: ${{ steps.preflight.outputs.review_state_file }}
         SPECIALISTS: ${{ inputs.specialists }}
         SPECIALIST_PARALLELISM: ${{ inputs.specialist_parallelism }}
         SPECIALIST_TIMEOUT: ${{ inputs.specialist_timeout }}
@@ -287,14 +306,16 @@ runs:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
-        PROMPT: ${{ steps.specialists.outputs.prompt || steps.preflight.outputs.value }}
+        # The prompt goes by file: as an env var it can exceed Linux's 128 KiB
+        # limit on one environment string and fail the step with E2BIG.
+        PROMPT_FILE: ${{ steps.specialists.outputs.prompt_file || steps.preflight.outputs.prompt_file }}
         BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
         # Kept separate from OPENCODE_TIMEOUT/OPENCODE_RETRIES so an empty input
         # does not clobber values callers already set in the step env.
         BONK_TIMEOUT: ${{ inputs.timeout }}
         BONK_RETRIES: ${{ inputs.retries }}
         # Lets a review run that ends without a review be retried or failed.
-        REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
+        REVIEW_STATE_FILE: ${{ steps.preflight.outputs.review_state_file }}
         GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
@@ -310,7 +331,7 @@ runs:
     - name: Publish review
       if: |
         success() && steps.opencode.outcome == 'success'
-        && steps.preflight.outputs.review_state != ''
+        && steps.preflight.outputs.review_state_file != ''
       continue-on-error: true
       shell: bash
       env:
@@ -319,7 +340,7 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
-        REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
+        REVIEW_STATE_FILE: ${{ steps.preflight.outputs.review_state_file }}
         SPECIALIST_STATUS: ${{ steps.specialists.outputs.statuses }}
         SPECIALIST_FINDINGS: ${{ steps.specialists.outputs.findings_file }}
         EVENT_NAME: ${{ github.event_name }}

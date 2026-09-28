@@ -149,6 +149,9 @@ export interface ReviewContext {
   // Specialist statuses from the last review's marker.
   previousSpecialists: Record<string, string> | null;
   block: string | null;
+  // The same block with the author delta listed by file path instead of
+  // inlined, for prompts that would otherwise be too large.
+  compactBlock: string | null;
 }
 
 export function formatReviewStateMarker(state: ReviewState): string {
@@ -377,6 +380,7 @@ export function formatPreviousReviewBlock(
   history: ReviewHistory,
   delta: ReviewDelta | null,
   deltaPaths?: Map<string, { before?: string; after?: string }>,
+  deltaBudget = DELTA_PROMPT_BUDGET,
 ): string | null {
   const { previous, threads } = history;
   if (!previous && threads.length === 0) return null;
@@ -413,7 +417,8 @@ export function formatPreviousReviewBlock(
         sum + Buffer.byteLength(file.before ?? "") + Buffer.byteLength(file.after ?? ""),
       0,
     );
-    if (bytes <= DELTA_PROMPT_BUDGET) {
+    // Without patch files to point at, the full budget still applies.
+    if (bytes <= deltaBudget || (!deltaPaths && bytes <= DELTA_PROMPT_BUDGET)) {
       for (const file of delta.files.slice(0, MAX_LISTED_FILES)) {
         for (const side of ["before", "after"] as const) {
           lines.push(`=== ${escapePromptValue(file.filename)} (${side}) ===`);
@@ -792,5 +797,6 @@ export async function loadReviewContext(
     rereview: history.previous !== null,
     previousSpecialists: history.previous?.specialists ?? null,
     block: formatPreviousReviewBlock(history, delta, deltaPaths),
+    compactBlock: formatPreviousReviewBlock(history, delta, deltaPaths, 0),
   };
 }

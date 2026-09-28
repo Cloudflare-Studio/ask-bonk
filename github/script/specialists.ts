@@ -14,7 +14,13 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFi
 import { homedir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { appendGitHubValue, core, escapePromptValue } from "./context";
+import {
+  appendGitHubValue,
+  core,
+  escapePromptValue,
+  readPromptFile,
+  writePromptFile,
+} from "./context";
 import { fetchWithRetry } from "./http";
 import {
   compileGlob,
@@ -28,7 +34,7 @@ import {
 import { deltaPatchPaths } from "./review-state";
 import {
   CARRIED_FORWARD,
-  parsePublishState,
+  readPublishState,
   parseReviewFile,
   type Finding,
   type SpecialistFindingRecord,
@@ -1064,13 +1070,18 @@ async function prepareHeadWorktree(dir: string, head: string): Promise<string> {
   return process.cwd();
 }
 
+// Appends a block to preflight's prompt file and returns the new file's path.
+function extendPrompt(block: string): string {
+  return writePromptFile("specialists", `${readPromptFile(process.env.PROMPT_FILE)}\n\n${block}`);
+}
+
 export interface SpecialistStatusRecord {
   status: string;
   reason?: string;
 }
 
 export async function runSpecialists(): Promise<void> {
-  const state = parsePublishState(process.env.REVIEW_STATE);
+  const state = readPublishState();
   const runnerTemp = process.env.RUNNER_TEMP || "";
   const manifest = readManifest(state?.diffDir);
   if (!state || !manifest || !runnerTemp || !state.expectReview) {
@@ -1108,8 +1119,8 @@ export async function runSpecialists(): Promise<void> {
     if ((disabled.length > 0 || repo.shared) && process.env.GITHUB_OUTPUT) {
       appendGitHubValue(
         process.env.GITHUB_OUTPUT,
-        "prompt",
-        `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings([], [], scope, disabled, repo.shared)}`,
+        "prompt_file",
+        extendPrompt(formatSpecialistFindings([], [], scope, disabled, repo.shared)),
       );
     }
     return;
@@ -1168,8 +1179,10 @@ export async function runSpecialists(): Promise<void> {
   if (!outputFile) return;
   appendGitHubValue(
     outputFile,
-    "prompt",
-    `${process.env.PROMPT ?? ""}\n\n${formatSpecialistFindings(results, selection.skipped, scope, disabled, repo.shared)}`,
+    "prompt_file",
+    extendPrompt(
+      formatSpecialistFindings(results, selection.skipped, scope, disabled, repo.shared),
+    ),
   );
   appendGitHubValue(outputFile, "statuses", JSON.stringify(statuses));
   const findingsFile = join(dir, "specialist-findings.json");

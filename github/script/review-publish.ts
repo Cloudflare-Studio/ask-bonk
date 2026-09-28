@@ -338,6 +338,19 @@ export function formatNotPosted(accounts: SpecialistAccount[]): string {
   ].join("\n");
 }
 
+// Later steps get the state as a file (REVIEW_STATE_FILE); see
+// PROMPT_ENV_CAP in context.ts for why. REVIEW_STATE holds it inline.
+export function readPublishState(
+  env: Record<string, string | undefined> = process.env,
+): PublishState | null {
+  if (!env.REVIEW_STATE_FILE) return parsePublishState(env.REVIEW_STATE);
+  try {
+    return parsePublishState(readFileSync(env.REVIEW_STATE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export function parsePublishState(text: string | undefined): PublishState | null {
   if (!text) return null;
   try {
@@ -1132,7 +1145,7 @@ export async function publishReview(): Promise<void> {
   const prNumber = process.env.PR_NUMBER || "";
   const runId = process.env.GITHUB_RUN_ID || "";
   const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
-  const state = parsePublishState(process.env.REVIEW_STATE);
+  const state = readPublishState();
   if (!token || !repository || !prNumber || !runId || !state) {
     core.info("Review publishing context incomplete; skipping.");
     return;

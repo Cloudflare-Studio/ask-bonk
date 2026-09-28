@@ -90,8 +90,13 @@ function configureWorkflowForwarder(routeWorkflowRequest: FlueRuntime["routeWork
   configureFlueRuntime(runtime);
 }
 
-describe("GitHub API workflow compatibility routes", () => {
+// The first test imports the app, which can take longer than vitest's 5 s
+// default on a cold runner. A test that times out keeps running and its
+// request reaches the next test's forwarder, so the budget is generous.
+describe("GitHub API workflow compatibility routes", { timeout: 20_000 }, () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
     mocks.validateOIDCAndExtractRepo.mockReset();
     mocks.validateOIDCAndExtractRepo.mockResolvedValue(
       Result.ok({ claims: createClaims(), owner: "test-org", repo: "test-repo" }),

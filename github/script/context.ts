@@ -1,8 +1,8 @@
 // Context helper for GitHub Action scripts
 // Provides a similar interface to actions/github-script's context object
 
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { fetchWithRetry } from "./http";
 
@@ -184,6 +184,73 @@ export function fitPrompt(prompt: string, cap: number, dir: string): string {
   const file = join(dir, "prompt.md");
   writeFileSync(file, prompt);
   return `Your instructions are ${Buffer.byteLength(prompt)} bytes, too large to include here. Read ${escapePromptValue(file)} in full (page through it if a read is truncated) before doing anything else, and follow it as your instructions.`;
+}
+
+// OpenCode installs each config directory's package.json dependencies in the
+// background at startup, so a repository's custom tool can load before
+// `@opencode-ai/plugin` is there and fail the run. Installing first closes
+// that race. `root` is the checkout OpenCode runs in.
+export function openCodeConfigDirs(root: string, env = process.env): string[] {
+  const configHome = env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return Array.from(
+    new Set([
+      join(root, ".opencode"),
+      join(configHome, "opencode"),
+      ...(env.OPENCODE_CONFIG_DIR ? [env.OPENCODE_CONFIG_DIR] : []),
+    ]),
+  );
+}
+
+export type DependencyInstaller = (dir: string, frozenLockfile: boolean) => Promise<void>;
+
+const INSTALL_TIMEOUT_MS = 2 * 60 * 1000;
+
+// --no-save keeps a new lockfile out of the checkout, where a write-mode run
+// could commit it.
+export const bunInstall: DependencyInstaller = async (dir, frozenLockfile) => {
+  const proc = Bun.spawn(["bun", "install", frozenLockfile ? "--frozen-lockfile" : "--no-save"], {
+    cwd: dir,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const timer = setTimeout(() => proc.kill("SIGKILL"), INSTALL_TIMEOUT_MS);
+  try {
+    const [exitCode, stderr] = await Promise.all([
+      proc.exited,
+      proc.stderr ? new Response(proc.stderr).text() : Promise.resolve(""),
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`bun install exited with ${exitCode}: ${stderr.trim().slice(-2000)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// Installs dependencies for each directory with a package.json and no
+// node_modules. Never throws: OpenCode still tries its own install, so a
+// failure here is only a warning.
+export async function installOpenCodeDependencies(
+  dirs: string[],
+  install: DependencyInstaller = bunInstall,
+): Promise<string[]> {
+  const installed: string[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(join(dir, "package.json")) || existsSync(join(dir, "node_modules"))) continue;
+    const frozen = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
+    try {
+      await install(dir, frozen);
+      installed.push(dir);
+      core.info(`Installed OpenCode dependencies in ${dir}`);
+    } catch (error) {
+      core.warning(
+        `Could not install OpenCode dependencies in ${dir}; OpenCode will try again: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  return installed;
 }
 
 // Core utilities similar to @actions/core
@@ -383,14 +450,17 @@ export function extractMentionPrompt(
 }
 
 // A mention counts only as a whole token: at the start of the body or after
-// whitespace, and followed by whitespace or the end, optionally after
-// punctuation (`/bonk,` but not `/bonk.yml`). Paths such as
-// `.github/workflows/bonk.yml`, which bots list in CODEOWNERS comments, and
-// words that merely contain the mention do not trigger a run. Keep in sync
-// with the "Check mentions" step in action.yml.
+// whitespace or opening punctuation (`(@ask-bonk)`), and followed by
+// whitespace or the end, optionally after punctuation (`/bonk,` but not
+// `/bonk.yml`). Paths such as `.github/workflows/bonk.yml`, which bots list
+// in CODEOWNERS comments, words that merely contain the mention, and code
+// spans do not trigger a run. Keep in sync with the "Check mentions" step in
+// action.yml.
 export function containsMention(body: string, mention: string): boolean {
   const escaped = mention.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-  return new RegExp(`(?:^|\\s)${escaped}(?=[.,;:!?)\\]}'"]*(?:$|\\s))`, "i").test(body);
+  return new RegExp(`(?:^|[\\s(\\[{"'<])${escaped}(?=[.,;:!?)\\]}'">]*(?:$|\\s))`, "i").test(
+    body,
+  );
 }
 
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).

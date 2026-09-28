@@ -79,7 +79,7 @@ Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and 
 
 #### 4. Start Using Bonk
 
-Mention `@ask-bonk` or `/bonk` in any issue or PR comment. A mention counts only as a separate word: `/bonk review this` triggers Bonk, but a file path such as `.github/workflows/bonk.yml` does not.
+Mention `@ask-bonk` or `/bonk` in any issue or PR comment. A mention counts only as a separate word, optionally wrapped in brackets or quotes: `/bonk review this` and `Please review (@ask-bonk)` trigger Bonk, but a file path such as `.github/workflows/bonk.yml` does not.
 
 ### Using Other Providers
 

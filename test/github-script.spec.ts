@@ -8,6 +8,8 @@ import {
   extractMentionPrompt,
   getApiBaseUrl,
   fitPrompt,
+  installOpenCodeDependencies,
+  openCodeConfigDirs,
   PROMPT_ENV_CAP,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
@@ -122,6 +124,10 @@ describe("GitHub Action mention prompt extraction", () => {
       "thanks @ask-bonk, can you review?",
       "(cc @Ask-Bonk)",
       "ping /bonk.",
+      "Please review (@ask-bonk)",
+      "[/bonk] take a look",
+      '"/bonk" please',
+      "<@ask-bonk>",
     ]) {
       expect(extractMentionPrompt(body, mentions), body).toBe(body);
     }
@@ -133,6 +139,11 @@ describe("GitHub Action mention prompt extraction", () => {
       "/bonk.yml",
       "mail@ask-bonk.dev",
       "`/bonk`",
+      "a/bonk",
+      "x.@ask-bonk",
+      "foo-/bonk",
+      "_@ask-bonk",
+      "9/bonk",
     ]) {
       expect(extractMentionPrompt(body, mentions), body).toBeNull();
     }
@@ -1717,5 +1728,59 @@ describe("GitHub Action prompt size", () => {
       "- modified src/file0.ts +100/-0 [code] patch: /tmp/bonk-runner-large/bonk-diff-78/src_file0.ts.patch",
     );
     expect(result.value).not.toContain("+line of code in a big change");
+  });
+});
+
+describe("GitHub Action OpenCode dependency install", () => {
+  const root = "/tmp/bonk-deps-test";
+
+  beforeEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("covers the checkout, global and custom config directories", () => {
+    expect(
+      openCodeConfigDirs("/work/repo", {
+        XDG_CONFIG_HOME: "/home/runner/.config",
+        OPENCODE_CONFIG_DIR: "/opt/opencode",
+      }),
+    ).toEqual(["/work/repo/.opencode", "/home/runner/.config/opencode", "/opt/opencode"]);
+  });
+
+  it("installs only directories with a package.json and no node_modules", async () => {
+    const fresh = `${root}/fresh`;
+    const locked = `${root}/locked`;
+    const installed = `${root}/installed`;
+    const empty = `${root}/empty`;
+    for (const dir of [fresh, locked, installed, empty]) mkdirSync(dir, { recursive: true });
+    for (const dir of [fresh, locked, installed]) {
+      writeFileSync(`${dir}/package.json`, '{"dependencies":{"@opencode-ai/plugin":"*"}}');
+    }
+    writeFileSync(`${locked}/bun.lock`, "{}");
+    mkdirSync(`${installed}/node_modules`);
+
+    const install = vi.fn(async () => {});
+    const result = await installOpenCodeDependencies(
+      [fresh, locked, installed, empty, `${root}/missing`],
+      install,
+    );
+
+    expect(install.mock.calls).toEqual([
+      [fresh, false],
+      [locked, true],
+    ]);
+    expect(result).toEqual([fresh, locked]);
+  });
+
+  it("warns instead of failing when an install fails", async () => {
+    const dir = `${root}/broken`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${dir}/package.json`, "{}");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const result = await installOpenCodeDependencies([dir], async () => {
+      throw new Error("registry unreachable");
+    });
+
+    expect(result).toEqual([]);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^::warning::.*registry unreachable/));
   });
 });

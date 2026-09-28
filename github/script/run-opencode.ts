@@ -4,7 +4,14 @@ import { existsSync, readFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import { pathToFileURL } from "url";
-import { appendGitHubValue, fitPrompt, PROMPT_ENV_CAP, readPromptFile } from "./context";
+import {
+  appendGitHubValue,
+  fitPrompt,
+  installOpenCodeDependencies,
+  openCodeConfigDirs,
+  PROMPT_ENV_CAP,
+  readPromptFile,
+} from "./context";
 import {
   deleteComment,
   findRunResponse,
@@ -472,6 +479,10 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     writeExitCode(2);
     return 2;
   }
+
+  await installOpenCodeDependencies(
+    openCodeConfigDirs(process.env.GITHUB_WORKSPACE || process.cwd()),
+  );
 
   const { timeoutMs, retries } = resolveRunLimits(process.env);
   const maxAttempts = retries + 1;

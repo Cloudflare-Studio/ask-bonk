@@ -19,6 +19,7 @@ import {
   classifyOpenCodeFailure,
   INCOMPLETE_REVIEW_EXIT_CODE,
   isRetryableOpenCodeFailure,
+  missingProviderEnv,
   resolveRunLimits,
 } from "../github/script/run-opencode";
 import {
@@ -693,6 +694,31 @@ describe("GitHub Action re-review context", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.reviewState).toBeUndefined();
     expect(result.value).not.toContain("bonk_previous_review");
+  });
+});
+
+describe("GitHub Action provider environment check", () => {
+  it("names empty Cloudflare AI Gateway variables", () => {
+    expect(
+      missingProviderEnv({
+        MODEL: "cloudflare-ai-gateway/openai/gpt-5.6-terra",
+        CLOUDFLARE_ACCOUNT_ID: "",
+        CLOUDFLARE_GATEWAY_ID: "",
+        CLOUDFLARE_API_TOKEN: "",
+      }),
+    ).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_API_TOKEN"]);
+    expect(
+      missingProviderEnv({
+        MODEL: "cloudflare-ai-gateway/openai/gpt-5.6-terra",
+        CLOUDFLARE_ACCOUNT_ID: "a",
+        CLOUDFLARE_GATEWAY_ID: "g",
+        CF_AIG_TOKEN: "t",
+      }),
+    ).toEqual([]);
+  });
+
+  it("ignores other providers", () => {
+    expect(missingProviderEnv({ MODEL: "opencode/claude-opus-4-5" })).toEqual([]);
   });
 });
 

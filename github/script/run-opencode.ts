@@ -170,6 +170,19 @@ export function readConfigFilePermissions(workspace: string | undefined): unknow
   return permissions;
 }
 
+// OpenCode leaves the Cloudflare AI Gateway provider out entirely when its
+// account or gateway ID is missing, and then reports only "Model not found",
+// which reads like a wrong model name. Workflows usually hit this when the
+// secrets they map are not available to the repository.
+export function missingProviderEnv(env: Record<string, string | undefined>): string[] {
+  if (!env.MODEL?.startsWith("cloudflare-ai-gateway/")) return [];
+  return [
+    !env.CLOUDFLARE_ACCOUNT_ID ? "CLOUDFLARE_ACCOUNT_ID" : "",
+    !env.CLOUDFLARE_GATEWAY_ID ? "CLOUDFLARE_GATEWAY_ID" : "",
+    !env.CLOUDFLARE_API_TOKEN && !env.CF_AIG_TOKEN ? "CLOUDFLARE_API_TOKEN" : "",
+  ].filter(Boolean);
+}
+
 export interface PermissionDefaults {
   // Directories OpenCode may use outside the workspace.
   allowedDirs: string[];
@@ -407,6 +420,15 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     console.error("Bonk harness guidance file is missing.");
     writeExitCode(2);
     return 2;
+  }
+
+  const missingEnv = missingProviderEnv(process.env);
+  if (missingEnv.length > 0) {
+    // A warning, not a failure: OpenCode can also take these from stored
+    // credentials or a configured baseURL.
+    console.log(
+      `::warning::${missingEnv.join(", ")} ${missingEnv.length === 1 ? "is" : "are"} empty, so OpenCode cannot load the Cloudflare AI Gateway provider for ${process.env.MODEL} and will report the model as not found. Check that the secrets mapped to these variables exist and are available to this repository.`,
+    );
   }
 
   let configContent: string;

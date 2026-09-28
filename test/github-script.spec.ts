@@ -1,15 +1,20 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import actionYaml from "../github/action.yml?raw";
 import {
   detectForkFromPR,
   parseTokenPermissions,
   checkPermissionLevel,
   extractMentionPrompt,
   getApiBaseUrl,
+  fitPrompt,
+  PROMPT_ENV_CAP,
 } from "../github/script/context";
 import { fetchWithRetry } from "../github/script/http";
 import { resolveFinalizeStatus } from "../github/script/finalize";
 import {
   buildPrompt,
+  PREFLIGHT_PROMPT_BUDGET,
   checkCodeowners,
   findMatchingCodeownersRule,
   parseCodeowners,
@@ -20,6 +25,7 @@ import {
   INCOMPLETE_REVIEW_EXIT_CODE,
   isRetryableOpenCodeFailure,
   missingProviderEnv,
+  resolvePrompt,
   resolveRunLimits,
 } from "../github/script/run-opencode";
 import {
@@ -1537,5 +1543,143 @@ describe("GitHub Action finalize timeout status", () => {
     expect(resolveFinalizeStatus({ OPENCODE_STATUS: "success", OPENCODE_EXIT_CODE: "0" })).toBe(
       "success",
     );
+  });
+});
+
+describe("GitHub Action prompt size", () => {
+  const dir = "/tmp/bonk-prompt-size-test";
+  const bytes = (text: string) => Buffer.byteLength(text);
+  const context = "<bonk_execution_context>\nrepository: owner/repo\n</bonk_execution_context>";
+  const block = (name: string, size: number) => `<${name}>\n${"x".repeat(size)}\n</${name}>`;
+
+  beforeEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("fits one environment string on Linux", () => {
+    // MAX_ARG_STRLEN is 128 KiB including "PROMPT=" and the terminating NUL.
+    expect(bytes("PROMPT=") + PROMPT_ENV_CAP + 1).toBeLessThanOrEqual(128 * 1024);
+    expect(PREFLIGHT_PROMPT_BUDGET).toBeLessThan(PROMPT_ENV_CAP);
+  });
+
+  it("keeps a prompt at exactly the cap and spills one byte over it", () => {
+    const request = "<bonk_user_request>\nreview\n</bonk_user_request>";
+    const assemble = (size: number) => [context, block("bonk_diff", size), request].join("\n\n");
+    const fill = PROMPT_ENV_CAP - bytes(assemble(0));
+    const atCap = assemble(fill);
+    expect(bytes(atCap)).toBe(PROMPT_ENV_CAP);
+    expect(fitPrompt(atCap, PROMPT_ENV_CAP, dir)).toBe(atCap);
+    expect(existsSync(dir)).toBe(false);
+
+    const overCap = assemble(fill + 1);
+    const fitted = fitPrompt(overCap, PROMPT_ENV_CAP, dir);
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_diff.md`);
+    expect(fitted).toContain(request);
+  });
+
+  it("moves the largest blocks to files and keeps the rest inline", () => {
+    const diff = block("bonk_diff", 150_000);
+    const previous = block("bonk_previous_review", 30_000);
+    const findings = block("bonk_specialist_findings", 70_000);
+    const request = "<bonk_user_request>\nreview\n</bonk_user_request>";
+    const prompt = [context, diff, previous, findings, request].join("\n\n");
+
+    const fitted = fitPrompt(prompt, PROMPT_ENV_CAP, dir);
+
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(context);
+    expect(fitted).toContain(previous);
+    expect(fitted).toContain(request);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_diff.md`);
+    expect(fitted).toContain(`moved_to_file: ${dir}/bonk_specialist_findings.md`);
+    expect(readFileSync(`${dir}/bonk_diff.md`, "utf8")).toBe(`${diff}\n`);
+    expect(readFileSync(`${dir}/bonk_specialist_findings.md`, "utf8")).toBe(`${findings}\n`);
+  });
+
+  it("moves the whole prompt to a file when blocks are not enough", () => {
+    const prompt = `${context}\n\n${"y".repeat(PROMPT_ENV_CAP)}`;
+    const fitted = fitPrompt(prompt, PROMPT_ENV_CAP, dir);
+    expect(bytes(fitted)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(fitted).toContain(`${dir}/prompt.md`);
+    expect(readFileSync(`${dir}/prompt.md`, "utf8")).toBe(prompt);
+  });
+
+  it("reads the final prompt from its file and fits it", () => {
+    mkdirSync(dir, { recursive: true });
+    const file = `${dir}/specialists.md`;
+    writeFileSync(file, [context, block("bonk_diff", 200_000)].join("\n\n"));
+    const prompt = resolvePrompt({ PROMPT_FILE: file });
+    expect(bytes(prompt)).toBeLessThanOrEqual(PROMPT_ENV_CAP);
+    expect(prompt).toContain(`moved_to_file: ${dir}/spilled/bonk_diff.md`);
+    expect(resolvePrompt({ PROMPT: "small" })).toBe("small");
+  });
+
+  it("passes the prompt between steps only as a file", () => {
+    expect(actionYaml).not.toMatch(/^\s+PROMPT:/m);
+    expect(actionYaml).not.toContain("outputs.value");
+    expect(actionYaml).not.toContain("outputs.prompt ");
+    expect(actionYaml).toContain("PROMPT_FILE: ${{ steps.preflight.outputs.prompt_file }}");
+    expect(actionYaml).toContain(
+      "PROMPT_FILE: ${{ steps.specialists.outputs.prompt_file || steps.preflight.outputs.prompt_file }}",
+    );
+  });
+
+  it("lists patches by path when a large pull request would crowd the prompt", async () => {
+    // 30 files of 4 KB: under the diff block's own budget, over preflight's.
+    const files = Array.from({ length: 30 }, (_, index) => ({
+      filename: `src/file${index}.ts`,
+      status: "modified",
+      additions: 100,
+      deletions: 0,
+      patch: `@@ -0,0 +1,100 @@\n${"+line of code in a big change\n".repeat(135)}`,
+    }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://api.github.com/graphql") {
+        return jsonResponse({
+          data: {
+            viewer: { login: "self-hosted-bonk[bot]" },
+            repository: {
+              pullRequest: {
+                headRefOid: NEW_HEAD,
+                baseRefOid: BASE,
+                comments: { nodes: [] },
+                reviews: { nodes: [] },
+                reviewThreads: { nodes: [] },
+              },
+            },
+          },
+        });
+      }
+      if (url.includes("/contents/.github/bonk/specialists")) return jsonResponse({}, 404);
+      if (url.includes("/pulls/5/files")) return jsonResponse(files);
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const result = await withEnv(
+      {
+        EVENT_NAME: "pull_request",
+        USER_PROMPT: undefined,
+        COMMENT_BODY: undefined,
+        PR_NUMBER: "5",
+        ISSUE_NUMBER: "5",
+        REPOSITORY: "owner/repo",
+        HEAD_SHA: NEW_HEAD,
+        TOKEN_PERMISSIONS: "WRITE",
+        REREVIEW_CONTEXT: "true",
+        RUNNER_TEMP: "/tmp/bonk-runner-large",
+        GITHUB_RUN_ID: "78",
+      },
+      () => buildPrompt({ detection: { isFork: false }, reviewToken: "app-token" }),
+    );
+
+    expect(bytes(files.map((file) => file.patch).join(""))).toBeGreaterThan(
+      PREFLIGHT_PROMPT_BUDGET,
+    );
+    expect(bytes(result.value)).toBeLessThanOrEqual(PREFLIGHT_PROMPT_BUDGET);
+    expect(result.value).toContain("<bonk_diff>");
+    expect(result.value).toContain(
+      "- modified src/file0.ts +100/-0 [code] patch: /tmp/bonk-runner-large/bonk-diff-78/src_file0.ts.patch",
+    );
+    expect(result.value).not.toContain("+line of code in a big change");
   });
 });

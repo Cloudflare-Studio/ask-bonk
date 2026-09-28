@@ -21,6 +21,7 @@ import {
   checkPermissionLevel,
   extractMentionPrompt,
   escapePromptValue,
+  writePromptFile,
   core,
 } from "./context";
 import { fetchWithRetry } from "./http";
@@ -642,6 +643,9 @@ async function resolveHeadSha(
   }
 }
 
+// Preflight's share of PROMPT_ENV_CAP; specialists append their findings.
+export const PREFLIGHT_PROMPT_BUDGET = 64 * 1024;
+
 interface PromptResult {
   isFork: boolean;
   detectionFailed: boolean;
@@ -869,16 +873,25 @@ export async function buildPrompt(options: BuildPromptOptions = {}): Promise<Pro
   if (reviewFile) contextLines.push(`review_output_file: ${escapePromptValue(reviewFile)}`);
   contextLines.push("</bonk_execution_context>");
 
+  const assemble = (compact: boolean) => {
+    const previous = compact ? reviewContext?.compactBlock : reviewContext?.block;
+    return [
+      contextLines.join("\n"),
+      ...(diff ? [formatDiffBlock(diff, compact ? 0 : undefined)] : []),
+      ...(previous ? [previous] : []),
+      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
+    ].join("\n\n");
+  };
+  // Leave room for specialist findings under PROMPT_ENV_CAP: past the budget,
+  // patches are listed by path for the model to read instead of inlined.
+  let value = assemble(false);
+  if (Buffer.byteLength(value) > PREFLIGHT_PROMPT_BUDGET) value = assemble(true);
+
   return {
     isFork: detection.isFork,
     detectionFailed: detection.detectionFailed ?? false,
     mode,
-    value: [
-      contextLines.join("\n"),
-      ...(diff ? [formatDiffBlock(diff)] : []),
-      ...(reviewContext?.block ? [reviewContext.block] : []),
-      `<bonk_user_request>\n${escapePromptValue(userRequest)}\n</bonk_user_request>`,
-    ].join("\n\n"),
+    value,
     detection,
     ...(reviewContext
       ? {
@@ -1220,7 +1233,6 @@ async function main() {
   if (promptResult.detectionFailed) {
     core.setOutput("is_fork", String(promptResult.isFork));
     core.setOutput("mode", promptResult.mode);
-    core.setOutput("value", promptResult.value);
     return core.setFailed("Fork status could not be verified; refusing to proceed.");
   }
 
@@ -1241,7 +1253,7 @@ async function main() {
   // Set prompt outputs
   core.setOutput("is_fork", String(promptResult.isFork));
   core.setOutput("mode", promptResult.mode);
-  core.setOutput("value", promptResult.value);
+  core.setOutput("prompt_file", writePromptFile("preflight", promptResult.value));
   core.setOutput("oidc_failed", oidcResult.failed ? "true" : "false");
   if (promptResult.reviewState) {
     core.setOutput("review_state", JSON.stringify(promptResult.reviewState));

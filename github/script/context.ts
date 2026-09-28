@@ -1,7 +1,9 @@
 // Context helper for GitHub Action scripts
 // Provides a similar interface to actions/github-script's context object
 
-import { appendFileSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { fetchWithRetry } from "./http";
 
 const DEFAULT_OIDC_AUDIENCE = "opencode-github-action";
@@ -115,6 +117,71 @@ export function appendGitHubValue(filePath: string, name: string, value: string)
   } else {
     appendFileSync(filePath, `${name}=${value}\n`);
   }
+}
+
+// The prompt travels between steps as a file, never as a step output or env
+// var: Linux rejects any single environment string over 128 KiB
+// (MAX_ARG_STRLEN) with E2BIG, and review prompts can be larger than that.
+// `opencode github run` still reads its prompt from the PROMPT env var, so
+// run-opencode fits the final prompt under PROMPT_ENV_CAP first.
+export const PROMPT_ENV_CAP = 96 * 1024;
+
+export function promptDir(): string {
+  const base = process.env.RUNNER_TEMP || tmpdir();
+  return join(base, `bonk-prompt-${process.env.GITHUB_RUN_ID || "local"}`);
+}
+
+// Writes a prompt stage (e.g. "preflight", "specialists") and returns its path.
+export function writePromptFile(stage: string, prompt: string): string {
+  const dir = promptDir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${stage}.md`);
+  writeFileSync(path, prompt);
+  return path;
+}
+
+export function readPromptFile(path: string | undefined): string {
+  if (!path) return "";
+  return readFileSync(path, "utf8");
+}
+
+// Top-level Bonk blocks, largest first. Block contents never hold a Bonk tag
+// (escapePromptValue and neutralizeTags escape them), so the first matching
+// closing tag ends the block.
+const PROMPT_BLOCK_PATTERN = /^<(bonk_[a-z_]+)>\n[\s\S]*?\n<\/\1>$/gm;
+// Small and structural; the model needs it inline.
+const INLINE_ONLY_BLOCKS = new Set(["bonk_execution_context"]);
+
+// Returns a prompt no larger than `cap` bytes. When the prompt is larger, the
+// largest blocks move to files in `dir`, each replaced by a pointer telling
+// the model to read the file in full; if that is not enough, the whole prompt
+// moves to a file.
+export function fitPrompt(prompt: string, cap: number, dir: string): string {
+  if (Buffer.byteLength(prompt) <= cap) return prompt;
+  mkdirSync(dir, { recursive: true });
+  const blocks = [...prompt.matchAll(PROMPT_BLOCK_PATTERN)]
+    .filter((match) => !INLINE_ONLY_BLOCKS.has(match[1]))
+    .map((match) => ({ name: match[1], text: match[0] }))
+    .sort((a, b) => Buffer.byteLength(b.text) - Buffer.byteLength(a.text));
+
+  let fitted = prompt;
+  for (const block of blocks) {
+    if (Buffer.byteLength(fitted) <= cap) break;
+    const file = join(dir, `${block.name}.md`);
+    writeFileSync(file, `${block.text}\n`);
+    const pointer = [
+      `<${block.name}>`,
+      `moved_to_file: ${escapePromptValue(file)}`,
+      `This block is ${Buffer.byteLength(block.text)} bytes, too large to include here. Before you review, read that file in full (page through it if a read is truncated); it holds this block's complete content and counts exactly as if it appeared here.`,
+      `</${block.name}>`,
+    ].join("\n");
+    fitted = fitted.replace(block.text, () => pointer);
+  }
+  if (Buffer.byteLength(fitted) <= cap) return fitted;
+
+  const file = join(dir, "prompt.md");
+  writeFileSync(file, prompt);
+  return `Your instructions are ${Buffer.byteLength(prompt)} bytes, too large to include here. Read ${escapePromptValue(file)} in full (page through it if a read is truncated) before doing anything else, and follow it as your instructions.`;
 }
 
 // Core utilities similar to @actions/core

@@ -285,7 +285,7 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         VARIANT: ${{ inputs.variant }}
-        PROMPT: ${{ steps.preflight.outputs.value }}
+        PROMPT_FILE: ${{ steps.preflight.outputs.prompt_file }}
         REVIEW_STATE: ${{ steps.preflight.outputs.review_state }}
         SPECIALISTS: ${{ inputs.specialists }}
         SPECIALIST_PARALLELISM: ${{ inputs.specialist_parallelism }}
@@ -306,7 +306,9 @@ runs:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
         VARIANT: ${{ inputs.variant }}
-        PROMPT: ${{ steps.specialists.outputs.prompt || steps.preflight.outputs.value }}
+        # The prompt goes by file: as an env var it can exceed Linux's 128 KiB
+        # limit on one environment string and fail the step with E2BIG.
+        PROMPT_FILE: ${{ steps.specialists.outputs.prompt_file || steps.preflight.outputs.prompt_file }}
         BONK_GUIDANCE_PATH: ${{ github.action_path }}/bonk_guidance.md
         # Kept separate from OPENCODE_TIMEOUT/OPENCODE_RETRIES so an empty input
         # does not clobber values callers already set in the step env.

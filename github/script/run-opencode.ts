@@ -2,9 +2,9 @@
 
 import { existsSync, readFileSync } from "fs";
 import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { pathToFileURL } from "url";
-import { appendGitHubValue } from "./context";
+import { appendGitHubValue, fitPrompt, PROMPT_ENV_CAP, readPromptFile } from "./context";
 import {
   deleteComment,
   findRunResponse,
@@ -183,6 +183,14 @@ export function missingProviderEnv(env: Record<string, string | undefined>): str
   ].filter(Boolean);
 }
 
+// `opencode github run` reads its prompt only from the PROMPT env var, which
+// Linux caps per string, so the prompt file is fitted under PROMPT_ENV_CAP.
+export function resolvePrompt(env: Record<string, string | undefined>): string {
+  if (!env.PROMPT_FILE) return env.PROMPT ?? "";
+  const spillDir = join(dirname(env.PROMPT_FILE), "spilled");
+  return fitPrompt(readPromptFile(env.PROMPT_FILE), PROMPT_ENV_CAP, spillDir);
+}
+
 export interface PermissionDefaults {
   // Directories OpenCode may use outside the workspace.
   allowedDirs: string[];
@@ -322,6 +330,7 @@ async function streamAndCapture(
 async function runOpenCodeAttempt(
   timeoutMs: number,
   configContent: string,
+  prompt: string,
 ): Promise<OpenCodeFailure> {
   let timedOut = false;
   const controller = new AbortController();
@@ -334,6 +343,7 @@ async function runOpenCodeAttempt(
         USE_GITHUB_TOKEN: "true",
         GITHUB_TOKEN: process.env.GH_TOKEN || "",
         OPENCODE_CONFIG_CONTENT: configContent,
+        PROMPT: prompt,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -452,6 +462,17 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     return 2;
   }
 
+  let prompt: string;
+  try {
+    prompt = resolvePrompt(process.env);
+  } catch (error) {
+    console.error(
+      `Could not read the prompt: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    writeExitCode(2);
+    return 2;
+  }
+
   const { timeoutMs, retries } = resolveRunLimits(process.env);
   const maxAttempts = retries + 1;
   const startedAt = Date.now();
@@ -467,7 +488,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
       console.log(`Retrying opencode github run (${attempt}/${maxAttempts})`);
     }
 
-    const result = await runOpenCodeAttempt(remainingMs, configContent);
+    const result = await runOpenCodeAttempt(remainingMs, configContent, prompt);
 
     if (result.exitCode === 0) {
       if (await checkReviewCompletion()) {

@@ -65,13 +65,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
+        uses: Cloudflare-Studio/ask-bonk/github@v0
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }} # or the supported provider of your choice
         with:
           model: "opencode/claude-opus-4-5"
           mentions: "/bonk,@ask-bonk"
 ```
+
+`@v0` follows releases: it moves to each new `v0.x.y` release, and breaking changes go to `v1`. To pin an exact version instead, use a release's commit SHA (`Cloudflare-Studio/ask-bonk/github@<sha> # v0.5.1`) and let Dependabot's `github-actions` updates propose new releases.
 
 #### 3. Add Your API Key
 
@@ -87,7 +89,7 @@ Mention `@ask-bonk` or `/bonk` in any issue or PR comment. A mention counts only
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   with:
@@ -98,7 +100,7 @@ You can also configure Bonk to use [Cloudflare AI Gateway](https://developers.cl
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     CLOUDFLARE_GATEWAY_ID: ${{ secrets.CLOUDFLARE_GATEWAY_ID }}
@@ -160,7 +162,7 @@ The default workflow triggers on `issue_comment` and `pull_request_review_commen
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
@@ -179,7 +181,7 @@ By default, Bonk's installation token has full write access. Use `token_permissi
 ```yaml
 # Review-only: can comment and suggest, cannot push
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
@@ -202,7 +204,7 @@ When a tracked Bonk run fails, times out, or is cancelled, Bonk posts a comment 
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
@@ -218,7 +220,7 @@ By default every run reviews the pull request from scratch. Set `rereview_contex
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
@@ -355,7 +357,7 @@ By default, Bonk installs the latest OpenCode release. If a release is broken, y
 
 ```yaml
 - name: Run Bonk
-  uses: ask-bonk/ask-bonk/github@main
+  uses: Cloudflare-Studio/ask-bonk/github@v0
   env:
     OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
   with:
@@ -379,7 +381,7 @@ jobs:
     steps:
       # ...
       - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
+        uses: Cloudflare-Studio/ask-bonk/github@v0
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
@@ -412,7 +414,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Bonk
-        uses: ask-bonk/ask-bonk/github@main
+        uses: Cloudflare-Studio/ask-bonk/github@v0
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:

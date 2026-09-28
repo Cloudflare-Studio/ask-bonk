@@ -450,14 +450,17 @@ export function extractMentionPrompt(
 }
 
 // A mention counts only as a whole token: at the start of the body or after
-// whitespace, and followed by whitespace or the end, optionally after
-// punctuation (`/bonk,` but not `/bonk.yml`). Paths such as
-// `.github/workflows/bonk.yml`, which bots list in CODEOWNERS comments, and
-// words that merely contain the mention do not trigger a run. Keep in sync
-// with the "Check mentions" step in action.yml.
+// whitespace or opening punctuation (`(@ask-bonk)`), and followed by
+// whitespace or the end, optionally after punctuation (`/bonk,` but not
+// `/bonk.yml`). Paths such as `.github/workflows/bonk.yml`, which bots list
+// in CODEOWNERS comments, words that merely contain the mention, and code
+// spans do not trigger a run. Keep in sync with the "Check mentions" step in
+// action.yml.
 export function containsMention(body: string, mention: string): boolean {
   const escaped = mention.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-  return new RegExp(`(?:^|\\s)${escaped}(?=[.,;:!?)\\]}'"]*(?:$|\\s))`, "i").test(body);
+  return new RegExp(`(?:^|[\\s(\\[{"'<])${escaped}(?=[.,;:!?)\\]}'">]*(?:$|\\s))`, "i").test(
+    body,
+  );
 }
 
 // Parses a TOKEN_PERMISSIONS input value (env var from action.yml).

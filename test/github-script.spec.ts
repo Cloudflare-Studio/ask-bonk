@@ -124,6 +124,10 @@ describe("GitHub Action mention prompt extraction", () => {
       "thanks @ask-bonk, can you review?",
       "(cc @Ask-Bonk)",
       "ping /bonk.",
+      "Please review (@ask-bonk)",
+      "[/bonk] take a look",
+      '"/bonk" please',
+      "<@ask-bonk>",
     ]) {
       expect(extractMentionPrompt(body, mentions), body).toBe(body);
     }
@@ -135,6 +139,11 @@ describe("GitHub Action mention prompt extraction", () => {
       "/bonk.yml",
       "mail@ask-bonk.dev",
       "`/bonk`",
+      "a/bonk",
+      "x.@ask-bonk",
+      "foo-/bonk",
+      "_@ask-bonk",
+      "9/bonk",
     ]) {
       expect(extractMentionPrompt(body, mentions), body).toBeNull();
     }

@@ -240,19 +240,30 @@ runs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
         fi
 
-    - name: Clear Git write credentials for review-only run
+    - name: Configure Git for review-only run
       if: |
         success() && steps.mentions.outputs.skip != 'true' && steps.preflight.outputs.skip != 'true'
         && steps.preflight.outputs.mode == 'review-only'
         && (steps.preflight.outputs.is_fork != 'true' || steps.preflight.outputs.run_opencode == 'true')
       shell: bash
+      env:
+        GH_TOKEN: ${{ steps.preflight.outputs.gh_token }}
       run: |
         set -euo pipefail
         server_url="${GITHUB_SERVER_URL:-https://github.com}"
         host="${server_url#https://}"
         host="${host#http://}"
+        # Drop the GITHUB_TOKEN that actions/checkout may persist, which can
+        # carry contents: write. OpenCode still fetches the PR branch itself,
+        # which needs credentials on private repositories, so origin gets the
+        # installation token: in review-only mode it has read-only contents
+        # and cannot push.
         git config --unset-all "http.${server_url}/.extraheader" 2>/dev/null || true
-        git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
+        if [ -n "${GH_TOKEN:-}" ]; then
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+        else
+          git remote set-url origin "https://${host}/${GITHUB_REPOSITORY}.git" 2>/dev/null || true
+        fi
 
     - name: Run specialists
       if: |

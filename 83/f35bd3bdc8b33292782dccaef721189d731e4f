@@ -1,0 +1,25 @@
+README.md
+  s_d47f00959a824f::t_b4f498053bd6df 82
+github/action.yml
+  s_d47f00959a824f::t_6ec1040f8833bb 139-141,148
+github/script/context.ts
+  s_d47f00959a824f::t_8ebfe3b7fe6ac2 453-458,461-463
+test/github-script.spec.ts
+  s_d47f00959a824f::t_de26ebc974e9a2 127-130,142-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "83f35bd3bdc8b33292782dccaef721189d731e4f",
+  "prompts": {},
+  "sessions": {
+    "s_d47f00959a824f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f0edf6e-9af5-4419-ae90-ea2787327637",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}

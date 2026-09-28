@@ -708,7 +708,7 @@ describe("GitHub Action OpenCode configuration", () => {
       ),
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       instructions: ["docs/review.md", "/action/bonk_guidance.md"],
       default_agent: "review",
     });
@@ -730,9 +730,95 @@ describe("GitHub Action OpenCode configuration", () => {
       buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md"),
     );
 
-    expect(result).toEqual({
-      instructions: ["/action/bonk_guidance.md"],
+    expect(result.instructions).toEqual(["/action/bonk_guidance.md"]);
+    expect(result.default_agent).toBeUndefined();
+  });
+
+  it("denies unanswerable permission prompts when the consumer sets none", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/work/repo", "/runner/temp"],
+        filePermissions: [],
+      }),
+    );
+
+    expect(result.permission).toEqual({
+      question: "deny",
+      doom_loop: "deny",
+      external_directory: {
+        "*": "deny",
+        "/work/repo/**": "allow",
+        "/runner/temp/**": "allow",
+      },
     });
+    // OpenCode applies the last matching rule, so the fallback must come first.
+    expect(Object.keys(result.permission.external_directory)[0]).toBe("*");
+  });
+
+  it("puts the deny fallback before consumer rules that lack one", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(
+        '{"permission":{"edit":"deny","doom_loop":"ask","external_directory":{"/home/runner/work/**":"allow","/runner/temp/**":"deny"}}}',
+        "/action/bonk_guidance.md",
+        { allowedDirs: ["/runner/temp"], filePermissions: [] },
+      ),
+    );
+
+    expect(result.permission.edit).toBe("deny");
+    expect(result.permission.question).toBe("deny");
+    // Explicit consumer choices win.
+    expect(result.permission.doom_loop).toBe("ask");
+    expect(result.permission.external_directory).toEqual({
+      "*": "deny",
+      "/runner/temp/**": "deny",
+      "/home/runner/work/**": "allow",
+    });
+    expect(Object.keys(result.permission.external_directory)[0]).toBe("*");
+  });
+
+  it("leaves consumer external_directory rules with their own fallback alone", () => {
+    const rules = { "/home/runner/work/**": "allow", "*": "ask" };
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(
+        JSON.stringify({ permission: { external_directory: rules } }),
+        "/action/bonk_guidance.md",
+        { allowedDirs: ["/runner/temp"], filePermissions: [] },
+      ),
+    );
+
+    expect(result.permission.external_directory).toEqual(rules);
+    expect(Object.keys(result.permission.external_directory)).toEqual(Object.keys(rules));
+  });
+
+  it("leaves a consumer permission that applies to everything alone", () => {
+    const result = JSON.parse(
+      buildOpenCodeConfigContent('{"permission":"allow"}', "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: [],
+      }),
+    );
+
+    expect(result.permission).toBe("allow");
+  });
+
+  it("leaves permissions set in OpenCode config files to those files", () => {
+    // OpenCode merges OPENCODE_CONFIG_CONTENT over its config files, so a
+    // default here would override the file's choice or reorder its rules.
+    const result = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: [{ doom_loop: "ask", external_directory: { "/data/**": "allow" } }],
+      }),
+    );
+    expect(result.permission).toEqual({ question: "deny" });
+
+    const everything = JSON.parse(
+      buildOpenCodeConfigContent(undefined, "/action/bonk_guidance.md", {
+        allowedDirs: ["/tmp"],
+        filePermissions: ["allow"],
+      }),
+    );
+    expect(everything.permission).toBeUndefined();
   });
 
   it("rejects invalid instruction configuration", () => {

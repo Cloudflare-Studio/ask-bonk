@@ -481,6 +481,13 @@ For advanced configuration (custom providers, system prompts, custom tools, etc.
 }
 ```
 
+Nobody can answer an OpenCode permission prompt in CI, and a run that asks waits until the job times out. Bonk therefore adds these rules under your configuration for the main run:
+
+- `question` and `doom_loop` are `deny`.
+- `external_directory` starts with `"*": "deny"`, followed by `allow` for the workspace, `$RUNNER_TEMP`, and the system temp directory, followed by your own `external_directory` rules. OpenCode applies the last matching rule, so your rules still take precedence.
+
+Any of these you set yourself in `OPENCODE_CONFIG_CONTENT` wins. If your `external_directory` rules have their own `"*"` rule, Bonk adds nothing to them. Permissions set in an `opencode.json`/`opencode.jsonc` file (in the repository or the global OpenCode config) are left to that file, and a `permission` given as a single string (such as `"allow"`) is left alone.
+
 ## Self-Hosting
 
 Deploy your own Bonk instance to Cloudflare Workers:

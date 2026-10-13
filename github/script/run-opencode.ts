@@ -334,6 +334,18 @@ async function streamAndCapture(
   return output;
 }
 
+// The OpenCode subprocess reviews untrusted PR content and does not need to
+// request GitHub Actions OIDC tokens itself. The action performs any token
+// exchange and passes the already-scoped result in via GITHUB_TOKEN, so the
+// workflow's OIDC request credentials are kept out of the child environment
+// and the review process runs with least privilege.
+function childEnvWithoutOidc(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const { ACTIONS_ID_TOKEN_REQUEST_URL, ACTIONS_ID_TOKEN_REQUEST_TOKEN, ...rest } = env;
+  return rest;
+}
+
 async function runOpenCodeAttempt(
   timeoutMs: number,
   configContent: string,
@@ -346,7 +358,7 @@ async function runOpenCodeAttempt(
     proc = Bun.spawn(["opencode", "github", "run"], {
       detached: true,
       env: {
-        ...process.env,
+        ...childEnvWithoutOidc(process.env),
         USE_GITHUB_TOKEN: "true",
         GITHUB_TOKEN: process.env.GH_TOKEN || "",
         OPENCODE_CONFIG_CONTENT: configContent,

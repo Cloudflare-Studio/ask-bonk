@@ -38,6 +38,15 @@ import {
   summarizeReviewHistory,
 } from "../github/script/review-state";
 import { readPublishState } from "../github/script/review-publish";
+import {
+  agentErrorMessage,
+  buildPromptDataForPR,
+  commentPrompt,
+  errorAnnotation,
+  githubErrorMessage,
+  responseText,
+} from "../github/script/github-run";
+import type { GitHubPullRequest } from "../github/script/github-run";
 import { resolvePermissions } from "../src/oidc";
 
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
@@ -1782,5 +1791,118 @@ describe("GitHub Action OpenCode dependency install", () => {
 
     expect(result).toEqual([]);
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^::warning::.*registry unreachable/));
+  });
+});
+
+describe("GitHub Action turn runner", () => {
+  it("answers with the last text of the final assistant message", () => {
+    expect(
+      responseText([
+        { type: "step-start" },
+        { type: "text", text: "First draft" },
+        { type: "tool" },
+        { type: "text", text: "LGTM" },
+        { type: "step-finish" },
+      ]),
+    ).toBe("LGTM");
+  });
+
+  it("asks for a summary when the final message has no text", () => {
+    expect(responseText([{ type: "step-start" }, { type: "tool" }])).toBeNull();
+    expect(() => responseText([])).toThrow("Failed to parse response: no parts returned");
+  });
+
+  it("reports agent errors the way OpenCode did", () => {
+    expect(agentErrorMessage({ name: "APIError", data: { message: "rate limited" } })).toBe(
+      "APIError: rate limited",
+    );
+    expect(agentErrorMessage({ name: "UnknownError", data: {} })).toBe("UnknownError: ");
+    expect(agentErrorMessage({ name: "ContextOverflowError", data: { message: "long" } })).toBe(
+      "PROMPT_TOO_LARGE: The prompt exceeds the model's context limit.",
+    );
+  });
+
+  it("reports GitHub API errors like Octokit", () => {
+    expect(
+      githubErrorMessage({
+        message: "Validation Failed",
+        errors: [{ resource: "PullRequest", message: "No commits between main and b" }],
+        documentation_url: "https://docs.github.com/x",
+      }),
+    ).toBe(
+      'Validation Failed: {"resource":"PullRequest","message":"No commits between main and b"} - https://docs.github.com/x',
+    );
+    expect(githubErrorMessage({ message: "Not Found" })).toBe("Not Found");
+    expect(githubErrorMessage("Bad Gateway")).toBe("Bad Gateway");
+  });
+
+  it("escapes error annotations like core.setFailed", () => {
+    expect(errorAnnotation("50% failed\r\nsecond line")).toBe(
+      "::error::50%25 failed%0D%0Asecond line",
+    );
+  });
+
+  it("falls back to OpenCode's comment prompts", () => {
+    const reviewComment = {
+      comment: { body: "/bonk", path: "src/a.ts", line: 4, diff_hunk: "@@ -1 +1 @@" },
+    };
+    expect(commentPrompt("issue_comment", { comment: { body: " /bonk " } }, "/bonk")).toBe(
+      "Summarize this thread",
+    );
+    expect(commentPrompt("pull_request_review_comment", reviewComment, "/bonk")).toBe(
+      "Review this code change and suggest improvements for the commented lines:\n\nFile: src/a.ts\nLines: 4\n\n@@ -1 +1 @@",
+    );
+    expect(commentPrompt("pull_request", {}, "/bonk")).toBe("Review this pull request");
+    expect(() => commentPrompt("issue_comment", { comment: { body: "hello" } }, "/bonk")).toThrow(
+      "Comments must mention `/bonk`",
+    );
+  });
+
+  it("builds OpenCode's pull request context without the trigger comment", () => {
+    const pr: GitHubPullRequest = {
+      number: 7,
+      url: "https://github.com/o/r/pull/7",
+      title: "Fix",
+      body: "Body",
+      author: { login: "dev" },
+      baseRefName: "main",
+      headRefName: "fix",
+      headRefOid: "abc",
+      createdAt: "2026-01-01T00:00:00Z",
+      additions: 3,
+      deletions: 1,
+      state: "OPEN",
+      baseRepository: { nameWithOwner: "o/r" },
+      headRepository: { nameWithOwner: "o/r" },
+      commits: { totalCount: 1 },
+      files: { nodes: [{ path: "a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }] },
+      comments: {
+        nodes: [
+          { databaseId: "1", body: "earlier", author: { login: "dev" }, createdAt: "t1" },
+          { databaseId: "2", body: "/bonk review", author: { login: "dev" }, createdAt: "t2" },
+        ],
+      },
+      reviews: {
+        nodes: [
+          {
+            author: { login: "rev" },
+            body: "Looks off",
+            submittedAt: "t3",
+            comments: { nodes: [{ body: "here", path: "a.ts", line: null }] },
+          },
+        ],
+      },
+    };
+    const prompt = buildPromptDataForPR(pr, 2);
+    expect(prompt).toContain("Number: 7\nURL: https://github.com/o/r/pull/7\nTitle: Fix");
+    expect(prompt).toContain(
+      "<pull_request_comments>\n- dev at t1: earlier\n</pull_request_comments>",
+    );
+    expect(prompt).not.toContain("/bonk review");
+    expect(prompt).toContain("- a.ts (MODIFIED) +3/-1");
+    // OpenCode joins each review's lines with commas; keep its exact prompt.
+    expect(prompt).toContain(
+      "<pull_request_reviews>\n- rev at t3:,  - Review body: Looks off,  - Comments:,    - a.ts:?: here\n</pull_request_reviews>",
+    );
   });
 });

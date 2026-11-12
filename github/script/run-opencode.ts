@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
-import { pathToFileURL } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import {
   appendGitHubValue,
   fitPrompt,
@@ -190,8 +190,8 @@ export function missingProviderEnv(env: Record<string, string | undefined>): str
   ].filter(Boolean);
 }
 
-// `opencode github run` reads its prompt only from the PROMPT env var, which
-// Linux caps per string, so the prompt file is fitted under PROMPT_ENV_CAP.
+// github-run.ts reads its prompt only from the PROMPT env var, which Linux
+// caps per string, so the prompt file is fitted under PROMPT_ENV_CAP.
 export function resolvePrompt(env: Record<string, string | undefined>): string {
   if (!env.PROMPT_FILE) return env.PROMPT ?? "";
   const spillDir = join(dirname(env.PROMPT_FILE), "spilled");
@@ -343,7 +343,10 @@ async function runOpenCodeAttempt(
   const controller = new AbortController();
   let proc: BunSubprocess;
   try {
-    proc = Bun.spawn(["opencode", "github", "run"], {
+    // github-run.ts replaces `opencode github run`, whose collaborator check
+    // refuses every GitHub App; it still runs OpenCode for the turn.
+    const script = fileURLToPath(new URL("./github-run.ts", import.meta.url));
+    proc = Bun.spawn([process.execPath, script], {
       detached: true,
       env: {
         ...process.env,
@@ -496,7 +499,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     }
 
     if (attempt > 1) {
-      console.log(`Retrying opencode github run (${attempt}/${maxAttempts})`);
+      console.log(`Retrying the Bonk run (${attempt}/${maxAttempts})`);
     }
 
     const result = await runOpenCodeAttempt(remainingMs, configContent, prompt);
@@ -518,7 +521,7 @@ export async function runOpenCodeWithRetry(): Promise<number> {
     const canRetry = attempt < maxAttempts && isRetryableOpenCodeFailure(result);
     if (!canRetry) {
       if (attempt > 1) {
-        console.log(`opencode github run failed after ${attempt} attempts with exit code ${result.exitCode}`);
+        console.log(`The Bonk run failed after ${attempt} attempts with exit code ${result.exitCode}`);
       }
       writeExitCode(result.exitCode, result.output);
       return result.exitCode;

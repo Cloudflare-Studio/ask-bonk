@@ -123,7 +123,7 @@ export function appendGitHubValue(filePath: string, name: string, value: string)
 // step outputs expanded into env vars: Linux rejects any single environment
 // string over 128 KiB (MAX_ARG_STRLEN) with E2BIG, and a review prompt, or
 // the state of a re-review touching thousands of files, can be larger.
-// `opencode github run` still reads its prompt from the PROMPT env var, so
+// github-run.ts still reads its prompt from the PROMPT env var, so
 // run-opencode fits the final prompt under PROMPT_ENV_CAP first.
 export const PROMPT_ENV_CAP = 96 * 1024;
 
